@@ -1,5 +1,5 @@
 {
-  "name": "chromux",
+  "name": "@team-attention/chromux",
   "version": "0.2.0",
   "description": "tmux for Chrome tabs — zero-dependency parallel Chrome tab controller via raw CDP",
   "type": "module",
