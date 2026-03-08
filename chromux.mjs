@@ -598,12 +598,12 @@ async function cmdPs() {
     if (!alive) { clearState(name); continue; }
     const cdpOk = await checkCDP(st.port);
 
-    // Count tabs via daemon if reachable
+    // Count tabs via daemon if reachable (short timeout to avoid hang)
     let tabs = '-';
     if (cdpOk) {
       try {
         const sock = sockPath(name);
-        const list = await cliReq('GET', '/list', null, sock);
+        const list = await cliReq('GET', '/list', null, sock, 5000);
         tabs = String(Object.keys(list).length);
       } catch {}
     }
@@ -650,11 +650,12 @@ async function cmdKill(profileName) {
 // CLI client (talks to daemon over Unix socket)
 // ============================================================
 
-function cliReq(method, urlPath, body, sock) {
+function cliReq(method, urlPath, body, sock, timeoutMs = 30000) {
   return new Promise((resolve, reject) => {
     const opts = {
       socketPath: sock, path: urlPath, method,
       headers: body ? { 'Content-Type': 'application/json' } : {},
+      timeout: timeoutMs,
     };
     const req = http.request(opts, (res) => {
       let d = '';
@@ -669,6 +670,7 @@ function cliReq(method, urlPath, body, sock) {
         else { try { resolve(JSON.parse(d)); } catch { resolve(d); } }
       });
     });
+    req.on('timeout', () => { req.destroy(); reject(new Error('Request timeout')); });
     req.on('error', reject);
     if (body) req.write(JSON.stringify(body));
     req.end();
@@ -694,31 +696,41 @@ async function ensureDaemon(profileName) {
   // Check if daemon already running
   try { await cliReq('GET', '/health', null, sock); return sock; } catch {}
 
-  // Auto-launch profile if not running
-  let port = await resolveProfilePort(profileName);
-  if (!port) {
-    process.stderr.write(`Auto-launching profile [${profileName}]...\n`);
-    await cmdLaunch(profileName);
-    port = await resolveProfilePort(profileName);
+  // Acquire lockfile to prevent concurrent daemon starts (CR-008)
+  const lockFile = path.join(RUN_DIR, `${profileName}.lock`);
+  const lockFd = await acquireLock(lockFile);
+  try {
+    // Re-check after lock — another process may have started it
+    try { await cliReq('GET', '/health', null, sock); return sock; } catch {}
+
+    // Auto-launch profile if not running
+    let port = await resolveProfilePort(profileName);
     if (!port) {
-      console.error(`Failed to launch profile "${profileName}".`);
-      process.exit(1);
+      process.stderr.write(`Auto-launching profile [${profileName}]...\n`);
+      await cmdLaunch(profileName);
+      port = await resolveProfilePort(profileName);
+      if (!port) {
+        console.error(`Failed to launch profile "${profileName}".`);
+        process.exit(1);
+      }
     }
-  }
 
-  // Start daemon
-  process.stderr.write(`Starting chromux daemon [${profileName}]...`);
-  const child = spawn(process.execPath, [process.argv[1], '--daemon', profileName, String(port)], {
-    detached: true, stdio: 'ignore',
-  });
-  child.unref();
+    // Start daemon
+    process.stderr.write(`Starting chromux daemon [${profileName}]...`);
+    const child = spawn(process.execPath, [process.argv[1], '--daemon', profileName, String(port)], {
+      detached: true, stdio: 'ignore',
+    });
+    child.unref();
 
-  for (let i = 0; i < 50; i++) {
-    await sleep(200);
-    try { await cliReq('GET', '/health', null, sock); process.stderr.write(' ready.\n'); return sock; } catch {}
+    for (let i = 0; i < 50; i++) {
+      await sleep(200);
+      try { await cliReq('GET', '/health', null, sock); process.stderr.write(' ready.\n'); return sock; } catch {}
+    }
+    console.error(' daemon failed to start.');
+    process.exit(1);
+  } finally {
+    releaseLock(lockFd, lockFile);
   }
-  console.error(' daemon failed to start.');
-  process.exit(1);
 }
 
 // ============================================================
@@ -768,6 +780,49 @@ async function runCli(cmd, args) {
 // ============================================================
 // Helpers
 // ============================================================
+
+// ============================================================
+// Lockfile helpers (CR-008: prevent concurrent daemon starts)
+// ============================================================
+
+/**
+ * Acquire an exclusive lock using O_EXCL (atomic on local FS).
+ * Retries with backoff for up to ~15 seconds.
+ * Stale locks older than 30 seconds are force-removed.
+ */
+async function acquireLock(lockFile) {
+  const STALE_MS = 30_000;
+  const MAX_ATTEMPTS = 30;
+  fs.mkdirSync(path.dirname(lockFile), { recursive: true, mode: 0o700 });
+
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    try {
+      const fd = fs.openSync(lockFile, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL, 0o600);
+      fs.writeSync(fd, JSON.stringify({ pid: process.pid, ts: Date.now() }));
+      return fd;
+    } catch (err) {
+      if (err.code !== 'EEXIST') throw err;
+      // Check if lock is stale
+      try {
+        const stat = fs.statSync(lockFile);
+        if (Date.now() - stat.mtimeMs > STALE_MS) {
+          process.stderr.write(`Removing stale lock: ${lockFile}\n`);
+          fs.unlinkSync(lockFile);
+          continue; // Retry immediately
+        }
+      } catch {}
+      // Wait with jitter before retry
+      await sleep(300 + Math.random() * 200);
+    }
+  }
+  console.error(`Failed to acquire lock after ${MAX_ATTEMPTS} attempts: ${lockFile}`);
+  process.exit(1);
+}
+
+function releaseLock(fd, lockFile) {
+  try { fs.closeSync(fd); } catch {}
+  try { fs.unlinkSync(lockFile); } catch {}
+}
 
 function getSession(sessions, id) {
   const s = sessions.get(id);
@@ -827,7 +882,8 @@ Profile selection:
 Paths:
   ~/.chromux/config.json             Global config
   ~/.chromux/profiles/<name>/        Chrome user-data-dir per profile
-  /tmp/chromux-<name>.sock           Daemon socket per profile`;
+  ~/.chromux/run/<name>.sock          Daemon socket per profile
+  ~/.chromux/run/<name>.lock          Daemon startup lock (transient)`;
 
 // ============================================================
 // Entry
