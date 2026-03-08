@@ -250,6 +250,24 @@ async function closeTab(port, targetId) {
 // Snapshot — accessibility tree with @ref numbers
 // ============================================================
 
+// Stealth script injected via Page.addScriptToEvaluateOnNewDocument
+// Patches common headless detection vectors
+const STEALTH_JS = `(() => {
+  // 1. Remove navigator.webdriver flag
+  Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+  // 2. Fake plugins array (headless has empty plugins)
+  Object.defineProperty(navigator, 'plugins', {
+    get: () => [1, 2, 3, 4, 5],
+  });
+  // 3. Fake languages (some detectors check this)
+  Object.defineProperty(navigator, 'languages', {
+    get: () => ['en-US', 'en'],
+  });
+  // 4. Patch chrome.runtime to look like real Chrome
+  if (!window.chrome) window.chrome = {};
+  if (!window.chrome.runtime) window.chrome.runtime = {};
+})()`;
+
 const SNAPSHOT_JS = `(() => {
   let refId = 0;
   const ROLES = {
@@ -334,6 +352,10 @@ async function startDaemon(profileName, port) {
   const alive = await checkCDP(port);
   if (!alive) { console.error(`Cannot reach Chrome at 127.0.0.1:${port}`); process.exit(1); }
 
+  // Read profile state to check headless mode
+  const profileState = readState(profileName) || {};
+  const isHeadless = profileState.headless || false;
+
   /** @type {Map<string, {targetId: string, cdp: CDPClient}>} */
   const sessions = new Map();
 
@@ -341,7 +363,7 @@ async function startDaemon(profileName, port) {
     const url = new URL(req.url, 'http://x');
     const body = ['POST', 'PUT'].includes(req.method) ? await readBody(req) : null;
     try {
-      const result = await route(port, req.method, url.pathname, body, sessions);
+      const result = await route(port, req.method, url.pathname, body, sessions, isHeadless);
       const isText = typeof result === 'string';
       res.writeHead(200, { 'Content-Type': isText ? 'text/plain; charset=utf-8' : 'application/json' });
       res.end(isText ? result : JSON.stringify(result));
@@ -365,7 +387,7 @@ async function startDaemon(profileName, port) {
   process.on('SIGINT', () => process.exit(0));
 }
 
-async function route(port, method, routePath, body, sessions) {
+async function route(port, method, routePath, body, sessions, isHeadless = false) {
 
   if (routePath === '/health')
     return { ok: true, sessions: sessions.size };
@@ -391,6 +413,17 @@ async function route(port, method, routePath, body, sessions) {
       await cdp.connect(tab.webSocketDebuggerUrl);
       await cdp.send('Page.enable');
       await cdp.send('Runtime.enable');
+      if (isHeadless) {
+        // Override User-Agent to remove "HeadlessChrome" signature
+        await cdp.send('Network.enable');
+        const r = await cdp.send('Runtime.evaluate', {
+          expression: 'navigator.userAgent', returnByValue: true,
+        });
+        const cleanUA = (r.result?.value || '').replace(/HeadlessChrome/g, 'Chrome');
+        if (cleanUA) await cdp.send('Network.setUserAgentOverride', { userAgent: cleanUA });
+        // Stealth: patch JS-level headless detection signals
+        await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: STEALTH_JS });
+      }
       s = { targetId: tab.id, cdp };
       sessions.set(session, s);
     }
@@ -518,7 +551,7 @@ async function route(port, method, routePath, body, sessions) {
 // CLI: launch — start Chrome with isolated profile
 // ============================================================
 
-async function cmdLaunch(profileName, explicitPort) {
+async function cmdLaunch(profileName, explicitPort, headless = false) {
   const cfg = loadConfig();
   const chrome = findChrome(cfg);
   if (!chrome) {
@@ -557,6 +590,12 @@ async function cmdLaunch(profileName, explicitPort) {
     '--no-first-run',
     '--no-default-browser-check',
   ];
+  if (headless) {
+    chromeArgs.push(
+      '--headless=new',
+      '--disable-blink-features=AutomationControlled',  // removes navigator.webdriver
+    );
+  }
 
   const child = spawn(chrome, chromeArgs, {
     detached: true,
@@ -570,7 +609,7 @@ async function cmdLaunch(profileName, explicitPort) {
     await sleep(500);
     const alive = await checkCDP(port);
     if (alive) {
-      writeState(profileName, { pid: child.pid, port, sock: sockPath(profileName) });
+      writeState(profileName, { pid: child.pid, port, sock: sockPath(profileName), headless });
       process.stderr.write(' ready.\n');
       console.log(JSON.stringify({ profile: profileName, port, pid: child.pid, userDataDir }, null, 2));
       return;
@@ -743,7 +782,8 @@ async function runCli(cmd, args) {
     const name = args[0] || DEFAULT_PROFILE;
     const portIdx = args.indexOf('--port');
     const port = portIdx >= 0 ? parseInt(args[portIdx + 1]) : null;
-    return cmdLaunch(name, port);
+    const headless = args.includes('--headless');
+    return cmdLaunch(name, port, headless);
   }
   if (cmd === 'ps') return cmdPs();
   if (cmd === 'kill') {
@@ -856,6 +896,7 @@ const HELP = `chromux — tmux for Chrome tabs
 
 Profile management:
   chromux launch [name]              Launch Chrome (default: "default")
+  chromux launch <name> --headless   Launch in headless mode (no window)
   chromux launch <name> --port N     Launch with specific port
   chromux ps                         List running profiles
   chromux kill <name>                Stop profile (Chrome + daemon)
