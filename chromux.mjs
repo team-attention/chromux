@@ -250,23 +250,10 @@ async function closeTab(port, targetId) {
 // Snapshot — accessibility tree with @ref numbers
 // ============================================================
 
-// Stealth script injected via Page.addScriptToEvaluateOnNewDocument
-// Patches common headless detection vectors
-const STEALTH_JS = `(() => {
-  // 1. Remove navigator.webdriver flag
-  Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-  // 2. Fake plugins array (headless has empty plugins)
-  Object.defineProperty(navigator, 'plugins', {
-    get: () => [1, 2, 3, 4, 5],
-  });
-  // 3. Fake languages (some detectors check this)
-  Object.defineProperty(navigator, 'languages', {
-    get: () => ['en-US', 'en'],
-  });
-  // 4. Patch chrome.runtime to look like real Chrome
-  if (!window.chrome) window.chrome = {};
-  if (!window.chrome.runtime) window.chrome.runtime = {};
-})()`;
+// Stealth philosophy (inspired by Patchright):
+// Real Chrome already has correct navigator.webdriver, plugins, languages, chrome.runtime.
+// Adding JS patches via Page.addScriptToEvaluateOnNewDocument is ITSELF detectable.
+// The best stealth is minimizing CDP footprint — remove calls, don't add patches.
 
 const SNAPSHOT_JS = `(() => {
   let refId = 0;
@@ -385,6 +372,11 @@ async function startDaemon(profileName, port) {
   process.on('exit', cleanup);
   process.on('SIGTERM', () => process.exit(0));
   process.on('SIGINT', () => process.exit(0));
+  process.on('uncaughtException', (err) => {
+    process.stderr.write(`chromux daemon [${profileName}] uncaught: ${err.message}\n`);
+    cleanup();
+    process.exit(1);
+  });
 }
 
 async function route(port, method, routePath, body, sessions, isHeadless = false) {
@@ -412,7 +404,9 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
       const cdp = new CDPClient();
       await cdp.connect(tab.webSocketDebuggerUrl);
       await cdp.send('Page.enable');
-      await cdp.send('Runtime.enable');
+      // NOTE: Runtime.enable intentionally NOT called (Patchright technique).
+      // Runtime.enable is the #1 CDP detection signal used by Cloudflare, DataDome, PerimeterX.
+      // Runtime.evaluate works without it — no need for Runtime.executionContextCreated events.
       if (isHeadless) {
         // Override User-Agent to remove "HeadlessChrome" signature
         await cdp.send('Network.enable');
@@ -421,8 +415,11 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
         });
         const cleanUA = (r.result?.value || '').replace(/HeadlessChrome/g, 'Chrome');
         if (cleanUA) await cdp.send('Network.setUserAgentOverride', { userAgent: cleanUA });
-        // Stealth: patch JS-level headless detection signals
-        await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: STEALTH_JS });
+        // Emulate OS-level focus so headless window appears focused (anti-detection)
+        await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true });
+        // NOTE: Page.addScriptToEvaluateOnNewDocument intentionally NOT called.
+        // Real Chrome already has correct webdriver/plugins/languages/chrome.runtime.
+        // The CDP call itself is a detectable signal — removing it is better stealth.
       }
       s = { targetId: tab.id, cdp };
       sessions.set(session, s);
@@ -589,12 +586,10 @@ async function cmdLaunch(profileName, explicitPort, headless = false) {
     '--remote-allow-origins=*',
     '--no-first-run',
     '--no-default-browser-check',
+    '--disable-blink-features=AutomationControlled',  // removes navigator.webdriver at engine level (all modes)
   ];
   if (headless) {
-    chromeArgs.push(
-      '--headless=new',
-      '--disable-blink-features=AutomationControlled',  // removes navigator.webdriver
-    );
+    chromeArgs.push('--headless=new');
   }
 
   const child = spawn(chrome, chromeArgs, {
@@ -647,20 +642,31 @@ async function cmdPs() {
       } catch {}
     }
 
-    rows.push({ profile: name, port: st.port, pid: st.pid, status: cdpOk ? 'running' : 'no-cdp', tabs });
+    // Check daemon status via socket existence + health
+    let daemon = 'dead';
+    const sock = path.join(RUN_DIR, `${name}.sock`);
+    if (fs.existsSync(sock)) {
+      try {
+        await cliReq('GET', '/health', null, sock, 2000);
+        daemon = 'ok';
+      } catch { daemon = 'stale'; }
+    }
+
+    rows.push({ profile: name, port: st.port, pid: st.pid, status: cdpOk ? 'running' : 'no-cdp', tabs, daemon });
   }
 
   if (rows.length === 0) {
     console.log('No running profiles.');
   } else {
     // Table output
-    console.log('PROFILE'.padEnd(20) + 'PORT'.padEnd(8) + 'PID'.padEnd(10) + 'STATUS'.padEnd(12) + 'TABS');
+    console.log('PROFILE'.padEnd(20) + 'PORT'.padEnd(8) + 'PID'.padEnd(10) + 'STATUS'.padEnd(12) + 'DAEMON'.padEnd(8) + 'TABS');
     for (const r of rows) {
       console.log(
         r.profile.padEnd(20) +
         String(r.port).padEnd(8) +
         String(r.pid).padEnd(10) +
         r.status.padEnd(12) +
+        r.daemon.padEnd(8) +
         r.tabs
       );
     }
@@ -732,15 +738,21 @@ async function resolveProfilePort(profileName) {
 async function ensureDaemon(profileName) {
   const sock = sockPath(profileName);
 
-  // Check if daemon already running
-  try { await cliReq('GET', '/health', null, sock); return sock; } catch {}
+  // Check if daemon already running (short timeout to fail fast)
+  try { await cliReq('GET', '/health', null, sock, 3000); return sock; } catch {}
+
+  // Daemon not reachable — clean up stale socket before acquiring lock
+  try { fs.unlinkSync(sock); } catch {}
 
   // Acquire lockfile to prevent concurrent daemon starts (CR-008)
   const lockFile = path.join(RUN_DIR, `${profileName}.lock`);
   const lockFd = await acquireLock(lockFile);
   try {
     // Re-check after lock — another process may have started it
-    try { await cliReq('GET', '/health', null, sock); return sock; } catch {}
+    try { await cliReq('GET', '/health', null, sock, 3000); return sock; } catch {}
+
+    // Clean up stale socket again (in case it appeared during lock wait)
+    try { fs.unlinkSync(sock); } catch {}
 
     // Auto-launch profile if not running
     let port = await resolveProfilePort(profileName);
@@ -763,7 +775,7 @@ async function ensureDaemon(profileName) {
 
     for (let i = 0; i < 50; i++) {
       await sleep(200);
-      try { await cliReq('GET', '/health', null, sock); process.stderr.write(' ready.\n'); return sock; } catch {}
+      try { await cliReq('GET', '/health', null, sock, 3000); process.stderr.write(' ready.\n'); return sock; } catch {}
     }
     console.error(' daemon failed to start.');
     process.exit(1);
