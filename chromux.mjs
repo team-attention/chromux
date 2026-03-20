@@ -172,6 +172,7 @@ class CDPClient {
       this.#pending.clear();
       for (const w of this.#waiters) { clearTimeout(w.timer); w.reject(err); }
       this.#waiters.length = 0;
+      if (this.#onDisconnect) this.#onDisconnect(reason);
     };
     this.#ws.addEventListener('close', () => drain('WebSocket closed'));
     this.#ws.addEventListener('error', () => drain('WebSocket error'));
@@ -194,11 +195,29 @@ class CDPClient {
     });
   }
 
-  async send(method, params = {}) {
+  get connected() {
+    return this.#ws?.readyState === WebSocket.OPEN;
+  }
+
+  async send(method, params = {}, timeoutMs = 10000) {
+    if (!this.connected) throw new Error('CDP WebSocket not connected');
     const id = ++this.#seq;
     const msg = await new Promise((resolve, reject) => {
-      this.#pending.set(id, { resolve, reject });
-      this.#ws.send(JSON.stringify({ id, method, params }));
+      const timer = setTimeout(() => {
+        this.#pending.delete(id);
+        reject(new Error(`CDP ${method}: timeout after ${timeoutMs}ms`));
+      }, timeoutMs);
+      this.#pending.set(id, {
+        resolve: (v) => { clearTimeout(timer); resolve(v); },
+        reject: (e) => { clearTimeout(timer); reject(e); },
+      });
+      try {
+        this.#ws.send(JSON.stringify({ id, method, params }));
+      } catch (e) {
+        clearTimeout(timer);
+        this.#pending.delete(id);
+        reject(new Error(`CDP send failed: ${e.message}`));
+      }
     });
     if (msg.error) throw new Error(`CDP ${method}: ${msg.error.message}`);
     return msg.result;
@@ -215,6 +234,9 @@ class CDPClient {
       this.#waiters.push(entry);
     });
   }
+
+  #onDisconnect = null;
+  set onDisconnect(fn) { this.#onDisconnect = fn; }
 
   close() { this.#ws?.close(); }
 }
@@ -346,15 +368,26 @@ async function startDaemon(profileName, port) {
   /** @type {Map<string, {targetId: string, cdp: CDPClient}>} */
   const sessions = new Map();
 
+  const HANDLER_TIMEOUT = 45000; // 45s max per request
+
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://x');
     const body = ['POST', 'PUT'].includes(req.method) ? await readBody(req) : null;
+
+    // Wrap handler with timeout to prevent daemon hang
+    const handlerPromise = route(port, req.method, url.pathname, body, sessions, isHeadless);
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('Handler timeout')), HANDLER_TIMEOUT)
+    );
+
     try {
-      const result = await route(port, req.method, url.pathname, body, sessions, isHeadless);
+      const result = await Promise.race([handlerPromise, timeoutPromise]);
+      if (res.writableEnded) return;
       const isText = typeof result === 'string';
       res.writeHead(200, { 'Content-Type': isText ? 'text/plain; charset=utf-8' : 'application/json' });
       res.end(isText ? result : JSON.stringify(result));
     } catch (err) {
+      if (res.writableEnded) return;
       res.writeHead(err.status || 500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: err.message }));
     }
@@ -364,6 +397,26 @@ async function startDaemon(profileName, port) {
     try { fs.chmodSync(sock, 0o600); } catch {}
     console.log(`chromux daemon [${profileName}] on ${sock} → port ${port}`);
   });
+
+  // Watchdog: prune dead sessions every 30s
+  setInterval(() => {
+    for (const [id, s] of sessions) {
+      if (!s.cdp.connected) {
+        s.cdp.close();
+        sessions.delete(id);
+      }
+    }
+  }, 30000);
+
+  // Watchdog: verify Chrome CDP is alive every 60s, exit if dead
+  setInterval(async () => {
+    const alive = await checkCDP(port);
+    if (!alive) {
+      process.stderr.write(`chromux daemon [${profileName}]: Chrome CDP unreachable, exiting.\n`);
+      cleanup();
+      process.exit(1);
+    }
+  }, 60000);
 
   const cleanup = () => {
     for (const s of sessions.values()) s.cdp.close();
@@ -421,6 +474,9 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
         // Real Chrome already has correct webdriver/plugins/languages/chrome.runtime.
         // The CDP call itself is a detectable signal — removing it is better stealth.
       }
+      cdp.onDisconnect = (reason) => {
+        sessions.delete(session);
+      };
       s = { targetId: tab.id, cdp };
       sessions.set(session, s);
     }
