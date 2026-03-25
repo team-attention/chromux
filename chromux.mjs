@@ -604,7 +604,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
 // CLI: launch — start Chrome with isolated profile
 // ============================================================
 
-async function cmdLaunch(profileName, explicitPort, headless = false) {
+async function cmdLaunch(profileName, explicitPort, headless = true) {
   const cfg = loadConfig();
   const chrome = findChrome(cfg);
   if (!chrome) {
