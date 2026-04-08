@@ -159,6 +159,7 @@ class CDPClient {
   #seq = 0;
   #pending = new Map();
   #waiters = [];
+  #listeners = new Map();
 
   async connect(wsUrl) {
     this.#ws = new WebSocket(wsUrl);
@@ -172,6 +173,7 @@ class CDPClient {
       this.#pending.clear();
       for (const w of this.#waiters) { clearTimeout(w.timer); w.reject(err); }
       this.#waiters.length = 0;
+      this.#listeners.clear();
       if (this.#onDisconnect) this.#onDisconnect(reason);
     };
     this.#ws.addEventListener('close', () => drain('WebSocket closed'));
@@ -191,6 +193,8 @@ class CDPClient {
             break;
           }
         }
+        const cbs = this.#listeners.get(msg.method);
+        if (cbs) for (const cb of cbs) cb(msg.params);
       }
     });
   }
@@ -233,6 +237,17 @@ class CDPClient {
       const entry = { method, resolve, reject, timer };
       this.#waiters.push(entry);
     });
+  }
+
+  /** Subscribe to CDP events persistently (unlike waitForEvent which is one-shot). */
+  on(method, callback) {
+    if (!this.#listeners.has(method)) this.#listeners.set(method, []);
+    this.#listeners.get(method).push(callback);
+  }
+
+  /** Remove all listeners for a CDP event method. */
+  off(method) {
+    this.#listeners.delete(method);
   }
 
   #onDisconnect = null;
@@ -592,6 +607,118 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     return { closed: session };
   }
 
+  // ---- Console capture (on-demand, opt-in to preserve stealth) ----
+
+  if (routePath === '/console' && method === 'POST') {
+    const { session, off } = body;
+    const s = getSession(sessions, session);
+
+    if (off) {
+      s.cdp.off('Console.messageAdded');
+      try { await s.cdp.send('Console.disable'); } catch {}
+      delete s._consoleBuf;
+      delete s._consoleOn;
+      return { console: 'disabled', session };
+    }
+
+    if (!s._consoleOn) {
+      s._consoleBuf = [];
+      s._consoleOn = true;
+      await s.cdp.send('Console.enable');
+      s.cdp.on('Console.messageAdded', (params) => {
+        const m = params.message;
+        s._consoleBuf.push({
+          level: m.level, text: m.text,
+          url: m.url || '', line: m.line || 0,
+        });
+        if (s._consoleBuf.length > 200) s._consoleBuf.shift();
+      });
+    }
+
+    const entries = s._consoleBuf.splice(0);
+    if (entries.length === 0) return 'No console messages captured.\n';
+    return entries.map(e => {
+      const loc = e.url ? ` (${e.url}${e.line ? ':' + e.line : ''})` : '';
+      return `[${e.level.toUpperCase()}] ${e.text}${loc}`;
+    }).join('\n') + '\n';
+  }
+
+  // ---- Network capture (on-demand, opt-in to preserve stealth) ----
+
+  if (routePath === '/network' && method === 'POST') {
+    const { session, off, all } = body;
+    const s = getSession(sessions, session);
+
+    if (off) {
+      s.cdp.off('Network.requestWillBeSent');
+      s.cdp.off('Network.responseReceived');
+      s.cdp.off('Network.loadingFailed');
+      // Don't disable Network in headless mode (needed for UA override)
+      if (!isHeadless) { try { await s.cdp.send('Network.disable'); } catch {} }
+      delete s._netBuf;
+      delete s._netPending;
+      delete s._netOn;
+      return { network: 'disabled', session };
+    }
+
+    if (!s._netOn) {
+      s._netBuf = [];
+      s._netPending = new Map();
+      s._netOn = true;
+      // Network.enable is idempotent — safe even if already enabled for headless UA
+      await s.cdp.send('Network.enable');
+
+      s.cdp.on('Network.requestWillBeSent', (params) => {
+        s._netPending.set(params.requestId, {
+          method: params.request.method,
+          url: params.request.url,
+          ts: params.timestamp,
+        });
+        if (s._netPending.size > 500) {
+          s._netPending.delete(s._netPending.keys().next().value);
+        }
+      });
+
+      s.cdp.on('Network.responseReceived', (params) => {
+        const req = s._netPending.get(params.requestId);
+        if (!req) return;
+        s._netPending.delete(params.requestId);
+        s._netBuf.push({
+          method: req.method, url: req.url,
+          status: params.response.status,
+          statusText: params.response.statusText,
+          ms: Math.round((params.timestamp - req.ts) * 1000),
+        });
+        if (s._netBuf.length > 500) s._netBuf.shift();
+      });
+
+      s.cdp.on('Network.loadingFailed', (params) => {
+        const req = s._netPending.get(params.requestId);
+        if (!req) return;
+        s._netPending.delete(params.requestId);
+        s._netBuf.push({
+          method: req.method, url: req.url,
+          status: 0, statusText: params.errorText || 'Failed',
+          ms: Math.round((params.timestamp - req.ts) * 1000),
+          failed: true,
+        });
+        if (s._netBuf.length > 500) s._netBuf.shift();
+      });
+    }
+
+    let entries = s._netBuf.splice(0);
+    if (!all) entries = entries.filter(e => e.failed || e.status >= 400);
+
+    if (entries.length === 0) {
+      return all ? 'No network requests captured.\n' : 'No failed requests captured.\n';
+    }
+    return entries.map(e => {
+      const dur = e.ms != null ? ` (${e.ms}ms)` : '';
+      if (e.failed) return `[FAIL] ${e.method} ${e.url} — ${e.statusText}${dur}`;
+      return `[${e.status}] ${e.method} ${e.url}${dur}`;
+    }).join('\n') + '\n';
+  }
+
   if (routePath === '/stop') {
     setTimeout(() => process.exit(0), 100);
     return { stopping: true };
@@ -873,6 +1000,8 @@ async function runCli(cmd, args) {
     screenshot: () => cliReq('POST', '/screenshot', { session: args[0], path: args[1] }, sock),
     scroll:     () => cliReq('POST', '/scroll', { session: args[0], direction: args[1] || 'down' }, sock),
     wait:       () => cliReq('POST', '/wait', { session: args[0], ms: parseInt(args[1]) || 1000 }, sock),
+    console:    () => cliReq('POST', '/console', { session: args[0], off: args.includes('--off') }, sock),
+    network:    () => cliReq('POST', '/network', { session: args[0], off: args.includes('--off'), all: args.includes('--all') }, sock),
     close:      () => cliReq('DELETE', `/session/${args[0]}`, null, sock),
     list:       () => cliReq('GET', '/list', null, sock),
     stop:       () => cliReq('POST', '/stop', {}, sock),
@@ -982,6 +1111,13 @@ Tab operations:
   chromux close <session>            Close tab
   chromux list                       List active sessions
   chromux stop                       Stop daemon (keeps Chrome)
+
+Observability (on-demand, opt-in to preserve stealth):
+  chromux console <session>          Capture console logs (enable + read + clear)
+  chromux console <session> --off    Disable console capture
+  chromux network <session>          Capture failed requests (4xx/5xx/errors)
+  chromux network <session> --all    Capture all requests
+  chromux network <session> --off    Disable network capture
 
 Profile selection:
   chromux --profile <name> <cmd>     Use specific profile
