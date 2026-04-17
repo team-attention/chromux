@@ -825,8 +825,11 @@ async function cmdPs() {
       } catch {}
     }
 
-    // Check daemon status via socket existence + health
-    let daemon = 'dead';
+    // Check daemon status via socket existence + health.
+    // "idle" = no socket yet (daemon lazy-starts on first tab command) — not a failure.
+    // "stale" = socket exists but /health fails (daemon crashed, needs cleanup).
+    // "ok"   = socket exists and /health succeeds.
+    let daemon = 'idle';
     const sock = path.join(RUN_DIR, `${name}.sock`);
     if (fs.existsSync(sock)) {
       try {
@@ -1133,6 +1136,16 @@ Paths:
 // ============================================================
 // Entry
 // ============================================================
+
+// Extract global flags before positional parsing so they work in any position.
+// Without this, `chromux --profile foo open ...` would treat `--profile` as the command.
+{
+  const idx = process.argv.indexOf('--profile');
+  if (idx >= 2 && process.argv[idx + 1]) {
+    process.env.CHROMUX_PROFILE = process.argv[idx + 1];
+    process.argv.splice(idx, 2);
+  }
+}
 
 const [,, cmd, ...args] = process.argv;
 
