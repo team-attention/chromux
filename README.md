@@ -96,6 +96,7 @@ chromux kill work
 | `scroll <session> up\|down` | Scroll page |
 | `wait <session> <ms>` | Wait milliseconds |
 | `close <session>` | Close tab |
+| `show <session>` | Open DevTools in browser (inspect live tab, even headless) |
 | `list` | List active sessions in current profile |
 | `stop` | Stop daemon (keeps Chrome running) |
 

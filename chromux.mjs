@@ -719,6 +719,25 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     }).join('\n') + '\n';
   }
 
+  // ---- Show: get DevTools URL for a session ----
+
+  if (routePath.startsWith('/show/') && method === 'GET') {
+    const session = decodeURIComponent(routePath.split('/')[2]);
+    const s = getSession(sessions, session);
+    // Fetch all targets from CDP /json endpoint
+    const targets = await cdpFetch(port, '/json');
+    const target = targets.find(t => t.id === s.targetId);
+    if (!target) throw httpErr(404, `Target not found for session: ${session}`);
+    return {
+      session,
+      targetId: s.targetId,
+      url: target.url,
+      title: target.title,
+      devtoolsFrontendUrl: target.devtoolsFrontendUrl,
+      inspectUrl: `devtools://devtools/bundled/inspector.html?ws=127.0.0.1:${port}/devtools/page/${s.targetId}`,
+    };
+  }
+
   if (routePath === '/stop') {
     setTimeout(() => process.exit(0), 100);
     return { stopping: true };
@@ -993,6 +1012,19 @@ async function runCli(cmd, args) {
   const profile = getProfile();
   const sock = await ensureDaemon(profile);
 
+  // Special: show — open DevTools in user's browser
+  if (cmd === 'show') {
+    if (!args[0]) { console.error('Usage: chromux show <session>'); process.exit(1); }
+    const info = await cliReq('GET', `/show/${args[0]}`, null, sock);
+    const url = info.devtoolsFrontendUrl;
+    if (!url) { console.error('No DevTools URL available'); process.exit(1); }
+    // Open in user's default browser (macOS: open, Linux: xdg-open)
+    const opener = process.platform === 'darwin' ? 'open' : 'xdg-open';
+    spawn(opener, [url], { detached: true, stdio: 'ignore' }).unref();
+    console.log(JSON.stringify(info, null, 2));
+    return;
+  }
+
   const routes = {
     open:       () => cliReq('POST', '/open', { session: args[0], url: args[1] }, sock),
     snapshot:   () => cliReq('GET', `/snapshot/${args[0]}`, null, sock),
@@ -1113,6 +1145,7 @@ Tab operations:
   chromux wait <session> <ms>        Wait milliseconds
   chromux close <session>            Close tab
   chromux list                       List active sessions
+  chromux show <session>             Open DevTools in browser (inspect live tab)
   chromux stop                       Stop daemon (keeps Chrome)
 
 Observability (on-demand, opt-in to preserve stealth):
