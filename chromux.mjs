@@ -14,7 +14,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 
 // ============================================================
 // Constants & Config
@@ -94,7 +94,7 @@ function findChrome(cfg) {
 }
 
 // ============================================================
-// State file helpers (per-profile: pid, port, sock)
+// State file helpers (per-profile cache: pid, port, sock)
 // ============================================================
 
 function readState(profileName) {
@@ -114,6 +114,194 @@ function clearState(profileName) {
 
 function isProcessAlive(pid) {
   try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+function stripQuotes(value) {
+  if (!value) return value;
+  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+    return value.slice(1, -1);
+  }
+  return value;
+}
+
+function splitCommand(command) {
+  const out = [];
+  let cur = '';
+  let quote = null;
+  let escaped = false;
+  for (const ch of command) {
+    if (escaped) {
+      cur += ch;
+      escaped = false;
+      continue;
+    }
+    if (ch === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (ch === quote) quote = null;
+      else cur += ch;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      if (cur) {
+        out.push(cur);
+        cur = '';
+      }
+      continue;
+    }
+    cur += ch;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+function getArgValue(args, name) {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === name && args[i + 1]) return stripQuotes(args[i + 1]);
+    if (arg.startsWith(`${name}=`)) return stripQuotes(arg.slice(name.length + 1));
+  }
+  return null;
+}
+
+function listProcesses() {
+  const psArgs = process.platform === 'darwin'
+    ? ['-axo', 'pid=,command=']
+    : ['-eo', 'pid=,args='];
+  const res = spawnSync('ps', psArgs, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+  if (res.error || res.status !== 0) return [];
+  return res.stdout.split('\n').map(line => {
+    const m = line.match(/^\s*(\d+)\s+(.*)$/);
+    if (!m) return null;
+    return { pid: Number(m[1]), command: m[2] };
+  }).filter(Boolean);
+}
+
+function parseChromuxChromeProcess(proc) {
+  if (!proc.command.includes('--user-data-dir')) return null;
+  const args = splitCommand(proc.command);
+  const userDataDir = getArgValue(args, '--user-data-dir');
+  if (!userDataDir) return null;
+  const resolvedUserDataDir = path.resolve(userDataDir);
+  const rel = path.relative(PROFILES_DIR, resolvedUserDataDir);
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel) || rel.includes(path.sep)) return null;
+  if (!VALID_NAME.test(rel)) return null;
+  const portValue = getArgValue(args, '--remote-debugging-port');
+  const port = portValue ? Number(portValue) : null;
+  return {
+    pid: proc.pid,
+    profile: rel,
+    port: Number.isInteger(port) ? port : null,
+    headless: args.some(arg => arg === '--headless' || arg.startsWith('--headless=')),
+    browser: !args.some(arg => arg.startsWith('--type=')),
+    userDataDir: resolvedUserDataDir,
+  };
+}
+
+function listChromuxChromeProcesses() {
+  return listProcesses().map(parseChromuxChromeProcess).filter(Boolean);
+}
+
+function findProfileProcesses(profileName) {
+  validateName(profileName);
+  return listChromuxChromeProcesses().filter(proc => proc.profile === profileName);
+}
+
+async function resolveProfileRuntime(profileName, { adopt = true } = {}) {
+  validateName(profileName);
+
+  const candidates = findProfileProcesses(profileName);
+  const orderedCandidates = [...candidates].sort((a, b) =>
+    Number(b.browser) - Number(a.browser)
+    || Number(!!b.port) - Number(!!a.port)
+    || a.pid - b.pid
+  );
+  const byPid = new Map(candidates.map(proc => [proc.pid, proc]));
+  const state = readState(profileName);
+
+  if (state) {
+    const statePidAlive = state.pid && isProcessAlive(state.pid);
+    const stateCdpOk = state.port && await checkCDP(state.port);
+    if (statePidAlive && stateCdpOk) {
+      const proc = byPid.get(state.pid) || candidates.find(p => p.port === state.port);
+      if (!proc || proc.browser) {
+        return {
+          profile: profileName,
+          pid: state.pid,
+          port: state.port,
+          headless: proc ? proc.headless : !!state.headless,
+          sock: state.sock || sockPath(profileName),
+          userDataDir: proc ? proc.userDataDir : profileDir(profileName),
+          source: 'state',
+          status: 'running',
+        };
+      }
+    }
+    if (!statePidAlive) clearState(profileName);
+  }
+
+  for (const proc of orderedCandidates) {
+    if (!proc.port) continue;
+    const cdpOk = await checkCDP(proc.port);
+    if (!cdpOk) continue;
+    const runtime = {
+      profile: profileName,
+      pid: proc.pid,
+      port: proc.port,
+      headless: proc.headless,
+      sock: sockPath(profileName),
+      userDataDir: proc.userDataDir,
+      source: 'process',
+      status: 'running',
+    };
+    if (adopt) {
+      writeState(profileName, {
+        pid: runtime.pid,
+        port: runtime.port,
+        sock: runtime.sock,
+        headless: runtime.headless,
+        adopted: true,
+      });
+    }
+    return runtime;
+  }
+
+  if (state && state.pid && isProcessAlive(state.pid)) {
+    return {
+      profile: profileName,
+      pid: state.pid,
+      port: state.port || null,
+      headless: !!state.headless,
+      sock: state.sock || sockPath(profileName),
+      userDataDir: profileDir(profileName),
+      source: 'state',
+      status: 'locked',
+      reason: 'state pid is alive but CDP is unreachable',
+    };
+  }
+
+  if (orderedCandidates.length > 0) {
+    const proc = orderedCandidates[0];
+    return {
+      profile: profileName,
+      pid: proc.pid,
+      port: proc.port,
+      headless: proc.headless,
+      sock: sockPath(profileName),
+      userDataDir: proc.userDataDir,
+      source: 'process',
+      status: 'locked',
+      reason: proc.port ? 'remote debugging port is not reachable' : 'remote debugging port is missing',
+    };
+  }
+
+  return null;
 }
 
 /** Check if a CDP endpoint is reachable. */
@@ -758,19 +946,21 @@ async function cmdLaunch(profileName, explicitPort, headless = true) {
     process.exit(1);
   }
 
-  // Check if already running
-  const existing = readState(profileName);
-  if (existing) {
-    if (isProcessAlive(existing.pid)) {
-      const alive = await checkCDP(existing.port);
-      if (alive) {
-        console.log(JSON.stringify({ profile: profileName, port: existing.port, status: 'already running' }, null, 2));
-        return;
-      }
-      // PID alive but CDP dead — stale process, kill it
-      try { process.kill(existing.pid, 'SIGTERM'); } catch {}
-    }
-    clearState(profileName);
+  const existing = await resolveProfileRuntime(profileName);
+  if (existing?.status === 'running') {
+    console.log(JSON.stringify({
+      profile: profileName,
+      port: existing.port,
+      pid: existing.pid,
+      headless: existing.headless,
+      status: existing.source === 'process' ? 'adopted running profile' : 'already running',
+    }, null, 2));
+    return;
+  }
+  if (existing?.status === 'locked') {
+    console.error(`Profile "${profileName}" is already locked by PID ${existing.pid}, but CDP is not reachable${existing.port ? ` on port ${existing.port}` : ''}.`);
+    console.error('Close that Chrome instance or run: chromux kill ' + profileName);
+    process.exit(1);
   }
 
   const port = explicitPort || await findFreePort(cfg);
@@ -825,21 +1015,20 @@ async function cmdPs() {
   let profiles;
   try { profiles = fs.readdirSync(PROFILES_DIR); }
   catch { profiles = []; }
+  const discovered = listChromuxChromeProcesses().map(proc => proc.profile);
+  profiles = [...new Set([...profiles, ...discovered])];
 
   const rows = [];
   for (const name of profiles) {
-    const st = readState(name);
-    if (!st) continue;
-    const alive = isProcessAlive(st.pid);
-    if (!alive) { clearState(name); continue; }
-    const cdpOk = await checkCDP(st.port);
+    const runtime = await resolveProfileRuntime(name);
+    if (!runtime) continue;
+    const cdpOk = runtime.status === 'running';
 
     // Count tabs via daemon if reachable (short timeout to avoid hang)
     let tabs = '-';
     if (cdpOk) {
       try {
-        const sock = sockPath(name);
-        const list = await cliReq('GET', '/list', null, sock, 5000);
+        const list = await cliReq('GET', '/list', null, runtime.sock, 5000);
         tabs = String(Object.keys(list).length);
       } catch {}
     }
@@ -849,15 +1038,14 @@ async function cmdPs() {
     // "stale" = socket exists but /health fails (daemon crashed, needs cleanup).
     // "ok"   = socket exists and /health succeeds.
     let daemon = 'idle';
-    const sock = path.join(RUN_DIR, `${name}.sock`);
-    if (fs.existsSync(sock)) {
+    if (fs.existsSync(runtime.sock)) {
       try {
-        await cliReq('GET', '/health', null, sock, 2000);
+        await cliReq('GET', '/health', null, runtime.sock, 2000);
         daemon = 'ok';
       } catch { daemon = 'stale'; }
     }
 
-    rows.push({ profile: name, port: st.port, pid: st.pid, status: cdpOk ? 'running' : 'no-cdp', tabs, daemon });
+    rows.push({ profile: name, port: runtime.port || '-', pid: runtime.pid, status: cdpOk ? 'running' : 'locked', tabs, daemon });
   }
 
   if (rows.length === 0) {
@@ -887,13 +1075,18 @@ async function cmdKill(profileName) {
   const sock = sockPath(profileName);
   try { await cliReq('POST', '/stop', {}, sock); } catch {}
 
+  const pids = new Set();
   const st = readState(profileName);
-  if (st && isProcessAlive(st.pid)) {
-    try { process.kill(st.pid, 'SIGTERM'); } catch {}
+  if (st && isProcessAlive(st.pid)) pids.add(st.pid);
+  for (const proc of findProfileProcesses(profileName)) {
+    if (isProcessAlive(proc.pid)) pids.add(proc.pid);
+  }
+  for (const pid of pids) {
+    try { process.kill(pid, 'SIGTERM'); } catch {}
   }
   clearState(profileName);
   try { fs.unlinkSync(sock); } catch {}
-  console.log(JSON.stringify({ profile: profileName, killed: true }, null, 2));
+  console.log(JSON.stringify({ profile: profileName, killed: true, pids: [...pids] }, null, 2));
 }
 
 // ============================================================
@@ -932,12 +1125,8 @@ function cliReq(method, urlPath, body, sock, timeoutMs = 30000) {
 // ============================================================
 
 async function resolveProfilePort(profileName) {
-  const st = readState(profileName);
-  if (st && isProcessAlive(st.pid)) {
-    const alive = await checkCDP(st.port);
-    if (alive) return st.port;
-  }
-  return null;
+  const runtime = await resolveProfileRuntime(profileName);
+  return runtime?.status === 'running' ? runtime.port : null;
 }
 
 async function ensureDaemon(profileName) {

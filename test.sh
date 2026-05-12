@@ -44,6 +44,22 @@ PS=$(node "$CT" ps 2>/dev/null)
 check "ps shows profile" "$PROFILE" "$PS"
 check "ps shows running" "running" "$PS"
 
+# --- Test 2b: Missing .state adoption ---
+echo ""
+echo "--- Test 2b: Missing .state adoption ---"
+STATE="$HOME/.chromux/profiles/$PROFILE/.state"
+rm -f "$STATE"
+PS_ADOPT=$(node "$CT" ps 2>/dev/null)
+check "ps adopts profile without .state" "$PROFILE" "$PS_ADOPT"
+check "ps adopted profile as running" "running" "$PS_ADOPT"
+if [ -f "$STATE" ]; then
+  echo "  ✓ .state cache restored"
+  PASS=$((PASS+1))
+else
+  echo "  ✗ .state cache not restored"
+  FAIL=$((FAIL+1))
+fi
+
 # --- Test 3: Open tabs ---
 echo ""
 echo "--- Test 3: Open tabs ---"
@@ -115,6 +131,7 @@ check "all tabs closed" "{}" "$LIST2"
 # --- Test 10: Kill profile ---
 echo ""
 echo "--- Test 10: Kill profile ---"
+rm -f "$STATE"
 node "$CT" kill "$PROFILE" 2>/dev/null > /dev/null
 sleep 1
 PS2=$(node "$CT" ps 2>/dev/null)

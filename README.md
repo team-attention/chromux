@@ -107,7 +107,7 @@ chromux kill work
   config.json                    Global config (optional)
   profiles/
     default/                     Chrome user-data-dir
-      .state                     PID, port, socket path
+      .state                     PID, port, socket path cache
     work/
       .state
 
@@ -129,6 +129,9 @@ CLI / AI agents
 - **Page ops** via CDP WebSocket JSON-RPC
 - **Daemon per profile** keeps WebSocket connections alive across CLI invocations
 - **Auto-launch** — `chromux open` auto-launches default profile if needed
+- **Profile adoption** — `.state` is a cache, not the source of truth; `chromux ps`,
+  `launch`, `open`, and `kill` rediscover live Chrome processes from
+  `--user-data-dir` + CDP when daemon/socket/state files drift or disappear
 
 ## Configuration
 
