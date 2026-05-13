@@ -143,6 +143,26 @@ else
   PASS=$((PASS+1))
 fi
 
+# --- Test 11: Dead-PID startup lock recovery ---
+echo ""
+echo "--- Test 11: Dead-PID startup lock recovery ---"
+mkdir -p "$HOME/.chromux/run"
+( : ) &
+DEAD_PID=$!
+wait "$DEAD_PID" || true
+LOCK="$HOME/.chromux/run/$PROFILE.lock"
+printf '{"pid":%s,"ts":%s}' "$DEAD_PID" "$(date +%s000)" > "$LOCK"
+R11=$(CHROMUX_PROFILE=$PROFILE node "$CT" open lock-test https://example.com 2>&1)
+check "open succeeds after dead-PID lock" "example.com" "$R11"
+if [ -f "$LOCK" ]; then
+  echo "  ✗ Dead-PID lock still exists"
+  FAIL=$((FAIL+1))
+else
+  echo "  ✓ Dead-PID lock removed"
+  PASS=$((PASS+1))
+fi
+CHROMUX_PROFILE=$PROFILE node "$CT" kill "$PROFILE" 2>/dev/null > /dev/null || true
+
 # Cancel the EXIT trap since kill already cleaned up
 trap - EXIT
 

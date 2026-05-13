@@ -1265,6 +1265,14 @@ async function acquireLock(lockFile) {
       if (err.code !== 'EEXIST') throw err;
       // Check if lock is stale
       try {
+        const owner = JSON.parse(fs.readFileSync(lockFile, 'utf8'));
+        if (owner.pid && !isProcessAlive(owner.pid)) {
+          process.stderr.write(`Removing stale lock from dead PID ${owner.pid}: ${lockFile}\n`);
+          fs.unlinkSync(lockFile);
+          continue; // Retry immediately
+        }
+      } catch {}
+      try {
         const stat = fs.statSync(lockFile);
         if (Date.now() - stat.mtimeMs > STALE_MS) {
           process.stderr.write(`Removing stale lock: ${lockFile}\n`);
