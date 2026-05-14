@@ -27,6 +27,7 @@ chromux solves this by talking to Chrome's DevTools Protocol directly using only
 ```bash
 # Launch Chrome with an isolated profile (auto-finds Chrome, auto-assigns port)
 chromux launch
+chromux launch work --hidden
 
 # Open tabs for two agents
 chromux open agent-a https://news.ycombinator.com
@@ -63,6 +64,9 @@ chromux ps
 chromux --profile work open my-tab https://...
 CHROMUX_PROFILE=personal chromux open other-tab https://...
 
+# Auto-launch tab commands in hidden headed mode
+CHROMUX_LAUNCH_MODE=hidden chromux open hidden-tab https://...
+
 # Default profile is "default" — used when no --profile specified
 chromux open my-tab https://...  # → uses "default" profile (auto-launches if needed)
 
@@ -77,6 +81,7 @@ chromux kill work
 | Command | Description |
 |---------|-------------|
 | `launch [name]` | Launch Chrome with isolated profile (default: "default") |
+| `launch <name> --hidden` | Launch headed Chrome offscreen so it can be automated without covering the desktop |
 | `launch <name> --port N` | Launch with specific port |
 | `ps` | List running profiles |
 | `kill <name>` | Stop profile (Chrome + daemon) |
@@ -145,11 +150,42 @@ Optional `~/.chromux/config.json`:
 }
 ```
 
+## Launch Modes
+
+chromux supports three Chrome launch modes:
+
+- `headless`: no visible Chrome window. This is the default auto-launch mode
+  unless `CHROMUX_LAUNCH_MODE` is set.
+- `headed`: normal visible Chrome window.
+- `hidden`: headed Chrome launched offscreen/backgrounded. It avoids the
+  `HeadlessChrome` user-agent path while trying not to cover the desktop.
+
+Use hidden mode explicitly:
+
+```bash
+chromux launch work --hidden
+```
+
+Make auto-launch use hidden mode:
+
+```bash
+export CHROMUX_LAUNCH_MODE=hidden
+chromux --profile work open tab https://example.com
+```
+
+On macOS, hidden mode uses `open -g -j -n -a "Google Chrome" --args ...` plus
+offscreen window bounds. It is designed to avoid focus stealing, but it is not a
+security boundary or a guarantee that Chrome can never become visible. OS-level
+activation, permission prompts, popups, or user actions can still surface a
+Chrome window. Use `chromux show <session>` when you intentionally want to
+inspect a live tab.
+
 ## Environment
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CHROMUX_PROFILE` | `default` | Active profile name |
+| `CHROMUX_LAUNCH_MODE` | `headless` for auto-launch | Auto-launch mode used by tab commands when a profile is not running: `headless`, `headed`, or `hidden` |
 
 ## License
 

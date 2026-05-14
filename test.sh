@@ -3,6 +3,7 @@ set -e
 
 CT="$(dirname "$0")/chromux.mjs"
 PROFILE="test-$$"
+HIDDEN_PROFILE="$PROFILE-hidden"
 PASS=0
 FAIL=0
 
@@ -21,8 +22,11 @@ cleanup() {
   echo ""
   echo "--- Cleanup ---"
   node "$CT" kill "$PROFILE" 2>/dev/null || true
+  node "$CT" kill "$HIDDEN_PROFILE" 2>/dev/null || true
   chmod -R u+rwX "$HOME/.chromux/profiles/$PROFILE" 2>/dev/null || true
+  chmod -R u+rwX "$HOME/.chromux/profiles/$HIDDEN_PROFILE" 2>/dev/null || true
   rm -rf "$HOME/.chromux/profiles/$PROFILE"
+  rm -rf "$HOME/.chromux/profiles/$HIDDEN_PROFILE"
   echo "  ✓ cleaned up profile $PROFILE"
 }
 trap cleanup EXIT
@@ -36,6 +40,21 @@ echo "--- Test 1: Launch profile ---"
 R1=$(node "$CT" launch "$PROFILE" 2>/dev/null)
 check "profile launched" "port" "$R1"
 check "profile name" "$PROFILE" "$R1"
+
+# --- Test 1b: Hidden headed launch ---
+echo ""
+echo "--- Test 1b: Hidden headed launch ---"
+RH=$(node "$CT" launch "$HIDDEN_PROFILE" --hidden 2>/dev/null)
+check "hidden launch mode" '"launchMode": "hidden"' "$RH"
+check "hidden launch is headed" '"headless": false' "$RH"
+check "hidden flag present" '"hidden": true' "$RH"
+node "$CT" kill "$HIDDEN_PROFILE" 2>/dev/null > /dev/null || true
+
+RH_AUTO=$(CHROMUX_PROFILE="$HIDDEN_PROFILE" CHROMUX_LAUNCH_MODE=hidden node "$CT" open hidden-auto https://example.com 2>/dev/null)
+check "hidden auto-launch opens tab" "example.com" "$RH_AUTO"
+HIDDEN_STATE=$(cat "$HOME/.chromux/profiles/$HIDDEN_PROFILE/.state")
+check "hidden auto-launch state" '"launchMode": "hidden"' "$HIDDEN_STATE"
+node "$CT" kill "$HIDDEN_PROFILE" 2>/dev/null > /dev/null || true
 
 # --- Test 2: PS ---
 echo ""
