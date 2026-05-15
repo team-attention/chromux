@@ -753,7 +753,21 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     await s.cdp.send('Page.navigate', { url });
     await loaded;
     const r = await s.cdp.send('Runtime.evaluate', { expression: 'JSON.stringify({url:location.href,title:document.title})', returnByValue: true });
-    return { session, ...JSON.parse(r.result.value) };
+    const result = { session, ...JSON.parse(r.result.value) };
+    // Surface host-specific hint files from ~/.chromux/skills/<host>/*.md (if any).
+    try {
+      const u = new URL(result.url);
+      const host = u.hostname.replace(/^www\./, '');
+      const dir = path.join(CHROMUX_HOME, 'skills', host);
+      if (fs.existsSync(dir)) {
+        const files = fs.readdirSync(dir).filter(f => f.endsWith('.md'));
+        if (files.length) {
+          const hints = files.map(f => `# Hint: ${host}/${f}\n` + fs.readFileSync(path.join(dir, f), 'utf8').trim()).join('\n\n');
+          result.hints = hints;
+        }
+      }
+    } catch {}
+    return result;
   }
 
   if (routePath.startsWith('/snapshot/')) {
@@ -763,9 +777,57 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     return r.result.value;
   }
 
-  if (routePath === '/click' && method === 'POST') {
-    const { session, selector } = body;
+  if (routePath === '/cdp' && method === 'POST') {
+    const { session, method: cdpMethod, params, timeoutMs } = body;
+    if (!session || !cdpMethod) throw httpErr(400, 'session and method required');
     const s = getSession(sessions, session);
+    return await s.cdp.send(cdpMethod, params || {}, timeoutMs);
+  }
+
+  if (routePath === '/run' && method === 'POST') {
+    const { session, code, timeoutMs } = body;
+    if (!session || code == null) throw httpErr(400, 'session and code required');
+    const s = getSession(sessions, session);
+    const cdp = (m, p = {}, t) => s.cdp.send(m, p, t);
+    const evalJs = async (expr, t) => {
+      const r = await s.cdp.send('Runtime.evaluate', {
+        expression: expr,
+        returnByValue: true,
+        awaitPromise: true,
+      }, t);
+      if (r.exceptionDetails) {
+        throw new Error(r.exceptionDetails.exception?.description || r.exceptionDetails.text || 'js error');
+      }
+      return r.result.value;
+    };
+    const waitLoad = (ms = 30000) => s.cdp.waitForEvent('Page.loadEventFired', ms);
+    const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+    const fn = new AsyncFunction('cdp', 'js', 'sleep', 'waitLoad', code);
+    const runPromise = fn(cdp, evalJs, sleep, waitLoad);
+    const result = (typeof timeoutMs === 'number' && timeoutMs > 0)
+      ? await withTimeout(runPromise, timeoutMs, 'run timeout')
+      : await runPromise;
+    return result === undefined ? null : result;
+  }
+
+  if (routePath === '/click' && method === 'POST') {
+    const { session, selector, xy, button = 'left', clicks = 1 } = body;
+    if (!session) throw httpErr(400, 'session required');
+    const s = getSession(sessions, session);
+    if (xy) {
+      const [x, y] = xy.map(Number);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) throw httpErr(400, 'xy must contain numeric x/y');
+      const clickCount = Number.isFinite(Number(clicks)) ? Number(clicks) : 1;
+      await s.cdp.send('Input.dispatchMouseEvent', {
+        type: 'mousePressed', x, y, button, clickCount,
+      });
+      await s.cdp.send('Input.dispatchMouseEvent', {
+        type: 'mouseReleased', x, y, button, clickCount,
+      });
+      await sleep(100);
+      return { clicked: { xy: [x, y], button, clicks: clickCount } };
+    }
+    if (!selector) throw httpErr(400, 'selector or xy required');
     const sel = selector.startsWith('@')
       ? `[data-ct-ref="${selector.slice(1)}"]`
       : selector;
@@ -811,13 +873,92 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
   }
 
   if (routePath === '/eval' && method === 'POST') {
-    const { session, code } = body;
+    const { session, code, timeoutMs } = body;
     const s = getSession(sessions, session);
-    const r = await s.cdp.send('Runtime.evaluate', {
+    const evalArgs = {
       expression: code, returnByValue: true, awaitPromise: true,
-    });
+    };
+    if (typeof timeoutMs === 'number' && timeoutMs > 0) evalArgs.timeout = timeoutMs;
+    const cdpTimeout = (typeof timeoutMs === 'number' && timeoutMs > 0) ? timeoutMs + 2000 : undefined;
+    const r = await s.cdp.send('Runtime.evaluate', evalArgs, cdpTimeout);
     if (r.exceptionDetails) throw httpErr(400, r.exceptionDetails.text || 'eval error');
     return r.result.value;
+  }
+
+  if (routePath === '/scroll-until' && method === 'POST') {
+    const { session, selector, jsCount, count, maxScrolls = 30, delayMs = 800, target } = body;
+    if ((!selector && !jsCount) || !count) throw httpErr(400, 'scroll-until requires (--selector or --js-count) and --count');
+    const s = getSession(sessions, session);
+    const counts = [];
+    let last = -1;
+    let stagnant = 0;
+    let wheelFailures = 0;
+    const probeTimeout = Math.max(15000, delayMs + 5000);
+    for (let i = 0; i < maxScrolls; i++) {
+      // Probe + JS-side scroll (scrollTo + lastChild.scrollIntoView) in one CDP roundtrip.
+      const probe = await s.cdp.send('Runtime.evaluate', {
+        expression: `(() => {
+          const t = ${JSON.stringify(target || null)};
+          const SEL = ${JSON.stringify(selector || '')};
+          const JSC = ${JSON.stringify(jsCount || '')};
+          let matches = SEL ? document.querySelectorAll(SEL) : [];
+          let n;
+          if (JSC) {
+            try { n = Number((function(){ return eval(JSC); })()); if (!isFinite(n)) n = 0; } catch(e) { n = 0; }
+          } else {
+            n = matches.length;
+          }
+          let scroller = t ? document.querySelector(t) : null;
+          if (!scroller) {
+            for (const el of document.querySelectorAll('main, [role="main"], div, body, html')) {
+              const cs = getComputedStyle(el);
+              if ((cs.overflowY === 'auto' || cs.overflowY === 'scroll') && el.scrollHeight - el.clientHeight > 40) { scroller = el; break; }
+            }
+            if (!scroller) scroller = document.scrollingElement || document.documentElement;
+          }
+          const beforeTop = scroller.scrollTop;
+          const beforeH = scroller.scrollHeight;
+          // Strategy 1: scrollTo bottom of detected scroller
+          try { scroller.scrollTo(0, scroller.scrollHeight); } catch {}
+          // Strategy 2: scrollIntoView on the last matching element (forces IntersectionObserver)
+          try {
+            const last = matches[matches.length - 1];
+            if (last && last.scrollIntoView) last.scrollIntoView({block:'end', behavior:'instant'});
+          } catch {}
+          // Strategy 3: window scroll as last resort
+          try { window.scrollTo(0, document.body.scrollHeight); } catch {}
+          const rect = scroller.getBoundingClientRect ? scroller.getBoundingClientRect() : {left:0,top:0,width:innerWidth,height:innerHeight};
+          return JSON.stringify({
+            n, beforeTop, beforeH,
+            afterTop: scroller.scrollTop, afterH: scroller.scrollHeight,
+            scrollerTag: scroller.tagName + '.' + String(scroller.className||'').slice(0,40),
+            rect: {x: Math.max(10, Math.min(2000, rect.left+rect.width/2)), y: Math.max(10, Math.min(2000, rect.top+rect.height/2))}
+          });
+        })()`,
+        returnByValue: true,
+      }, probeTimeout);
+      if (probe.exceptionDetails) throw httpErr(400, probe.exceptionDetails.text);
+      const info = JSON.parse(probe.result.value);
+      counts.push(info.n);
+      if (info.n >= count) return { reached: true, count: info.n, scrolls: i, history: counts, scroller: info.scrollerTag };
+      // Optional wheel nudge — but don't let it hang the whole command if CDP input is slow.
+      if (wheelFailures < 2) {
+        try {
+          await s.cdp.send('Input.dispatchMouseEvent', {
+            type: 'mouseWheel',
+            x: info.rect.x, y: info.rect.y,
+            deltaX: 0, deltaY: 1500,
+          }, 4000);
+        } catch (e) {
+          wheelFailures++;
+        }
+      }
+      if (info.n === last) stagnant++; else stagnant = 0;
+      last = info.n;
+      if (stagnant >= 4) return { reached: false, count: info.n, scrolls: i + 1, history: counts, reason: 'stagnant', scroller: info.scrollerTag, wheelFailures };
+      await sleep(delayMs);
+    }
+    return { reached: false, count: last, scrolls: maxScrolls, history: counts, reason: 'maxScrolls', wheelFailures };
   }
 
   if (routePath === '/screenshot' && method === 'POST') {
@@ -1214,6 +1355,159 @@ async function cmdKill(profileName) {
 // CLI client (talks to daemon over Unix socket)
 // ============================================================
 
+/**
+ * eval — supports literal arg, --file <path>, or stdin (`-`), with --timeout <ms>.
+ * Examples:
+ *   chromux eval s "1+1"
+ *   chromux eval s --file /tmp/extract.js
+ *   chromux eval s - < /tmp/extract.js
+ *   chromux eval s --timeout 120000 --file /tmp/long.js
+ */
+async function cmdEval(args, sock) {
+  if (!args[0]) { console.error('Usage: chromux eval <session> <code|--file PATH|-> [--timeout MS] [--no-iife]'); process.exit(1); }
+  const session = args[0];
+  let timeoutMs;
+  const tIdx = args.indexOf('--timeout');
+  if (tIdx >= 0) { timeoutMs = parseInt(args[tIdx + 1]); args.splice(tIdx, 2); }
+  const noIife = args.includes('--no-iife');
+  if (noIife) args.splice(args.indexOf('--no-iife'), 1);
+  let code;
+  const fIdx = args.indexOf('--file');
+  if (fIdx >= 0) {
+    const p = args[fIdx + 1];
+    if (!p) { console.error('--file requires a path'); process.exit(1); }
+    code = fs.readFileSync(p, 'utf8');
+  } else if (args[1] === '-') {
+    code = fs.readFileSync(0, 'utf8');
+  } else {
+    code = args[1];
+  }
+  if (code == null) { console.error('No code provided'); process.exit(1); }
+  // Auto-wrap top-level statements in an IIFE so const/let don't pollute global REPL scope.
+  // Skip wrapping for already-wrapped expressions (`(...)`) or single statements without const/let.
+  if (!noIife && /^\s*(?:const|let|var|async|function)\s/m.test(code) && !/^\s*\(/.test(code)) {
+    code = `(async () => { ${code} })()`;
+  }
+  const httpTimeout = (timeoutMs ? timeoutMs : 30000) + 5000;
+  return cliReq('POST', '/eval', { session, code, timeoutMs }, sock, httpTimeout);
+}
+
+function readCodeArg(args, usage) {
+  let timeoutMs;
+  const tIdx = args.indexOf('--timeout');
+  if (tIdx >= 0) {
+    timeoutMs = parseInt(args[tIdx + 1]);
+    args.splice(tIdx, 2);
+  }
+  const session = args[0];
+  if (!session) { console.error(usage); process.exit(1); }
+  let code;
+  const fIdx = args.indexOf('--file');
+  if (fIdx >= 0) {
+    const p = args[fIdx + 1];
+    if (!p) { console.error('--file requires a path'); process.exit(1); }
+    code = fs.readFileSync(p, 'utf8');
+  } else if (args[1] === '-') {
+    code = fs.readFileSync(0, 'utf8');
+  } else {
+    code = args[1];
+  }
+  if (code == null) { console.error('No code provided'); process.exit(1); }
+  return { session, code, timeoutMs };
+}
+
+async function cmdRun(args, sock) {
+  const { session, code, timeoutMs } = readCodeArg(args, 'Usage: chromux run <session> <code|--file PATH|-> [--timeout MS]');
+  const httpTimeout = (timeoutMs ? timeoutMs : 30000) + 5000;
+  return cliReq('POST', '/run', { session, code, timeoutMs }, sock, httpTimeout);
+}
+
+function parseJsonArg(value, label) {
+  try { return JSON.parse(value || '{}'); }
+  catch (e) {
+    console.error(`Invalid JSON for ${label}: ${e.message}`);
+    process.exit(1);
+  }
+}
+
+async function cmdCdp(args, sock) {
+  const session = args[0];
+  const cdpMethod = args[1];
+  if (!session || !cdpMethod) {
+    console.error('Usage: chromux cdp <session> <Method> <params-json|--params-file PATH> [--timeout MS]');
+    process.exit(1);
+  }
+  let timeoutMs;
+  const tIdx = args.indexOf('--timeout');
+  if (tIdx >= 0) {
+    timeoutMs = parseInt(args[tIdx + 1]);
+    args.splice(tIdx, 2);
+  }
+  let params = {};
+  const fIdx = args.indexOf('--params-file');
+  if (fIdx >= 0) {
+    const p = args[fIdx + 1];
+    if (!p) { console.error('--params-file requires a path'); process.exit(1); }
+    params = parseJsonArg(fs.readFileSync(p, 'utf8'), '--params-file');
+  } else if (args[2]) {
+    params = parseJsonArg(args[2], 'params-json');
+  }
+  const httpTimeout = (timeoutMs ? timeoutMs : 30000) + 5000;
+  return cliReq('POST', '/cdp', { session, method: cdpMethod, params, timeoutMs }, sock, httpTimeout);
+}
+
+async function cmdClick(args, sock) {
+  const session = args[0];
+  if (!session) { console.error('Usage: chromux click <session> (@ref|selector|--xy X Y)'); process.exit(1); }
+  const xyIdx = args.indexOf('--xy');
+  if (xyIdx >= 0) {
+    const x = Number(args[xyIdx + 1]);
+    const y = Number(args[xyIdx + 2]);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) { console.error('--xy requires numeric X Y'); process.exit(1); }
+    const buttonIdx = args.indexOf('--button');
+    const clicksIdx = args.indexOf('--clicks');
+    return cliReq('POST', '/click', {
+      session,
+      xy: [x, y],
+      button: buttonIdx >= 0 ? args[buttonIdx + 1] : 'left',
+      clicks: clicksIdx >= 0 ? parseInt(args[clicksIdx + 1]) : 1,
+    }, sock);
+  }
+  return cliReq('POST', '/click', { session, selector: args[1] }, sock);
+}
+
+async function cmdWatch(args, sock) {
+  const session = args[0];
+  const what = args[1];
+  const off = args.includes('--off');
+  const all = args.includes('--all');
+  if (!session || !what) { console.error('Usage: chromux watch <session> <console|network> [--off] [--all]'); process.exit(1); }
+  if (what === 'console') return cliReq('POST', '/console', { session, off }, sock);
+  if (what === 'network') return cliReq('POST', '/network', { session, off, all }, sock);
+  console.error('Usage: chromux watch <session> <console|network> [--off] [--all]');
+  process.exit(1);
+}
+
+/**
+ * scroll-until — scroll an inner scroller (auto-detected) until N elements match selector.
+ * Examples:
+ *   chromux scroll-until s --selector 'li.feed-item' --count 15
+ *   chromux scroll-until s --selector h2 --count 50 --max-scrolls 40 --delay 600
+ */
+async function cmdScrollUntil(args, sock) {
+  const session = args[0];
+  if (!session) { console.error('Usage: chromux scroll-until <session> (--selector SEL | --js-count "expr") --count N [--max-scrolls M] [--delay MS] [--target SEL]'); process.exit(1); }
+  const get = (flag) => { const i = args.indexOf(flag); return i >= 0 ? args[i + 1] : undefined; };
+  const selector = get('--selector');
+  const jsCount = get('--js-count');
+  const count = parseInt(get('--count'));
+  if ((!selector && !jsCount) || !count) { console.error('Need --selector or --js-count, plus --count'); process.exit(1); }
+  const maxScrolls = parseInt(get('--max-scrolls') || '30');
+  const delayMs = parseInt(get('--delay') || '800');
+  const target = get('--target');
+  return cliReq('POST', '/scroll-until', { session, selector, jsCount, count, maxScrolls, delayMs, target }, sock, maxScrolls * (delayMs + 500) + 10000);
+}
+
 function cliReq(method, urlPath, body, sock, timeoutMs = 30000) {
   return new Promise((resolve, reject) => {
     const opts = {
@@ -1342,13 +1636,17 @@ async function runCli(cmd, args) {
   const routes = {
     open:       () => cliReq('POST', '/open', { session: args[0], url: args[1] }, sock),
     snapshot:   () => cliReq('GET', `/snapshot/${args[0]}`, null, sock),
-    click:      () => cliReq('POST', '/click', { session: args[0], selector: args[1] }, sock),
+    cdp:        () => cmdCdp(args, sock),
+    run:        () => cmdRun(args, sock),
+    click:      () => cmdClick(args, sock),
     fill:       () => cliReq('POST', '/fill', { session: args[0], selector: args[1], text: args[2] }, sock),
     type:       () => cliReq('POST', '/type', { session: args[0], text: args[1] }, sock),
-    eval:       () => cliReq('POST', '/eval', { session: args[0], code: args[1] }, sock),
+    eval:       () => cmdEval(args, sock),
+    'scroll-until': () => cmdScrollUntil(args, sock),
     screenshot: () => cliReq('POST', '/screenshot', { session: args[0], path: args[1] }, sock),
     scroll:     () => cliReq('POST', '/scroll', { session: args[0], direction: args[1] || 'down' }, sock),
     wait:       () => cliReq('POST', '/wait', { session: args[0], ms: parseInt(args[1]) || 1000 }, sock),
+    watch:      () => cmdWatch(args, sock),
     console:    () => cliReq('POST', '/console', { session: args[0], off: args.includes('--off') }, sock),
     network:    () => cliReq('POST', '/network', { session: args[0], off: args.includes('--off'), all: args.includes('--all') }, sock),
     close:      () => cliReq('DELETE', `/session/${args[0]}`, null, sock),
@@ -1441,6 +1739,13 @@ function readBody(req) {
   });
 }
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+function withTimeout(promise, ms, message) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
 
 // ============================================================
 // Help
@@ -1448,35 +1753,43 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 const HELP = `chromux — tmux for Chrome tabs
 
-Profile management:
+The core surface:
+  chromux open <session> <url>       Create or navigate a tab
+  chromux run <session> -            Multi-step async JS with cdp/js/sleep/waitLoad
+  chromux cdp <session> <M> '{}'     Raw CDP method passthrough
+
+Lifecycle:
   chromux launch [name]              Launch Chrome (default: "default")
   chromux launch <name> --headless   Launch in headless mode (no window)
   chromux launch <name> --hidden     Launch headed Chrome offscreen
   chromux launch <name> --port N     Launch with specific port
   chromux ps                         List running profiles
   chromux kill <name>                Stop profile (Chrome + daemon)
-
-Tab operations:
-  chromux open <session> <url>       Navigate (auto-creates tab)
-  chromux snapshot <session>         Accessibility tree with @ref
-  chromux click <session> @<ref>     Click by ref number
-  chromux fill <session> @<ref> "t"  Fill input field
-  chromux type <session> "text"      Keyboard input (Enter, Tab, etc.)
-  chromux eval <session> "js"        Run JavaScript expression
-  chromux screenshot <session> [p]   Take PNG screenshot
-  chromux scroll <session> up|down   Scroll page
-  chromux wait <session> <ms>        Wait milliseconds
+  chromux stop                       Stop daemon (keeps Chrome)
   chromux close <session>            Close tab
   chromux list                       List active sessions
-  chromux show <session>             Open DevTools in browser (inspect live tab)
-  chromux stop                       Stop daemon (keeps Chrome)
 
-Observability (on-demand, opt-in to preserve stealth):
-  chromux console <session>          Capture console logs (enable + read + clear)
-  chromux console <session> --off    Disable console capture
-  chromux network <session>          Capture failed requests (4xx/5xx/errors)
-  chromux network <session> --all    Capture all requests
-  chromux network <session> --off    Disable network capture
+Convenience shortcuts:
+  chromux snapshot <session>         Accessibility tree with @ref
+  chromux click <session> @<ref>     Click by ref number
+  chromux click <session> "selector" Click by CSS selector
+  chromux click <session> --xy X Y   Click by viewport coordinates
+  chromux fill <session> @<ref> "t"  Fill input field
+  chromux type <session> "text"      Keyboard input (Enter, Tab, etc.)
+  chromux screenshot <session> [p]   Take PNG screenshot
+  chromux show <session>             Open DevTools in browser (inspect live tab)
+
+Watch / debug:
+  chromux watch <session> console    Capture console logs (enable + read + clear)
+  chromux watch <session> console --off
+  chromux watch <session> network    Capture failed requests (4xx/5xx/errors)
+  chromux watch <session> network --all
+  chromux watch <session> network --off
+
+Policy:
+  New browser actions should be expressed with run or cdp before adding verbs.
+  Older aliases such as eval, scroll, wait, console, network, and scroll-until
+  remain for compatibility but are hidden from the main surface.
 
 Profile selection:
   chromux --profile <name> <cmd>     Use specific profile

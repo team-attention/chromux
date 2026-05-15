@@ -6,6 +6,15 @@
   "bin": {
     "chromux": "./chromux.mjs"
   },
+  "files": [
+    "chromux.mjs",
+    "README.md",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "SKILL.md",
+    "install.md",
+    "skills/_builtin"
+  ],
   "engines": {
     "node": ">=22"
   },

@@ -22,6 +22,15 @@ chromux solves this by talking to Chrome's DevTools Protocol directly using only
 - **Node.js >= 22** (for built-in `WebSocket`)
 - **Google Chrome** installed
 
+## Agent Skill
+
+To use chromux as an agent browser skill, install the CLI and register this
+repo's `SKILL.md` with Codex, Claude Code, or Hermes:
+
+- [`install.md`](install.md) — CLI install, skill registration, and smoke test
+- [`SKILL.md`](SKILL.md) — day-to-day browser automation instructions
+- [`AGENTS.md`](AGENTS.md) — repo guidance for coding agents
+
 ## Quick Start
 
 ```bash
@@ -36,7 +45,8 @@ chromux open agent-b https://reddit.com/r/programming
 # Each operates independently
 chromux snapshot agent-a
 chromux click agent-a @3
-chromux eval agent-b "document.title"
+chromux run agent-b "return await js('document.title')"
+chromux cdp agent-b Runtime.evaluate '{"expression":"location.href","returnByValue":true}'
 chromux screenshot agent-a /tmp/hn.png
 
 # Clean up
@@ -76,7 +86,34 @@ chromux kill work
 
 ## Commands
 
-### Profile
+chromux intentionally keeps the visible command surface small. When a new browser
+operation is needed, express it with `run` or `cdp` before adding another verb.
+
+### The 3 You Actually Need
+
+| Command | Description |
+|---------|-------------|
+| `open <session> <url>` | Create or navigate a tab |
+| `run <session> <code\|--file PATH\|->` | Run multi-step async JS with `cdp`, `js`, `sleep`, and `waitLoad` helpers |
+| `cdp <session> <Method> <params-json>` | Send one raw CDP method to a session |
+
+`run` scripts execute in an async function context:
+
+```bash
+chromux run s - <<'JS'
+await cdp('Page.navigate', { url: 'https://example.com' });
+await waitLoad();
+return await js('document.title');
+JS
+```
+
+`cdp` is a thin passthrough:
+
+```bash
+chromux cdp s Runtime.evaluate '{"expression":"navigator.userAgent","returnByValue":true}'
+```
+
+### Lifecycle
 
 | Command | Description |
 |---------|-------------|
@@ -85,25 +122,42 @@ chromux kill work
 | `launch <name> --port N` | Launch with specific port |
 | `ps` | List running profiles |
 | `kill <name>` | Stop profile (Chrome + daemon) |
+| `close <session>` | Close tab |
+| `list` | List active sessions in current profile |
+| `stop` | Stop daemon while keeping Chrome running |
 
-### Tab Operations
+### Convenience Shortcuts
 
 | Command | Description |
 |---------|-------------|
-| `open <session> <url>` | Navigate (auto-creates tab) |
 | `snapshot <session>` | Accessibility tree with `@ref` numbers |
 | `click <session> @<ref>` | Click element by ref |
 | `click <session> "selector"` | Click by CSS selector |
+| `click <session> --xy X Y` | Click viewport coordinates via CDP mouse events |
 | `fill <session> @<ref> "text"` | Fill input field |
 | `type <session> "text"` | Keyboard input (Enter, Tab, etc.) |
-| `eval <session> "js"` | Run JavaScript expression |
 | `screenshot <session> [path]` | Take PNG screenshot |
-| `scroll <session> up\|down` | Scroll page |
-| `wait <session> <ms>` | Wait milliseconds |
-| `close <session>` | Close tab |
 | `show <session>` | Open DevTools in browser (inspect live tab, even headless) |
-| `list` | List active sessions in current profile |
-| `stop` | Stop daemon (keeps Chrome running) |
+
+### Watch / Debug
+
+| Command | Description |
+|---------|-------------|
+| `watch <session> console` | Capture console logs, enabling capture on first call |
+| `watch <session> console --off` | Disable console capture |
+| `watch <session> network` | Capture failed requests |
+| `watch <session> network --all` | Capture all requests |
+| `watch <session> network --off` | Disable network capture |
+
+### Compatibility Aliases
+
+The older `eval`, `scroll`, `wait`, `console`, `network`, and `scroll-until`
+commands remain available for existing automation and do not print deprecation
+warnings. They are intentionally hidden from the main help surface.
+
+`scroll-until` is now documented as runner material in
+`skills/_builtin/scroll-until.js`; copy or adapt that file when a task needs the
+pattern.
 
 ## Architecture
 

@@ -109,6 +109,60 @@ else
   PASS=$((PASS+1))
 fi
 
+# --- Test 5b: Core exec surface ---
+echo ""
+echo "--- Test 5b: Core exec surface ---"
+CDP_TITLE=$(CHROMUX_PROFILE=$PROFILE node "$CT" cdp tab-a Runtime.evaluate '{"expression":"document.title","returnByValue":true}' 2>/dev/null)
+check "cdp Runtime.evaluate works" '"value"' "$CDP_TITLE"
+
+RUN_HOST=$(CHROMUX_PROFILE=$PROFILE node "$CT" run tab-a "return await js('location.hostname')" 2>/dev/null)
+check "run async js helper works" "httpbin.org" "$RUN_HOST"
+
+TMP_PARAMS="/tmp/chromux-cdp-params-$$.json"
+printf '{"expression":"location.hostname","returnByValue":true}' > "$TMP_PARAMS"
+CDP_FILE=$(CHROMUX_PROFILE=$PROFILE node "$CT" cdp tab-a Runtime.evaluate --params-file "$TMP_PARAMS" 2>/dev/null)
+rm -f "$TMP_PARAMS"
+check "cdp --params-file works" "httpbin.org" "$CDP_FILE"
+
+# --- Test 5c: click --xy ---
+echo ""
+echo "--- Test 5c: Coordinate click ---"
+CLICK_URL='data:text/html,%3Cbutton%20style%3D%22position%3Aabsolute%3Bleft%3A0%3Btop%3A0%3Bwidth%3A120px%3Bheight%3A80px%22%20onclick%3D%22document.title%3D%27clicked%27%22%3EClick%3C%2Fbutton%3E'
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-click "$CLICK_URL" 2>/dev/null > /dev/null
+XY_CLICK=$(CHROMUX_PROFILE=$PROFILE node "$CT" click tab-click --xy 40 40 2>/dev/null)
+check "click --xy reports success" '"xy"' "$XY_CLICK"
+CLICK_TITLE=$(CHROMUX_PROFILE=$PROFILE node "$CT" eval tab-click "document.title" 2>/dev/null)
+check "click --xy changed page state" "clicked" "$CLICK_TITLE"
+
+# --- Test 5d: watch and quiet aliases ---
+echo ""
+echo "--- Test 5d: Watch and hidden compatibility ---"
+WATCH_EMPTY=$(CHROMUX_PROFILE=$PROFILE node "$CT" watch tab-a console 2>/dev/null)
+check "watch console enables quietly" "No console messages" "$WATCH_EMPTY"
+CHROMUX_PROFILE=$PROFILE node "$CT" run tab-a "return await js(\"console.log('watch-ok')\")" 2>/dev/null > /dev/null
+WATCH_LOG=$(CHROMUX_PROFILE=$PROFILE node "$CT" watch tab-a console 2>/dev/null)
+check "watch console reads logs" "watch-ok" "$WATCH_LOG"
+CONSOLE_ALIAS=$(CHROMUX_PROFILE=$PROFILE node "$CT" console tab-a 2>/dev/null)
+check "console alias remains quiet" "No console messages" "$CONSOLE_ALIAS"
+WAIT_ALIAS=$(CHROMUX_PROFILE=$PROFILE node "$CT" wait tab-a 10 2>/dev/null)
+check "wait alias remains available" "waited" "$WAIT_ALIAS"
+HELP_TEXT=$(node "$CT" help)
+if echo "$HELP_TEXT" | grep -q "chromux eval <session>"; then
+  echo "  ✗ eval still appears as primary help command"
+  FAIL=$((FAIL+1))
+else
+  echo "  ✓ deprecated eval command hidden from primary help"
+  PASS=$((PASS+1))
+fi
+
+if node -e "const fs=require('fs'); const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor; new AsyncFunction('cdp','js','sleep','waitLoad', fs.readFileSync('skills/_builtin/scroll-until.js','utf8'));" 2>/dev/null; then
+  echo "  ✓ builtin scroll-until helper compiles for chromux run"
+  PASS=$((PASS+1))
+else
+  echo "  ✗ builtin scroll-until helper failed to compile for chromux run"
+  FAIL=$((FAIL+1))
+fi
+
 # --- Test 6: Snapshot ---
 echo ""
 echo "--- Test 6: Snapshot ---"
@@ -144,6 +198,7 @@ echo ""
 echo "--- Test 9: Close tabs ---"
 CHROMUX_PROFILE=$PROFILE node "$CT" close tab-a 2>/dev/null > /dev/null
 CHROMUX_PROFILE=$PROFILE node "$CT" close tab-b 2>/dev/null > /dev/null
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-click 2>/dev/null > /dev/null
 LIST2=$(CHROMUX_PROFILE=$PROFILE node "$CT" list 2>/dev/null)
 check "all tabs closed" "{}" "$LIST2"
 
