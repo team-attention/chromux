@@ -1246,7 +1246,6 @@ async function cmdLaunch(profileName, explicitPort, launchMode = 'headless') {
     '--remote-allow-origins=*',
     '--no-first-run',
     '--no-default-browser-check',
-    '--disable-blink-features=AutomationControlled',  // removes navigator.webdriver at engine level (all modes)
   ];
   if (headless) {
     chromeArgs.push('--headless=new');
