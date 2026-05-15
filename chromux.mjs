@@ -76,6 +76,22 @@ function sockPath(name) {
   return path.join(RUN_DIR, `${name}.sock`);
 }
 
+function siteKnowledgeHintForUrl(rawUrl) {
+  try {
+    const u = new URL(rawUrl);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+    const host = u.hostname.replace(/^www\./, '');
+    if (!host) return null;
+    return {
+      host,
+      dir: `~/.chromux/skills/${host}`,
+      hint: 'Review/update reusable non-secret site notes here if this session revealed durable behavior or stale notes.',
+    };
+  } catch {
+    return null;
+  }
+}
+
 // ============================================================
 // Config helpers
 // ============================================================
@@ -756,10 +772,10 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     const result = { session, ...JSON.parse(r.result.value) };
     // Surface host-specific hint files from ~/.chromux/skills/<host>/*.md (if any).
     try {
-      const u = new URL(result.url);
-      const host = u.hostname.replace(/^www\./, '');
-      const dir = path.join(CHROMUX_HOME, 'skills', host);
-      if (fs.existsSync(dir)) {
+      const knowledgeHint = siteKnowledgeHintForUrl(result.url);
+      const host = knowledgeHint?.host;
+      const dir = host ? path.join(CHROMUX_HOME, 'skills', host) : null;
+      if (dir && fs.existsSync(dir)) {
         const files = fs.readdirSync(dir).filter(f => f.endsWith('.md'));
         if (files.length) {
           const hints = files.map(f => `# Hint: ${host}/${f}\n` + fs.readFileSync(path.join(dir, f), 'utf8').trim()).join('\n\n');
@@ -994,12 +1010,19 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
   if (routePath.startsWith('/session/') && method === 'DELETE') {
     const session = decodeURIComponent(routePath.split('/')[2]);
     const s = sessions.get(session);
+    let knowledgeHint = null;
     if (s) {
+      try {
+        const r = await s.cdp.send('Runtime.evaluate', { expression: 'location.href', returnByValue: true }, 2000);
+        knowledgeHint = siteKnowledgeHintForUrl(r.result?.value);
+      } catch {}
       s.cdp.close();
       await closeTab(port, s.targetId).catch(() => {});
       sessions.delete(session);
     }
-    return { closed: session };
+    const result = { closed: session };
+    if (knowledgeHint) result.knowledgeHint = knowledgeHint;
+    return result;
   }
 
   // ---- Console capture (on-demand, opt-in to preserve stealth) ----

@@ -127,8 +127,9 @@ silently accepted.
 
 chromux may surface host-specific hints from `~/.chromux/skills/<host>/*.md` on
 navigation. If the `open` response includes hints, read them before inventing a
-new approach. If you learn durable site knowledge, store public, non-secret,
-non-task-diary notes under the relevant host directory.
+new approach. If you learn durable site knowledge, or discover existing notes
+are stale, wrong, too task-specific, or unsafe, review/update public,
+non-secret, non-task-diary notes under the relevant host directory.
 
 Good site knowledge:
 - stable selectors or URL patterns
@@ -140,6 +141,7 @@ Bad site knowledge:
 - credentials, tokens, cookies, or personal data
 - pixel coordinates that will break on layout changes
 - one-off task narration
+- stale selectors or URLs that you already know are wrong
 
 ## Gotchas
 

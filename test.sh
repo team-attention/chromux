@@ -196,7 +196,9 @@ check "list shows tab-b" "tab-b" "$LIST"
 # --- Test 9: Close ---
 echo ""
 echo "--- Test 9: Close tabs ---"
-CHROMUX_PROFILE=$PROFILE node "$CT" close tab-a 2>/dev/null > /dev/null
+CLOSE_A=$(CHROMUX_PROFILE=$PROFILE node "$CT" close tab-a 2>/dev/null)
+check "close returns site knowledge hint" "knowledgeHint" "$CLOSE_A"
+check "close normalizes host in knowledge hint" "news.ycombinator.com" "$CLOSE_A"
 CHROMUX_PROFILE=$PROFILE node "$CT" close tab-b 2>/dev/null > /dev/null
 CHROMUX_PROFILE=$PROFILE node "$CT" close tab-click 2>/dev/null > /dev/null
 LIST2=$(CHROMUX_PROFILE=$PROFILE node "$CT" list 2>/dev/null)
