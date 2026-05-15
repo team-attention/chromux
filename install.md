@@ -52,11 +52,13 @@ command -v chromux
 chromux help
 
 mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills/chromux"
-ln -sf "$PWD/skills/chromux/SKILL.md" "${CODEX_HOME:-$HOME/.codex}/skills/chromux/SKILL.md"
+[ -L "${CODEX_HOME:-$HOME/.codex}/skills/chromux/SKILL.md" ] && rm "${CODEX_HOME:-$HOME/.codex}/skills/chromux/SKILL.md"
+cp "$PWD/skills/chromux/SKILL.md" "${CODEX_HOME:-$HOME/.codex}/skills/chromux/SKILL.md"
 [ -L "${CODEX_HOME:-$HOME/.codex}/skills/chromux/skills" ] && rm "${CODEX_HOME:-$HOME/.codex}/skills/chromux/skills"
 ln -sfn "$PWD/snippets" "${CODEX_HOME:-$HOME/.codex}/skills/chromux/snippets"
 mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills/chromux-work"
-ln -sf "$PWD/skills/chromux-work/SKILL.md" "${CODEX_HOME:-$HOME/.codex}/skills/chromux-work/SKILL.md"
+[ -L "${CODEX_HOME:-$HOME/.codex}/skills/chromux-work/SKILL.md" ] && rm "${CODEX_HOME:-$HOME/.codex}/skills/chromux-work/SKILL.md"
+cp "$PWD/skills/chromux-work/SKILL.md" "${CODEX_HOME:-$HOME/.codex}/skills/chromux-work/SKILL.md"
 
 mkdir -p "${HERMES_HOME:-$HOME/.hermes}/skills/chromux"
 ln -sf "$PWD/skills/chromux/SKILL.md" "${HERMES_HOME:-$HOME/.hermes}/skills/chromux/SKILL.md"
@@ -138,17 +140,21 @@ After the CLI works, register this repo's two skills with the agent runtime:
 ### Codex
 
 Add both files as global skills under `$CODEX_HOME/skills/`, usually
-`~/.codex/skills/`. Symlinks are preferred so updates to this repo update the
-skill instructions too. Also add a lightweight browser-work instruction to
-`~/.codex/AGENTS.md`; do not import the skill files there.
+`~/.codex/skills/`. For Codex, copy `SKILL.md` as a real file instead of
+symlinking it; current Codex skill loading may omit symlinked `SKILL.md` files
+from the model-visible Available skills list. Also add a lightweight
+browser-work instruction to `~/.codex/AGENTS.md`; do not import the skill files
+there.
 
 ```bash
 mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills/chromux"
-ln -sf "$PWD/skills/chromux/SKILL.md" "${CODEX_HOME:-$HOME/.codex}/skills/chromux/SKILL.md"
+[ -L "${CODEX_HOME:-$HOME/.codex}/skills/chromux/SKILL.md" ] && rm "${CODEX_HOME:-$HOME/.codex}/skills/chromux/SKILL.md"
+cp "$PWD/skills/chromux/SKILL.md" "${CODEX_HOME:-$HOME/.codex}/skills/chromux/SKILL.md"
 [ -L "${CODEX_HOME:-$HOME/.codex}/skills/chromux/skills" ] && rm "${CODEX_HOME:-$HOME/.codex}/skills/chromux/skills"
 ln -sfn "$PWD/snippets" "${CODEX_HOME:-$HOME/.codex}/skills/chromux/snippets"
 mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills/chromux-work"
-ln -sf "$PWD/skills/chromux-work/SKILL.md" "${CODEX_HOME:-$HOME/.codex}/skills/chromux-work/SKILL.md"
+[ -L "${CODEX_HOME:-$HOME/.codex}/skills/chromux-work/SKILL.md" ] && rm "${CODEX_HOME:-$HOME/.codex}/skills/chromux-work/SKILL.md"
+cp "$PWD/skills/chromux-work/SKILL.md" "${CODEX_HOME:-$HOME/.codex}/skills/chromux-work/SKILL.md"
 CHROMUX_GUIDE='
 <!-- chromux-browser-guide:start -->
 ## Browser Work
@@ -327,8 +333,10 @@ Codex:
 
 ```bash
 ls -l "${CODEX_HOME:-$HOME/.codex}/skills/chromux/SKILL.md"
+test ! -L "${CODEX_HOME:-$HOME/.codex}/skills/chromux/SKILL.md"
 ls -l "${CODEX_HOME:-$HOME/.codex}/skills/chromux/snippets/_builtin"
 ls -l "${CODEX_HOME:-$HOME/.codex}/skills/chromux-work/SKILL.md"
+test ! -L "${CODEX_HOME:-$HOME/.codex}/skills/chromux-work/SKILL.md"
 grep -n 'Use `chromux` for browser work when available.' "${CODEX_HOME:-$HOME/.codex}/AGENTS.md"
 ```
 
