@@ -22,13 +22,14 @@ chromux solves this by talking to Chrome's DevTools Protocol directly using only
 - **Node.js >= 22** (for built-in `WebSocket`)
 - **Google Chrome** installed
 
-## Agent Skill
+## Agent Skills
 
-To use chromux as an agent browser skill, install the CLI and register this
-repo's `SKILL.md` with Codex, Claude Code, or Hermes:
+To use chromux as agent browser skills, install the CLI and register the two
+repo-local skills with Codex, Claude Code, or Hermes:
 
 - [`install.md`](install.md) — CLI install, skill registration, and smoke test
-- [`SKILL.md`](SKILL.md) — day-to-day browser automation instructions
+- [`skills/chromux/SKILL.md`](skills/chromux/SKILL.md) — day-to-day chromux CLI usage
+- [`skills/chromux-work/SKILL.md`](skills/chromux-work/SKILL.md) — profile selection, recon, parallel browser work, cleanup, and domain notes
 - [`AGENTS.md`](AGENTS.md) — repo guidance for coding agents
 
 ## Quick Start

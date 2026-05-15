@@ -33,6 +33,9 @@ jobs:
         run: |
           node --check chromux.mjs
           node chromux.mjs help >/tmp/chromux-help.txt
+          test -f skills/chromux/SKILL.md
+          test -f skills/chromux-work/SKILL.md
+          test ! -f SKILL.md
           node -e "const fs=require('fs'); const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor; new AsyncFunction('cdp','js','sleep','waitLoad', fs.readFileSync('snippets/_builtin/scroll-until.js','utf8'));"
           npm pack --dry-run
 

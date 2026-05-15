@@ -14,8 +14,9 @@ profiles through raw CDP. Keep the public command surface small and let
   adding another top-level verb.
 - Compatibility aliases may remain quiet, but do not expose deprecated aliases
   in the main help surface.
-- Keep agent-facing instructions in `SKILL.md` and installation/runtime setup in
-  `install.md`.
+- Keep agent-facing instructions under `skills/`: `skills/chromux/` for CLI
+  usage and `skills/chromux-work/` for browser-work orchestration. Keep
+  installation/runtime setup in `install.md`.
 - Keep repo-local helper runner material under `snippets/_builtin/`.
 
 ## Validation

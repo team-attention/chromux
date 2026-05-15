@@ -16,7 +16,8 @@ isolated real Chrome profile, keeps one daemon per profile, and exposes a small
 CLI surface for tab work, multi-step JavaScript, raw CDP, screenshots, and
 diagnostics.
 
-For setup, installation, or connection problems, read `install.md`. For the
+For setup, installation, or connection problems, read the repo's `install.md`.
+For multi-step browser work orchestration, use the `chromux-work` skill. For the
 current command surface, run `chromux help`; it is the source of truth.
 
 ## First Rule
@@ -29,7 +30,8 @@ agent tool calls.
 CX=$(command -v chromux 2>/dev/null || echo "") && [ -n "$CX" ] && echo "$CX" || echo "MISSING"
 ```
 
-If chromux is missing, read `install.md` and install it before browser work.
+If chromux is missing, read the repo's `install.md` and install it before
+browser work.
 
 ## Normal Workflow
 
@@ -90,7 +92,7 @@ example, or a future chromux helper, not an ad hoc hidden module load.
 ## Builtin Runner Snippets
 
 Before recreating common browser loops, check the bundled snippets under
-`snippets/_builtin/` in this skill/repo directory. They are examples for
+`snippets/_builtin/` in this skill or repo directory. They are examples for
 `chromux run`, not extra top-level CLI verbs.
 
 Available snippets:

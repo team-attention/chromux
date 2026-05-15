@@ -1,13 +1,14 @@
 ---
 name: chromux-install
-description: Install chromux and register its browser automation skill with Codex, Claude Code, or Hermes.
+description: Install chromux and register its browser automation skills with Codex, Claude Code, or Hermes.
 ---
 
 # chromux installation
 
 Use this file only for chromux installation, agent-skill registration, and
-browser/profile troubleshooting. For day-to-day browser work, read `SKILL.md`
-and run `chromux help`.
+browser/profile troubleshooting. For day-to-day CLI usage, read
+`skills/chromux/SKILL.md`; for browser task orchestration, read
+`skills/chromux-work/SKILL.md`; for current syntax, run `chromux help`.
 
 chromux uses the user's local Google Chrome with isolated profiles under
 `~/.chromux/profiles/`. It does not bundle Chromium and does not require
@@ -25,8 +26,8 @@ The default supported install target is macOS/Linux.
 ## One-Pass Agent Setup
 
 Run this from any directory. It installs or updates chromux from a durable
-checkout, registers the Codex, Claude Code, and Hermes skills, adds a Claude
-Code import fallback without duplicating it, and verifies the CLI surface.
+checkout, registers the Codex, Claude Code, and Hermes skills, adds lightweight
+browser-work guidance without duplicating it, and verifies the CLI surface.
 
 ```bash
 INSTALL_DIR="${CHROMUX_DIR:-$HOME/team-attention/chromux}"
@@ -51,29 +52,56 @@ command -v chromux
 chromux help
 
 mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills/chromux"
-ln -sf "$PWD/SKILL.md" "${CODEX_HOME:-$HOME/.codex}/skills/chromux/SKILL.md"
+ln -sf "$PWD/skills/chromux/SKILL.md" "${CODEX_HOME:-$HOME/.codex}/skills/chromux/SKILL.md"
 [ -L "${CODEX_HOME:-$HOME/.codex}/skills/chromux/skills" ] && rm "${CODEX_HOME:-$HOME/.codex}/skills/chromux/skills"
 ln -sfn "$PWD/snippets" "${CODEX_HOME:-$HOME/.codex}/skills/chromux/snippets"
+mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills/chromux-work"
+ln -sf "$PWD/skills/chromux-work/SKILL.md" "${CODEX_HOME:-$HOME/.codex}/skills/chromux-work/SKILL.md"
 
 mkdir -p "${HERMES_HOME:-$HOME/.hermes}/skills/chromux"
-ln -sf "$PWD/SKILL.md" "${HERMES_HOME:-$HOME/.hermes}/skills/chromux/SKILL.md"
+ln -sf "$PWD/skills/chromux/SKILL.md" "${HERMES_HOME:-$HOME/.hermes}/skills/chromux/SKILL.md"
 [ -L "${HERMES_HOME:-$HOME/.hermes}/skills/chromux/skills" ] && rm "${HERMES_HOME:-$HOME/.hermes}/skills/chromux/skills"
 ln -sfn "$PWD/snippets" "${HERMES_HOME:-$HOME/.hermes}/skills/chromux/snippets"
+mkdir -p "${HERMES_HOME:-$HOME/.hermes}/skills/chromux-work"
+ln -sf "$PWD/skills/chromux-work/SKILL.md" "${HERMES_HOME:-$HOME/.hermes}/skills/chromux-work/SKILL.md"
 
 mkdir -p "$HOME/.claude/skills/chromux"
-ln -sf "$PWD/SKILL.md" "$HOME/.claude/skills/chromux/SKILL.md"
+ln -sf "$PWD/skills/chromux/SKILL.md" "$HOME/.claude/skills/chromux/SKILL.md"
 [ -L "$HOME/.claude/skills/chromux/skills" ] && rm "$HOME/.claude/skills/chromux/skills"
 ln -sfn "$PWD/snippets" "$HOME/.claude/skills/chromux/snippets"
+mkdir -p "$HOME/.claude/skills/chromux-work"
+ln -sf "$PWD/skills/chromux-work/SKILL.md" "$HOME/.claude/skills/chromux-work/SKILL.md"
+
+CHROMUX_GUIDE='
+<!-- chromux-browser-guide:start -->
+## Browser Work
+
+Use `chromux` for browser work when available.
+<!-- chromux-browser-guide:end -->
+'
+
+touch "${CODEX_HOME:-$HOME/.codex}/AGENTS.md"
+if ! grep -Fq '<!-- chromux-browser-guide:start -->' "${CODEX_HOME:-$HOME/.codex}/AGENTS.md" &&
+   ! grep -Fq 'Use `chromux` for browser work when available.' "${CODEX_HOME:-$HOME/.codex}/AGENTS.md"; then
+  printf '\n%s\n' "$CHROMUX_GUIDE" >> "${CODEX_HOME:-$HOME/.codex}/AGENTS.md"
+fi
+
+touch "${HERMES_HOME:-$HOME/.hermes}/AGENTS.md"
+if ! grep -Fq '<!-- chromux-browser-guide:start -->' "${HERMES_HOME:-$HOME/.hermes}/AGENTS.md" &&
+   ! grep -Fq 'Use `chromux` for browser work when available.' "${HERMES_HOME:-$HOME/.hermes}/AGENTS.md"; then
+  printf '\n%s\n' "$CHROMUX_GUIDE" >> "${HERMES_HOME:-$HOME/.hermes}/AGENTS.md"
+fi
 
 mkdir -p "$HOME/.claude"
 touch "$HOME/.claude/CLAUDE.md"
-if ! grep -Fqx "@$PWD/SKILL.md" "$HOME/.claude/CLAUDE.md"; then
-  printf '\n@%s/SKILL.md\n' "$PWD" >> "$HOME/.claude/CLAUDE.md"
+if ! grep -Fq '<!-- chromux-browser-guide:start -->' "$HOME/.claude/CLAUDE.md" &&
+   ! grep -Fq 'Use `chromux` for browser work when available.' "$HOME/.claude/CLAUDE.md"; then
+  printf '\n%s\n' "$CHROMUX_GUIDE" >> "$HOME/.claude/CLAUDE.md"
 fi
 ```
 
 Then run the smoke test below. New Codex, Claude Code, or Hermes sessions should
-now load the chromux browser skill automatically.
+now load the chromux browser skills automatically.
 
 ## Recommended Setup
 
@@ -98,59 +126,101 @@ chromux help
 
 Prefer a stable path such as `~/Developer/chromux` or
 `~/team-attention/chromux`, not `/tmp`. Installing from a durable checkout keeps
-the CLI, `SKILL.md`, `install.md`, and `snippets/_builtin/` in one place.
+the CLI, `skills/`, `install.md`, and `snippets/_builtin/` in one place.
 
-## Register The Agent Skill
+## Register The Agent Skills
 
-After the CLI works, register this repo's `SKILL.md` with the agent runtime.
+After the CLI works, register this repo's two skills with the agent runtime:
+
+- `chromux`: direct CLI usage
+- `chromux-work`: profile selection, recon, parallel work, cleanup, and domain notes
 
 ### Codex
 
-Add this file as a global skill at
-`$CODEX_HOME/skills/chromux/SKILL.md`, usually
-`~/.codex/skills/chromux/SKILL.md`. A symlink is preferred so updates to this
-repo update the skill instructions too.
+Add both files as global skills under `$CODEX_HOME/skills/`, usually
+`~/.codex/skills/`. Symlinks are preferred so updates to this repo update the
+skill instructions too. Also add a lightweight browser-work instruction to
+`~/.codex/AGENTS.md`; do not import the skill files there.
 
 ```bash
 mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills/chromux"
-ln -sf "$PWD/SKILL.md" "${CODEX_HOME:-$HOME/.codex}/skills/chromux/SKILL.md"
+ln -sf "$PWD/skills/chromux/SKILL.md" "${CODEX_HOME:-$HOME/.codex}/skills/chromux/SKILL.md"
 [ -L "${CODEX_HOME:-$HOME/.codex}/skills/chromux/skills" ] && rm "${CODEX_HOME:-$HOME/.codex}/skills/chromux/skills"
 ln -sfn "$PWD/snippets" "${CODEX_HOME:-$HOME/.codex}/skills/chromux/snippets"
+mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills/chromux-work"
+ln -sf "$PWD/skills/chromux-work/SKILL.md" "${CODEX_HOME:-$HOME/.codex}/skills/chromux-work/SKILL.md"
+CHROMUX_GUIDE='
+<!-- chromux-browser-guide:start -->
+## Browser Work
+
+Use `chromux` for browser work when available.
+<!-- chromux-browser-guide:end -->
+'
+touch "${CODEX_HOME:-$HOME/.codex}/AGENTS.md"
+if ! grep -Fq '<!-- chromux-browser-guide:start -->' "${CODEX_HOME:-$HOME/.codex}/AGENTS.md" &&
+   ! grep -Fq 'Use `chromux` for browser work when available.' "${CODEX_HOME:-$HOME/.codex}/AGENTS.md"; then
+  printf '\n%s\n' "$CHROMUX_GUIDE" >> "${CODEX_HOME:-$HOME/.codex}/AGENTS.md"
+fi
 ```
 
 ### Hermes
 
-Add this file as a Hermes skill at
-`$HERMES_HOME/skills/chromux/SKILL.md`, usually
-`~/.hermes/skills/chromux/SKILL.md`. Hermes discovers installed skills from
-`~/.hermes/skills/` and exposes the skill as `/chromux` in new sessions.
+Add both files as Hermes skills under `$HERMES_HOME/skills/`, usually
+`~/.hermes/skills/`. Hermes discovers installed skills from `~/.hermes/skills/`
+and exposes them as `/chromux` and `/chromux-work` in new sessions. Also add a
+lightweight browser-work instruction to `~/.hermes/AGENTS.md`.
 
 ```bash
 mkdir -p "${HERMES_HOME:-$HOME/.hermes}/skills/chromux"
-ln -sf "$PWD/SKILL.md" "${HERMES_HOME:-$HOME/.hermes}/skills/chromux/SKILL.md"
+ln -sf "$PWD/skills/chromux/SKILL.md" "${HERMES_HOME:-$HOME/.hermes}/skills/chromux/SKILL.md"
 [ -L "${HERMES_HOME:-$HOME/.hermes}/skills/chromux/skills" ] && rm "${HERMES_HOME:-$HOME/.hermes}/skills/chromux/skills"
 ln -sfn "$PWD/snippets" "${HERMES_HOME:-$HOME/.hermes}/skills/chromux/snippets"
+mkdir -p "${HERMES_HOME:-$HOME/.hermes}/skills/chromux-work"
+ln -sf "$PWD/skills/chromux-work/SKILL.md" "${HERMES_HOME:-$HOME/.hermes}/skills/chromux-work/SKILL.md"
+CHROMUX_GUIDE='
+<!-- chromux-browser-guide:start -->
+## Browser Work
+
+Use `chromux` for browser work when available.
+<!-- chromux-browser-guide:end -->
+'
+touch "${HERMES_HOME:-$HOME/.hermes}/AGENTS.md"
+if ! grep -Fq '<!-- chromux-browser-guide:start -->' "${HERMES_HOME:-$HOME/.hermes}/AGENTS.md" &&
+   ! grep -Fq 'Use `chromux` for browser work when available.' "${HERMES_HOME:-$HOME/.hermes}/AGENTS.md"; then
+  printf '\n%s\n' "$CHROMUX_GUIDE" >> "${HERMES_HOME:-$HOME/.hermes}/AGENTS.md"
+fi
 ```
 
 ### Claude Code
 
-Add this file as a Claude Code skill at `~/.claude/skills/chromux/SKILL.md`.
-Also add an import fallback to `~/.claude/CLAUDE.md` that points at this repo's
-`SKILL.md`. Use the absolute path for your checkout:
+Add both files as Claude Code skills under `~/.claude/skills/`. Also add a
+lightweight browser-work instruction to `~/.claude/CLAUDE.md`; do not import
+the skill files there. Use the absolute path for your checkout:
 
 ```bash
 mkdir -p "$HOME/.claude/skills/chromux"
-ln -sf "$PWD/SKILL.md" "$HOME/.claude/skills/chromux/SKILL.md"
+ln -sf "$PWD/skills/chromux/SKILL.md" "$HOME/.claude/skills/chromux/SKILL.md"
 [ -L "$HOME/.claude/skills/chromux/skills" ] && rm "$HOME/.claude/skills/chromux/skills"
 ln -sfn "$PWD/snippets" "$HOME/.claude/skills/chromux/snippets"
+mkdir -p "$HOME/.claude/skills/chromux-work"
+ln -sf "$PWD/skills/chromux-work/SKILL.md" "$HOME/.claude/skills/chromux-work/SKILL.md"
+CHROMUX_GUIDE='
+<!-- chromux-browser-guide:start -->
+## Browser Work
+
+Use `chromux` for browser work when available.
+<!-- chromux-browser-guide:end -->
+'
 mkdir -p "$HOME/.claude"
 touch "$HOME/.claude/CLAUDE.md"
-if ! grep -Fqx "@$PWD/SKILL.md" "$HOME/.claude/CLAUDE.md"; then
-  printf '\n@%s/SKILL.md\n' "$PWD" >> "$HOME/.claude/CLAUDE.md"
+if ! grep -Fq '<!-- chromux-browser-guide:start -->' "$HOME/.claude/CLAUDE.md" &&
+   ! grep -Fq 'Use `chromux` for browser work when available.' "$HOME/.claude/CLAUDE.md"; then
+  printf '\n%s\n' "$CHROMUX_GUIDE" >> "$HOME/.claude/CLAUDE.md"
 fi
 ```
 
-If the file already imports chromux, do not add a duplicate line.
+If the file already has the chromux browser-work guide block, do not add a
+duplicate block.
 
 ## First Smoke Test
 
@@ -251,13 +321,15 @@ chromux show login
 After the user logs in, close the tab but keep or reuse the profile for later
 automation.
 
-### Verify the installed skill
+### Verify the installed skills
 
 Codex:
 
 ```bash
 ls -l "${CODEX_HOME:-$HOME/.codex}/skills/chromux/SKILL.md"
 ls -l "${CODEX_HOME:-$HOME/.codex}/skills/chromux/snippets/_builtin"
+ls -l "${CODEX_HOME:-$HOME/.codex}/skills/chromux-work/SKILL.md"
+grep -n 'Use `chromux` for browser work when available.' "${CODEX_HOME:-$HOME/.codex}/AGENTS.md"
 ```
 
 Hermes:
@@ -265,6 +337,8 @@ Hermes:
 ```bash
 ls -l "${HERMES_HOME:-$HOME/.hermes}/skills/chromux/SKILL.md"
 ls -l "${HERMES_HOME:-$HOME/.hermes}/skills/chromux/snippets/_builtin"
+ls -l "${HERMES_HOME:-$HOME/.hermes}/skills/chromux-work/SKILL.md"
+grep -n 'Use `chromux` for browser work when available.' "${HERMES_HOME:-$HOME/.hermes}/AGENTS.md"
 hermes skills list | grep chromux
 ```
 
@@ -273,8 +347,10 @@ Claude Code:
 ```bash
 ls -l "$HOME/.claude/skills/chromux/SKILL.md"
 ls -l "$HOME/.claude/skills/chromux/snippets/_builtin"
-grep -n 'chromux.*/SKILL.md' "$HOME/.claude/CLAUDE.md"
+ls -l "$HOME/.claude/skills/chromux-work/SKILL.md"
+grep -n 'Use `chromux` for browser work when available.' "$HOME/.claude/CLAUDE.md"
 ```
 
-New agent sessions should now have chromux browser instructions available
+New agent sessions should now have chromux browser instructions and workflow
+orchestration available
 without copying command catalogs into every project.
