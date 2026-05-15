@@ -3,6 +3,10 @@
   "version": "0.6.2",
   "description": "tmux for Chrome tabs — zero-dependency parallel Chrome tab controller via raw CDP",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/team-attention/chromux"
+  },
   "bin": {
     "chromux": "chromux.mjs"
   },
