@@ -6,6 +6,9 @@
   "bin": {
     "chromux": "./chromux.mjs"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "files": [
     "chromux.mjs",
     "README.md",
