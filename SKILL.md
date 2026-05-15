@@ -87,6 +87,27 @@ Use `cdp` for a single raw protocol call:
 Reusable browser logic should be a copied `run` script, a checked-in helper
 example, or a future chromux helper, not an ad hoc hidden module load.
 
+## Builtin Runner Snippets
+
+Before recreating common browser loops, check the bundled snippets under
+`snippets/_builtin/` in this skill/repo directory. They are examples for
+`chromux run`, not extra top-level CLI verbs.
+
+Available snippets:
+
+- `snippets/_builtin/scroll-until.js` — scroll until a selector count reaches a
+  target count. Use this for infinite feeds, load-more surfaces, and result
+  collection loops before falling back to the deprecated `scroll-until` alias.
+
+Run a snippet with an absolute path when possible:
+
+```bash
+/path/to/chromux run exp-ab12 --file /path/to/chromux/snippets/_builtin/scroll-until.js
+```
+
+If the installed skill directory contains a symlinked `snippets/` folder, the
+same file is also available next to this `SKILL.md`.
+
 ## Diagnostics
 
 Use `watch` for console and network capture:

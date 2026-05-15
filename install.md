@@ -52,12 +52,18 @@ chromux help
 
 mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills/chromux"
 ln -sf "$PWD/SKILL.md" "${CODEX_HOME:-$HOME/.codex}/skills/chromux/SKILL.md"
+[ -L "${CODEX_HOME:-$HOME/.codex}/skills/chromux/skills" ] && rm "${CODEX_HOME:-$HOME/.codex}/skills/chromux/skills"
+ln -sfn "$PWD/snippets" "${CODEX_HOME:-$HOME/.codex}/skills/chromux/snippets"
 
 mkdir -p "${HERMES_HOME:-$HOME/.hermes}/skills/chromux"
 ln -sf "$PWD/SKILL.md" "${HERMES_HOME:-$HOME/.hermes}/skills/chromux/SKILL.md"
+[ -L "${HERMES_HOME:-$HOME/.hermes}/skills/chromux/skills" ] && rm "${HERMES_HOME:-$HOME/.hermes}/skills/chromux/skills"
+ln -sfn "$PWD/snippets" "${HERMES_HOME:-$HOME/.hermes}/skills/chromux/snippets"
 
 mkdir -p "$HOME/.claude/skills/chromux"
 ln -sf "$PWD/SKILL.md" "$HOME/.claude/skills/chromux/SKILL.md"
+[ -L "$HOME/.claude/skills/chromux/skills" ] && rm "$HOME/.claude/skills/chromux/skills"
+ln -sfn "$PWD/snippets" "$HOME/.claude/skills/chromux/snippets"
 
 mkdir -p "$HOME/.claude"
 touch "$HOME/.claude/CLAUDE.md"
@@ -92,7 +98,7 @@ chromux help
 
 Prefer a stable path such as `~/Developer/chromux` or
 `~/team-attention/chromux`, not `/tmp`. Installing from a durable checkout keeps
-the CLI, `SKILL.md`, `install.md`, and `skills/_builtin/` in one place.
+the CLI, `SKILL.md`, `install.md`, and `snippets/_builtin/` in one place.
 
 ## Register The Agent Skill
 
@@ -108,6 +114,8 @@ repo update the skill instructions too.
 ```bash
 mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills/chromux"
 ln -sf "$PWD/SKILL.md" "${CODEX_HOME:-$HOME/.codex}/skills/chromux/SKILL.md"
+[ -L "${CODEX_HOME:-$HOME/.codex}/skills/chromux/skills" ] && rm "${CODEX_HOME:-$HOME/.codex}/skills/chromux/skills"
+ln -sfn "$PWD/snippets" "${CODEX_HOME:-$HOME/.codex}/skills/chromux/snippets"
 ```
 
 ### Hermes
@@ -120,6 +128,8 @@ Add this file as a Hermes skill at
 ```bash
 mkdir -p "${HERMES_HOME:-$HOME/.hermes}/skills/chromux"
 ln -sf "$PWD/SKILL.md" "${HERMES_HOME:-$HOME/.hermes}/skills/chromux/SKILL.md"
+[ -L "${HERMES_HOME:-$HOME/.hermes}/skills/chromux/skills" ] && rm "${HERMES_HOME:-$HOME/.hermes}/skills/chromux/skills"
+ln -sfn "$PWD/snippets" "${HERMES_HOME:-$HOME/.hermes}/skills/chromux/snippets"
 ```
 
 ### Claude Code
@@ -131,6 +141,8 @@ Also add an import fallback to `~/.claude/CLAUDE.md` that points at this repo's
 ```bash
 mkdir -p "$HOME/.claude/skills/chromux"
 ln -sf "$PWD/SKILL.md" "$HOME/.claude/skills/chromux/SKILL.md"
+[ -L "$HOME/.claude/skills/chromux/skills" ] && rm "$HOME/.claude/skills/chromux/skills"
+ln -sfn "$PWD/snippets" "$HOME/.claude/skills/chromux/snippets"
 mkdir -p "$HOME/.claude"
 touch "$HOME/.claude/CLAUDE.md"
 if ! grep -Fqx "@$PWD/SKILL.md" "$HOME/.claude/CLAUDE.md"; then
@@ -159,14 +171,14 @@ profile is killed at the end.
 
 ## Builtin Helper Material
 
-Repo-local helper examples live under `skills/_builtin/`. They are documentation
+Repo-local helper examples live under `snippets/_builtin/`. They are documentation
 and runner material, not files that chromux automatically copies into
 `~/.chromux`.
 
 For example:
 
 ```bash
-chromux run <session> --file skills/_builtin/scroll-until.js
+chromux run <session> --file snippets/_builtin/scroll-until.js
 ```
 
 Do not overwrite user or agent edited files under `~/.chromux/skills/` during
@@ -245,12 +257,14 @@ Codex:
 
 ```bash
 ls -l "${CODEX_HOME:-$HOME/.codex}/skills/chromux/SKILL.md"
+ls -l "${CODEX_HOME:-$HOME/.codex}/skills/chromux/snippets/_builtin"
 ```
 
 Hermes:
 
 ```bash
 ls -l "${HERMES_HOME:-$HOME/.hermes}/skills/chromux/SKILL.md"
+ls -l "${HERMES_HOME:-$HOME/.hermes}/skills/chromux/snippets/_builtin"
 hermes skills list | grep chromux
 ```
 
@@ -258,8 +272,9 @@ Claude Code:
 
 ```bash
 ls -l "$HOME/.claude/skills/chromux/SKILL.md"
+ls -l "$HOME/.claude/skills/chromux/snippets/_builtin"
 grep -n 'chromux.*/SKILL.md' "$HOME/.claude/CLAUDE.md"
 ```
 
-New agent sessions should now have chromux browser-work instructions available
+New agent sessions should now have chromux browser instructions available
 without copying command catalogs into every project.

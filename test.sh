@@ -155,7 +155,7 @@ else
   PASS=$((PASS+1))
 fi
 
-if node -e "const fs=require('fs'); const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor; new AsyncFunction('cdp','js','sleep','waitLoad', fs.readFileSync('skills/_builtin/scroll-until.js','utf8'));" 2>/dev/null; then
+if node -e "const fs=require('fs'); const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor; new AsyncFunction('cdp','js','sleep','waitLoad', fs.readFileSync('snippets/_builtin/scroll-until.js','utf8'));" 2>/dev/null; then
   echo "  ✓ builtin scroll-until helper compiles for chromux run"
   PASS=$((PASS+1))
 else

@@ -156,7 +156,7 @@ commands remain available for existing automation and do not print deprecation
 warnings. They are intentionally hidden from the main help surface.
 
 `scroll-until` is now documented as runner material in
-`skills/_builtin/scroll-until.js`; copy or adapt that file when a task needs the
+`snippets/_builtin/scroll-until.js`; copy or adapt that file when a task needs the
 pattern.
 
 ## Architecture

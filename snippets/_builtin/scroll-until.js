@@ -1,6 +1,6 @@
 // Builtin helper example for `chromux run`.
 // Usage:
-//   chromux run <session> --file skills/_builtin/scroll-until.js
+//   chromux run <session> --file snippets/_builtin/scroll-until.js
 //
 // Override these before running by copying this file or editing a local variant.
 const selector = globalThis.selector || 'li';

@@ -16,7 +16,7 @@ profiles through raw CDP. Keep the public command surface small and let
   in the main help surface.
 - Keep agent-facing instructions in `SKILL.md` and installation/runtime setup in
   `install.md`.
-- Keep repo-local helper runner material under `skills/_builtin/`.
+- Keep repo-local helper runner material under `snippets/_builtin/`.
 
 ## Validation
 
