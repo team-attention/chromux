@@ -52,7 +52,9 @@ browser work.
 
 Run `chromux help` for exact syntax. The day-to-day mental model is:
 
-- `open` creates or navigates a tab.
+- `open` creates or navigates a tab. New tabs are background by default so a
+  headed profile is not activated for each new tab. Use `open --foreground` or
+  `CHROMUX_OPEN_BACKGROUND=0` only when activation is intentional.
 - `snapshot` returns an accessibility tree with `@ref` handles.
 - `click`, `fill`, and `type` are convenience shortcuts for visible interaction.
 - `run` executes multi-step async JavaScript with `cdp`, `js`, `sleep`, and

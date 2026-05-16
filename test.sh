@@ -3,9 +3,11 @@ set -e
 
 CT="$(dirname "$0")/chromux.mjs"
 PROFILE="test-$$"
-HIDDEN_PROFILE="$PROFILE-hidden"
 PASS=0
 FAIL=0
+
+# Keep the suite independent from the user's shell defaults.
+unset CHROMUX_LAUNCH_MODE CHROMUX_AUTO_LAUNCH_MODE CHROMUX_OPEN_BACKGROUND CHROMUX_BACKGROUND_TABS
 
 check() {
   local desc="$1" expected="$2" actual="$3"
@@ -22,11 +24,8 @@ cleanup() {
   echo ""
   echo "--- Cleanup ---"
   node "$CT" kill "$PROFILE" 2>/dev/null || true
-  node "$CT" kill "$HIDDEN_PROFILE" 2>/dev/null || true
   chmod -R u+rwX "$HOME/.chromux/profiles/$PROFILE" 2>/dev/null || true
-  chmod -R u+rwX "$HOME/.chromux/profiles/$HIDDEN_PROFILE" 2>/dev/null || true
   rm -rf "$HOME/.chromux/profiles/$PROFILE"
-  rm -rf "$HOME/.chromux/profiles/$HIDDEN_PROFILE"
   echo "  ✓ cleaned up profile $PROFILE"
 }
 trap cleanup EXIT
@@ -41,20 +40,24 @@ R1=$(node "$CT" launch "$PROFILE" 2>/dev/null)
 check "profile launched" "port" "$R1"
 check "profile name" "$PROFILE" "$R1"
 
-# --- Test 1b: Hidden headed launch ---
+# --- Test 1b: Removed hidden launch mode ---
 echo ""
-echo "--- Test 1b: Hidden headed launch ---"
-RH=$(node "$CT" launch "$HIDDEN_PROFILE" --hidden 2>/dev/null)
-check "hidden launch mode" '"launchMode": "hidden"' "$RH"
-check "hidden launch is headed" '"headless": false' "$RH"
-check "hidden flag present" '"hidden": true' "$RH"
-node "$CT" kill "$HIDDEN_PROFILE" 2>/dev/null > /dev/null || true
-
-RH_AUTO=$(CHROMUX_PROFILE="$HIDDEN_PROFILE" CHROMUX_LAUNCH_MODE=hidden node "$CT" open hidden-auto https://example.com 2>/dev/null)
-check "hidden auto-launch opens tab" "example.com" "$RH_AUTO"
-HIDDEN_STATE=$(cat "$HOME/.chromux/profiles/$HIDDEN_PROFILE/.state")
-check "hidden auto-launch state" '"launchMode": "hidden"' "$HIDDEN_STATE"
-node "$CT" kill "$HIDDEN_PROFILE" 2>/dev/null > /dev/null || true
+echo "--- Test 1b: Removed hidden launch mode ---"
+if node "$CT" launch "$PROFILE-removed-hidden" --hidden >/tmp/chromux-hidden-out.txt 2>&1; then
+  echo "  ✗ --hidden launch unexpectedly succeeded"
+  FAIL=$((FAIL+1))
+else
+  HIDDEN_OUT=$(cat /tmp/chromux-hidden-out.txt)
+  check "--hidden reports removal" "has been removed" "$HIDDEN_OUT"
+fi
+if CHROMUX_PROFILE="$PROFILE-removed-hidden-env" CHROMUX_LAUNCH_MODE=hidden node "$CT" open hidden-auto https://example.com >/tmp/chromux-hidden-env-out.txt 2>&1; then
+  echo "  ✗ CHROMUX_LAUNCH_MODE=hidden unexpectedly succeeded"
+  FAIL=$((FAIL+1))
+else
+  HIDDEN_ENV_OUT=$(cat /tmp/chromux-hidden-env-out.txt)
+  check "hidden auto-launch env reports removal" "has been removed" "$HIDDEN_ENV_OUT"
+fi
+rm -f /tmp/chromux-hidden-out.txt /tmp/chromux-hidden-env-out.txt
 
 # --- Test 2: PS ---
 echo ""
@@ -87,6 +90,15 @@ check "tab-a opened" "httpbin.org/user-agent" "$R3A"
 
 R3B=$(CHROMUX_PROFILE=$PROFILE node "$CT" open tab-b https://httpbin.org/ip 2>/dev/null)
 check "tab-b opened" "httpbin.org/ip" "$R3B"
+
+R3C=$(CHROMUX_PROFILE=$PROFILE node "$CT" open --background tab-bg https://example.com 2>/dev/null)
+check "background tab opened" "example.com" "$R3C"
+
+R3D=$(CHROMUX_PROFILE=$PROFILE CHROMUX_OPEN_BACKGROUND=1 node "$CT" open tab-bg-env https://example.org 2>/dev/null)
+check "background tab env opened" "example.org" "$R3D"
+
+R3E=$(CHROMUX_PROFILE=$PROFILE CHROMUX_OPEN_BACKGROUND=0 node "$CT" open tab-fg-env https://example.net 2>/dev/null)
+check "foreground tab env opened" "example.net" "$R3E"
 
 # --- Test 4: Isolation ---
 echo ""
@@ -136,7 +148,7 @@ check "click --xy changed page state" "clicked" "$CLICK_TITLE"
 
 # --- Test 5d: watch and quiet aliases ---
 echo ""
-echo "--- Test 5d: Watch and hidden compatibility ---"
+echo "--- Test 5d: Watch and compatibility aliases ---"
 WATCH_EMPTY=$(CHROMUX_PROFILE=$PROFILE node "$CT" watch tab-a console 2>/dev/null)
 check "watch console enables quietly" "No console messages" "$WATCH_EMPTY"
 CHROMUX_PROFILE=$PROFILE node "$CT" run tab-a "return await js(\"console.log('watch-ok')\")" 2>/dev/null > /dev/null
@@ -200,6 +212,9 @@ CLOSE_A=$(CHROMUX_PROFILE=$PROFILE node "$CT" close tab-a 2>/dev/null)
 check "close returns site knowledge hint" "knowledgeHint" "$CLOSE_A"
 check "close normalizes host in knowledge hint" "news.ycombinator.com" "$CLOSE_A"
 CHROMUX_PROFILE=$PROFILE node "$CT" close tab-b 2>/dev/null > /dev/null
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-bg 2>/dev/null > /dev/null
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-bg-env 2>/dev/null > /dev/null
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-fg-env 2>/dev/null > /dev/null
 CHROMUX_PROFILE=$PROFILE node "$CT" close tab-click 2>/dev/null > /dev/null
 LIST2=$(CHROMUX_PROFILE=$PROFILE node "$CT" list 2>/dev/null)
 check "all tabs closed" "{}" "$LIST2"

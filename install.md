@@ -319,7 +319,7 @@ and transient daemon sockets/locks under `~/.chromux/run/`.
 Use a named profile and log in manually once:
 
 ```bash
-chromux launch work --hidden
+chromux launch work
 CHROMUX_PROFILE=work chromux open login https://example.com
 chromux show login
 ```

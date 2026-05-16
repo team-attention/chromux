@@ -26,11 +26,9 @@ const CONFIG_PATH = path.join(CHROMUX_HOME, 'config.json');
 const PORT_RANGE_START = 9300;
 const PORT_RANGE_END = 9399;
 const DEFAULT_PROFILE = 'default';
-const LAUNCH_MODES = new Set(['headless', 'headed', 'hidden']);
-const HIDDEN_WINDOW_ARGS = [
-  '--window-position=-10000,-10000',
-  '--window-size=1280,900',
-];
+const LAUNCH_MODES = new Set(['headless', 'headed']);
+const TRUE_ENV_VALUES = new Set(['1', 'true', 'yes', 'on']);
+const FALSE_ENV_VALUES = new Set(['0', 'false', 'no', 'off']);
 
 const CHROME_PATHS = [
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
@@ -220,7 +218,6 @@ function parseChromuxChromeProcess(proc) {
     profile: rel,
     port: Number.isInteger(port) ? port : null,
     headless: args.some(arg => arg === '--headless' || arg.startsWith('--headless=')),
-    hidden: args.some(arg => arg.startsWith('--window-position=-10000,')),
     browser: !args.some(arg => arg.startsWith('--type=')),
     userDataDir: resolvedUserDataDir,
   };
@@ -258,8 +255,7 @@ async function resolveProfileRuntime(profileName, { adopt = true } = {}) {
           pid: state.pid,
           port: state.port,
           headless: proc ? proc.headless : !!state.headless,
-          hidden: proc ? proc.hidden : !!state.hidden,
-          launchMode: state.launchMode || (proc?.headless ? 'headless' : proc?.hidden ? 'hidden' : 'headed'),
+          launchMode: (proc?.headless || state.headless) ? 'headless' : 'headed',
           sock: state.sock || sockPath(profileName),
           userDataDir: proc ? proc.userDataDir : profileDir(profileName),
           source: 'state',
@@ -279,8 +275,7 @@ async function resolveProfileRuntime(profileName, { adopt = true } = {}) {
       pid: proc.pid,
       port: proc.port,
       headless: proc.headless,
-      hidden: proc.hidden,
-      launchMode: proc.headless ? 'headless' : proc.hidden ? 'hidden' : 'headed',
+      launchMode: proc.headless ? 'headless' : 'headed',
       sock: sockPath(profileName),
       userDataDir: proc.userDataDir,
       source: 'process',
@@ -292,7 +287,6 @@ async function resolveProfileRuntime(profileName, { adopt = true } = {}) {
         port: runtime.port,
         sock: runtime.sock,
         headless: runtime.headless,
-        hidden: runtime.hidden,
         launchMode: runtime.launchMode,
         adopted: true,
       });
@@ -306,8 +300,7 @@ async function resolveProfileRuntime(profileName, { adopt = true } = {}) {
       pid: state.pid,
       port: state.port || null,
       headless: !!state.headless,
-      hidden: !!state.hidden,
-      launchMode: state.launchMode || (state.headless ? 'headless' : state.hidden ? 'hidden' : 'headed'),
+      launchMode: state.headless ? 'headless' : 'headed',
       sock: state.sock || sockPath(profileName),
       userDataDir: profileDir(profileName),
       source: 'state',
@@ -323,8 +316,7 @@ async function resolveProfileRuntime(profileName, { adopt = true } = {}) {
       pid: proc.pid,
       port: proc.port,
       headless: proc.headless,
-      hidden: proc.hidden,
-      launchMode: proc.headless ? 'headless' : proc.hidden ? 'hidden' : 'headed',
+      launchMode: proc.headless ? 'headless' : 'headed',
       sock: sockPath(profileName),
       userDataDir: proc.userDataDir,
       source: 'process',
@@ -527,26 +519,6 @@ async function createTab(port, url = 'about:blank', background = false) {
   return cdpFetch(port, `/json/new?${encodeURI(url)}`, 'PUT');
 }
 
-async function hideWindowForTarget(cdp, targetId) {
-  try {
-    const windowInfo = await cdp.send('Browser.getWindowForTarget', { targetId });
-    if (!Number.isInteger(windowInfo.windowId)) return;
-    await cdp.send('Browser.setWindowBounds', {
-      windowId: windowInfo.windowId,
-      bounds: {
-        left: -10000,
-        top: -10000,
-        width: 1280,
-        height: 900,
-        windowState: 'normal',
-      },
-    });
-  } catch {
-    // Best effort only. Launch-time offscreen flags still apply when this CDP
-    // window adjustment is unavailable for a target/platform.
-  }
-}
-
 async function closeTab(port, targetId) {
   return cdpFetch(port, `/json/close/${targetId}`);
 }
@@ -647,7 +619,6 @@ async function startDaemon(profileName, port) {
   // Read profile state to check headless mode
   const profileState = readState(profileName) || {};
   const isHeadless = profileState.headless || false;
-  const isHidden = profileState.launchMode === 'hidden' || profileState.hidden || false;
 
   /** @type {Map<string, {targetId: string, cdp: CDPClient}>} */
   const sessions = new Map();
@@ -659,7 +630,7 @@ async function startDaemon(profileName, port) {
     const body = ['POST', 'PUT'].includes(req.method) ? await readBody(req) : null;
 
     // Wrap handler with timeout to prevent daemon hang
-    const handlerPromise = route(port, req.method, url.pathname, body, sessions, isHeadless, isHidden);
+    const handlerPromise = route(port, req.method, url.pathname, body, sessions, isHeadless);
     const timeoutPromise = new Promise((_, reject) =>
       setTimeout(() => reject(new Error('Handler timeout')), HANDLER_TIMEOUT)
     );
@@ -716,7 +687,7 @@ async function startDaemon(profileName, port) {
   });
 }
 
-async function route(port, method, routePath, body, sessions, isHeadless = false, isHidden = false) {
+async function route(port, method, routePath, body, sessions, isHeadless = false) {
 
   if (routePath === '/health')
     return { ok: true, sessions: sessions.size };
@@ -737,14 +708,14 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     if (!session || !url) throw httpErr(400, 'session and url required');
     let s = sessions.get(session);
     if (!s) {
-      const tab = await createTab(port, 'about:blank', isHidden);
+      const background = body.background === true;
+      const tab = await createTab(port, 'about:blank', background);
       const cdp = new CDPClient();
       await cdp.connect(tab.webSocketDebuggerUrl);
       await cdp.send('Page.enable');
       // NOTE: Runtime.enable intentionally NOT called (Patchright technique).
       // Runtime.enable is the #1 CDP detection signal used by Cloudflare, DataDome, PerimeterX.
       // Runtime.evaluate works without it — no need for Runtime.executionContextCreated events.
-      if (isHidden) await hideWindowForTarget(cdp, tab.id);
       if (isHeadless) {
         // Override User-Agent to remove "HeadlessChrome" signature
         await cdp.send('Network.enable');
@@ -1170,6 +1141,10 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
 
 function normalizeLaunchMode(mode, fallback = 'headless') {
   const value = String(mode || '').trim().toLowerCase();
+  if (value === 'hidden') {
+    console.error('Hidden launch mode has been removed. Use headed mode; chromux open creates background tabs by default.');
+    process.exit(1);
+  }
   return LAUNCH_MODES.has(value) ? value : fallback;
 }
 
@@ -1180,21 +1155,41 @@ function autoLaunchMode() {
   );
 }
 
-function chromeAppName(chromePath) {
-  const match = chromePath.match(/\/([^/]+)\.app\//);
-  return match ? match[1] : null;
+function envFlag(name) {
+  const value = process.env[name];
+  if (value === undefined) return null;
+  const normalized = String(value).trim().toLowerCase();
+  if (TRUE_ENV_VALUES.has(normalized)) return true;
+  if (FALSE_ENV_VALUES.has(normalized)) return false;
+  return null;
 }
 
-function spawnChrome(chrome, chromeArgs, { hidden = false } = {}) {
-  if (hidden && process.platform === 'darwin') {
-    const appName = chromeAppName(chrome);
-    if (appName) {
-      return spawn('open', ['-g', '-j', '-n', '-a', appName, '--args', ...chromeArgs], {
-        detached: true,
-        stdio: 'ignore',
-      });
+function openBackgroundDefault() {
+  const configured = envFlag('CHROMUX_OPEN_BACKGROUND');
+  if (configured !== null) return configured;
+  const legacyConfigured = envFlag('CHROMUX_BACKGROUND_TABS');
+  if (legacyConfigured !== null) return legacyConfigured;
+  return true;
+}
+
+function parseOpenArgs(args) {
+  const out = [];
+  let background = openBackgroundDefault();
+  for (const arg of args) {
+    if (arg === '--background' || arg === '--no-focus') {
+      background = true;
+      continue;
     }
+    if (arg === '--foreground') {
+      background = false;
+      continue;
+    }
+    out.push(arg);
   }
+  return { session: out[0], url: out[1], background };
+}
+
+function spawnChrome(chrome, chromeArgs) {
   return spawn(chrome, chromeArgs, {
     detached: true,
     stdio: 'ignore',
@@ -1204,7 +1199,6 @@ function spawnChrome(chrome, chromeArgs, { hidden = false } = {}) {
 async function cmdLaunch(profileName, explicitPort, launchMode = 'headless') {
   launchMode = normalizeLaunchMode(launchMode);
   const headless = launchMode === 'headless';
-  const hidden = launchMode === 'hidden';
   const cfg = loadConfig();
   const chrome = findChrome(cfg);
   if (!chrome) {
@@ -1219,7 +1213,6 @@ async function cmdLaunch(profileName, explicitPort, launchMode = 'headless') {
       port: existing.port,
       pid: existing.pid,
       headless: existing.headless,
-      hidden: existing.hidden,
       launchMode: existing.launchMode,
       status: existing.source === 'process' ? 'adopted running profile' : 'already running',
     }, null, 2));
@@ -1250,11 +1243,8 @@ async function cmdLaunch(profileName, explicitPort, launchMode = 'headless') {
   if (headless) {
     chromeArgs.push('--headless=new');
   }
-  if (hidden) {
-    chromeArgs.push(...HIDDEN_WINDOW_ARGS);
-  }
 
-  const child = spawnChrome(chrome, chromeArgs, { hidden });
+  const child = spawnChrome(chrome, chromeArgs);
   child.unref();
 
   // Wait for CDP to become reachable
@@ -1270,7 +1260,6 @@ async function cmdLaunch(profileName, explicitPort, launchMode = 'headless') {
         port,
         sock: sockPath(profileName),
         headless,
-        hidden,
         launchMode,
       });
       process.stderr.write(' ready.\n');
@@ -1280,7 +1269,6 @@ async function cmdLaunch(profileName, explicitPort, launchMode = 'headless') {
         pid,
         userDataDir,
         headless,
-        hidden,
         launchMode,
       }, null, 2));
       return;
@@ -1625,11 +1613,13 @@ async function runCli(cmd, args) {
     const name = args[0] || DEFAULT_PROFILE;
     const portIdx = args.indexOf('--port');
     const port = portIdx >= 0 ? parseInt(args[portIdx + 1]) : null;
+    if (args.includes('--hidden')) {
+      console.error('chromux launch --hidden has been removed. Use headed launch; chromux open creates background tabs by default.');
+      process.exit(1);
+    }
     const launchMode = args.includes('--headless')
       ? 'headless'
-      : args.includes('--hidden')
-        ? 'hidden'
-        : 'headed';
+      : 'headed';
     return cmdLaunch(name, port, launchMode);
   }
   if (cmd === 'ps') return cmdPs();
@@ -1656,7 +1646,10 @@ async function runCli(cmd, args) {
   }
 
   const routes = {
-    open:       () => cliReq('POST', '/open', { session: args[0], url: args[1] }, sock),
+    open:       () => {
+      const openArgs = parseOpenArgs(args);
+      return cliReq('POST', '/open', openArgs, sock);
+    },
     snapshot:   () => cliReq('GET', `/snapshot/${args[0]}`, null, sock),
     cdp:        () => cmdCdp(args, sock),
     run:        () => cmdRun(args, sock),
@@ -1777,13 +1770,13 @@ const HELP = `chromux — tmux for Chrome tabs
 
 The core surface:
   chromux open <session> <url>       Create or navigate a tab
+  chromux open --background <s> <u>  Explicitly create a background tab
   chromux run <session> -            Multi-step async JS with cdp/js/sleep/waitLoad
   chromux cdp <session> <M> '{}'     Raw CDP method passthrough
 
 Lifecycle:
   chromux launch [name]              Launch Chrome (default: "default")
   chromux launch <name> --headless   Launch in headless mode (no window)
-  chromux launch <name> --hidden     Launch headed Chrome offscreen
   chromux launch <name> --port N     Launch with specific port
   chromux ps                         List running profiles
   chromux kill <name>                Stop profile (Chrome + daemon)
@@ -1816,7 +1809,7 @@ Policy:
 Profile selection:
   chromux --profile <name> <cmd>     Use specific profile
   CHROMUX_PROFILE=<name> chromux     Via environment variable
-  CHROMUX_LAUNCH_MODE=hidden chromux open ...  Auto-launch hidden headed
+  CHROMUX_OPEN_BACKGROUND=0 chromux open ...    Create new tabs in foreground
   (default profile: "default")
 
 Paths:

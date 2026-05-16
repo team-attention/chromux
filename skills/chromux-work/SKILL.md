@@ -60,14 +60,16 @@ Default recommendation:
 - logged-in user site: prefer `default` or the known logged-in profile
 - risky/destructive/unknown site: propose a new task profile
 
-Launch or reuse the selected profile. Hidden headed mode is the pragmatic
-default when login state and anti-bot behavior matter:
+Launch or reuse the selected profile. Headed mode with background tab creation
+is the pragmatic default when login state and anti-bot behavior matter. New
+tabs are background by default so they should not steal focus:
 
 ```bash
-/path/to/chromux launch <profile> --hidden
+/path/to/chromux launch <profile>
 ```
 
 Use `CHROMUX_PROFILE=<profile>` or `--profile <profile>` for every tab command.
+Use `open --foreground` only when bringing Chrome to the front is intentional.
 
 ## 2. Recon Pass
 
