@@ -27,8 +27,30 @@ const PORT_RANGE_START = 9300;
 const PORT_RANGE_END = 9399;
 const DEFAULT_PROFILE = 'default';
 const LAUNCH_MODES = new Set(['headless', 'headed']);
+const MODES = new Set(['default', 'crawl']);
 const TRUE_ENV_VALUES = new Set(['1', 'true', 'yes', 'on']);
 const FALSE_ENV_VALUES = new Set(['0', 'false', 'no', 'off']);
+const CRAWL_BLOCK_URLS = [
+  '*.avif',
+  '*.gif',
+  '*.ico',
+  '*.jpeg',
+  '*.jpg',
+  '*.mp3',
+  '*.mp4',
+  '*.otf',
+  '*.png',
+  '*.ttf',
+  '*.webm',
+  '*.webp',
+  '*.woff',
+  '*.woff2',
+  '*://*.doubleclick.net/*',
+  '*://*.google-analytics.com/*',
+  '*://*.googletagmanager.com/*',
+  '*://*.googlesyndication.com/*',
+  '*://*.facebook.com/tr/*',
+];
 
 const CHROME_PATHS = [
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
@@ -45,6 +67,15 @@ function getProfile() {
   return process.env.CHROMUX_PROFILE
     || parseGlobalFlag('--profile')
     || DEFAULT_PROFILE;
+}
+
+function getMode() {
+  const mode = process.env.CHROMUX_MODE || parseGlobalFlag('--mode') || 'default';
+  if (!MODES.has(mode)) {
+    console.error(`Invalid mode "${mode}". Use one of: ${[...MODES].join(', ')}`);
+    process.exit(1);
+  }
+  return mode;
 }
 
 /** Extract --profile <name> from argv and remove it. */
@@ -68,6 +99,11 @@ function validateName(name) {
 const RUN_DIR = path.join(CHROMUX_HOME, 'run');
 function profileDir(name) { return path.join(PROFILES_DIR, validateName(name)); }
 function statePath(name) { return path.join(profileDir(name), '.state'); }
+function profileStopPath(name) {
+  validateName(name);
+  fs.mkdirSync(RUN_DIR, { recursive: true, mode: 0o700 });
+  return path.join(RUN_DIR, `${name}.stop`);
+}
 function sockPath(name) {
   validateName(name);
   fs.mkdirSync(RUN_DIR, { recursive: true, mode: 0o700 });
@@ -225,6 +261,42 @@ function parseChromuxChromeProcess(proc) {
 
 function listChromuxChromeProcesses() {
   return listProcesses().map(parseChromuxChromeProcess).filter(Boolean);
+}
+
+function commandUsesProfileDir(command, profileName) {
+  const userDataDir = getArgValue(splitCommand(command), '--user-data-dir');
+  if (!userDataDir) return false;
+  return path.resolve(userDataDir) === path.resolve(profileDir(profileName));
+}
+
+function profileResourceSnapshot(profileName) {
+  const processes = listProcesses();
+  let chromeProcesses = 0;
+  let renderers = 0;
+  let rssKb = 0;
+  for (const proc of processes) {
+    if (!commandUsesProfileDir(proc.command, profileName)) continue;
+    chromeProcesses++;
+    if (proc.command.includes('--type=renderer')) renderers++;
+  }
+
+  const psArgs = process.platform === 'darwin'
+    ? ['-axo', 'pid=,rss=,command=']
+    : ['-eo', 'pid=,rss=,args='];
+  const res = spawnSync('ps', psArgs, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+  if (!res.error && res.status === 0) {
+    for (const line of res.stdout.split('\n')) {
+      const m = line.match(/^\s*(\d+)\s+(\d+)\s+(.*)$/);
+      if (!m) continue;
+      if (commandUsesProfileDir(m[3], profileName)) rssKb += Number(m[2]) || 0;
+    }
+  }
+
+  return {
+    chromeProcesses,
+    renderers,
+    rssMb: Math.round(rssKb / 1024),
+  };
 }
 
 function findProfileProcesses(profileName) {
@@ -523,6 +595,16 @@ async function closeTab(port, targetId) {
   return cdpFetch(port, `/json/close/${targetId}`);
 }
 
+async function closeInitialTabs(port) {
+  const targets = await cdpFetch(port, '/json/list').catch(() => []);
+  if (!Array.isArray(targets)) return;
+  for (const target of targets) {
+    if (target.type !== 'page') continue;
+    if (target.url !== 'about:blank' && target.url !== 'chrome://newtab/') continue;
+    await closeTab(port, target.id).catch(() => {});
+  }
+}
+
 // ============================================================
 // Snapshot — accessibility tree with @ref numbers
 // ============================================================
@@ -611,6 +693,9 @@ const SNAPSHOT_JS = `(() => {
 async function startDaemon(profileName, port) {
   const sock = sockPath(profileName);
   try { fs.unlinkSync(sock); } catch {}
+  const settings = modeSettings();
+  settings.profileName = profileName;
+  settings.stopFile = process.env.CHROMUX_STOP_FILE || profileStopPath(profileName);
 
   // Verify Chrome is reachable
   const alive = await checkCDP(port);
@@ -620,8 +705,9 @@ async function startDaemon(profileName, port) {
   const profileState = readState(profileName) || {};
   const isHeadless = profileState.headless || false;
 
-  /** @type {Map<string, {targetId: string, cdp: CDPClient}>} */
+  /** @type {Map<string, {targetId: string, cdp: CDPClient, createdAt: number, lastUsedAt: number, url?: string, title?: string, navigations?: number}>} */
   const sessions = new Map();
+  const gate = createGate(settings.maxConcurrentOps);
 
   const HANDLER_TIMEOUT = 45000; // 45s max per request
 
@@ -630,7 +716,9 @@ async function startDaemon(profileName, port) {
     const body = ['POST', 'PUT'].includes(req.method) ? await readBody(req) : null;
 
     // Wrap handler with timeout to prevent daemon hang
-    const handlerPromise = route(port, req.method, url.pathname, body, sessions, isHeadless);
+    const handlerPromise = routeWithGate(gate, () =>
+      route(port, req.method, url.pathname, body, sessions, isHeadless, settings)
+    , url.pathname, settings);
     const timeoutPromise = new Promise((_, reject) =>
       setTimeout(() => reject(new Error('Handler timeout')), HANDLER_TIMEOUT)
     );
@@ -650,18 +738,24 @@ async function startDaemon(profileName, port) {
 
   server.listen(sock, () => {
     try { fs.chmodSync(sock, 0o600); } catch {}
-    console.log(`chromux daemon [${profileName}] on ${sock} → port ${port}`);
+    console.log(`chromux daemon [${profileName}] mode=${settings.mode} on ${sock} → port ${port}`);
   });
 
-  // Watchdog: prune dead sessions every 30s
-  setInterval(() => {
+  // Watchdog: prune dead, stale, or idle sessions. Crawl mode uses a shorter
+  // interval so candidate-list tabs do not sit around while detail workers run.
+  setInterval(async () => {
+    const now = Date.now();
     for (const [id, s] of sessions) {
-      if (!s.cdp.connected) {
+      const dead = !s.cdp.connected;
+      const tooOld = settings.sessionTtlMs > 0 && now - s.createdAt > settings.sessionTtlMs;
+      const idle = settings.idleTtlMs > 0 && now - s.lastUsedAt > settings.idleTtlMs;
+      if (dead || tooOld || idle) {
         s.cdp.close();
+        if (!dead) await closeTab(port, s.targetId).catch(() => {});
         sessions.delete(id);
       }
     }
-  }, 30000);
+  }, settings.mode === 'crawl' ? 5000 : 30000);
 
   // Watchdog: verify Chrome CDP is alive every 60s, exit if dead
   setInterval(async () => {
@@ -687,14 +781,142 @@ async function startDaemon(profileName, port) {
   });
 }
 
-async function route(port, method, routePath, body, sessions, isHeadless = false) {
+function createGate(maxConcurrentOps) {
+  return {
+    max: Math.max(0, Number(maxConcurrentOps) || 0),
+    active: 0,
+    queue: [],
+  };
+}
+
+function isGatedRoute(routePath) {
+  if (routePath === '/health' || routePath === '/list' || routePath === '/stop') return false;
+  if (routePath.startsWith('/session/')) return false;
+  return true;
+}
+
+function isHardStopped(settings) {
+  return settings?.stopFile && fs.existsSync(settings.stopFile);
+}
+
+function routeWithGate(gate, fn, routePath, settings) {
+  if (!isGatedRoute(routePath)) return fn();
+  if (isHardStopped(settings)) {
+    return Promise.reject(httpErr(423, `Profile "${settings.profileName}" is paused by ${settings.stopFile}`));
+  }
+  if (!gate.max || gate.max <= 0) return fn();
+  if (settings.maxQueuedOps > 0 && gate.queue.length >= settings.maxQueuedOps) {
+    return Promise.reject(httpErr(429, `Profile operation queue is full (${settings.maxQueuedOps})`));
+  }
+  return new Promise((resolve, reject) => {
+    const run = async () => {
+      gate.active++;
+      try { resolve(await fn()); }
+      catch (err) { reject(err); }
+      finally {
+        gate.active--;
+        const next = gate.queue.shift();
+        if (next) next();
+      }
+    };
+    if (gate.active < gate.max) run();
+    else gate.queue.push(run);
+  });
+}
+
+function touchSession(session) {
+  session.lastUsedAt = Date.now();
+}
+
+function shouldRecycleSession(session, settings) {
+  return settings.mode === 'crawl'
+    && settings.maxNavigationsPerSession > 0
+    && (session.navigations || 0) >= settings.maxNavigationsPerSession;
+}
+
+function enforceResourceGuard(settings) {
+  if (settings.mode !== 'crawl' || !settings.profileName) return;
+  const resources = profileResourceSnapshot(settings.profileName);
+  const over = [];
+  if (settings.maxChromeProcesses > 0 && resources.chromeProcesses >= settings.maxChromeProcesses) {
+    over.push(`chromeProcesses ${resources.chromeProcesses}/${settings.maxChromeProcesses}`);
+  }
+  if (settings.maxRenderers > 0 && resources.renderers >= settings.maxRenderers) {
+    over.push(`renderers ${resources.renderers}/${settings.maxRenderers}`);
+  }
+  if (settings.maxRssMb > 0 && resources.rssMb >= settings.maxRssMb) {
+    over.push(`rssMb ${resources.rssMb}/${settings.maxRssMb}`);
+  }
+  if (over.length) throw httpErr(429, `Profile resource guard active: ${over.join(', ')}`);
+}
+
+async function closeUnhealthySession(port, sessions, sessionId, session, reason) {
+  session.cdp.close();
+  await closeTab(port, session.targetId).catch(() => {});
+  sessions.delete(sessionId);
+  const err = httpErr(503, `Session "${sessionId}" became unresponsive and was closed: ${reason}`);
+  return err;
+}
+
+async function navigateSession(cdp, url, settings) {
+  if (settings.mode !== 'crawl') {
+    const loaded = cdp.waitForEvent('Page.loadEventFired', 30000);
+    await cdp.send('Page.navigate', { url });
+    await loaded;
+    return;
+  }
+
+  const waitMs = Math.max(1000, settings.navigationWaitMs || 12_000);
+  const loaded = cdp.waitForEvent('Page.loadEventFired', waitMs).then(() => 'load').catch(() => null);
+  const domReady = cdp.waitForEvent('Page.domContentEventFired', waitMs).then(() => 'domcontent').catch(() => null);
+  const timeout = sleep(waitMs).then(() => 'timeout');
+  await cdp.send('Page.navigate', { url }, waitMs + 2000);
+  await Promise.race([loaded, domReady, timeout]);
+  await cdp.send('Page.stopLoading', {}, 2000).catch(() => {});
+}
+
+async function readPageInfo(port, targetId, cdp, settings) {
+  const evalTimeout = settings.mode === 'crawl' ? 3000 : 10000;
+  try {
+    const r = await cdp.send('Runtime.evaluate', {
+      expression: 'JSON.stringify({url:location.href,title:document.title})',
+      returnByValue: true,
+    }, evalTimeout);
+    return JSON.parse(r.result.value);
+  } catch (err) {
+    if (settings.mode !== 'crawl') throw err;
+    const targets = await cdpFetch(port, '/json/list').catch(() => null);
+    const target = Array.isArray(targets) ? targets.find(t => t.id === targetId) : null;
+    if (target) return { url: target.url || '', title: target.title || '' };
+    throw err;
+  }
+}
+
+async function route(port, method, routePath, body, sessions, isHeadless = false, settings = modeSettings('default')) {
 
   if (routePath === '/health')
-    return { ok: true, sessions: sessions.size };
+    return {
+      ok: true,
+      sessions: sessions.size,
+      mode: settings.mode,
+      gate: settings.maxConcurrentOps || null,
+      queued: settings.maxQueuedOps || null,
+      paused: isHardStopped(settings),
+      resources: settings.profileName ? profileResourceSnapshot(settings.profileName) : null,
+    };
 
   if (routePath === '/list') {
     const out = {};
     for (const [id, s] of sessions) {
+      if (!s.cdp.connected) {
+        out[id] = { url: '(closed)', title: '' };
+        sessions.delete(id);
+        continue;
+      }
+      if (settings.mode === 'crawl') {
+        out[id] = { url: s.url || '', title: s.title || '', ageMs: Date.now() - s.createdAt, idleMs: Date.now() - s.lastUsedAt, navigations: s.navigations || 0 };
+        continue;
+      }
       try {
         const r = await s.cdp.send('Runtime.evaluate', { expression: 'JSON.stringify({url:location.href,title:document.title})', returnByValue: true });
         out[id] = JSON.parse(r.result.value);
@@ -706,10 +928,23 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
   if (routePath === '/open' && method === 'POST') {
     const { session, url } = body;
     if (!session || !url) throw httpErr(400, 'session and url required');
+    enforceResourceGuard(settings);
     let s = sessions.get(session);
+    if (s && shouldRecycleSession(s, settings)) {
+      s.cdp.close();
+      await closeTab(port, s.targetId).catch(() => {});
+      sessions.delete(session);
+      s = null;
+    }
+    const isNewSession = !s;
+    let newTab = null;
     if (!s) {
+      if (settings.maxSessions > 0 && sessions.size >= settings.maxSessions) {
+        throw httpErr(429, `Profile session limit reached (${settings.maxSessions}). Close sessions or increase CHROMUX_MAX_SESSIONS_PER_PROFILE.`);
+      }
       const background = body.background === true;
       const tab = await createTab(port, 'about:blank', background);
+      newTab = tab;
       const cdp = new CDPClient();
       await cdp.connect(tab.webSocketDebuggerUrl);
       await cdp.send('Page.enable');
@@ -730,17 +965,34 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
         // Real Chrome already has correct webdriver/plugins/languages/chrome.runtime.
         // The CDP call itself is a detectable signal — removing it is better stealth.
       }
+      if (settings.mode === 'crawl' && settings.resourceBlocking) {
+        await cdp.send('Network.enable');
+        await cdp.send('Network.setBlockedURLs', { urls: CRAWL_BLOCK_URLS });
+      }
       cdp.onDisconnect = (reason) => {
         sessions.delete(session);
       };
-      s = { targetId: tab.id, cdp };
+      const now = Date.now();
+      s = { targetId: tab.id, cdp, createdAt: now, lastUsedAt: now, url: 'about:blank', title: '', navigations: 0 };
       sessions.set(session, s);
     }
-    const loaded = s.cdp.waitForEvent('Page.loadEventFired', 30000);
-    await s.cdp.send('Page.navigate', { url });
-    await loaded;
-    const r = await s.cdp.send('Runtime.evaluate', { expression: 'JSON.stringify({url:location.href,title:document.title})', returnByValue: true });
-    const result = { session, ...JSON.parse(r.result.value) };
+    touchSession(s);
+    try {
+      await navigateSession(s.cdp, url, settings);
+    } catch (err) {
+      if (isNewSession && newTab) {
+        sessions.delete(session);
+        s.cdp.close();
+        await closeTab(port, newTab.id).catch(() => {});
+      }
+      throw err;
+    }
+    const pageInfo = await readPageInfo(port, s.targetId, s.cdp, settings);
+    s.url = pageInfo.url;
+    s.title = pageInfo.title;
+    s.navigations = (s.navigations || 0) + 1;
+    touchSession(s);
+    const result = { session, ...pageInfo };
     // Surface host-specific hint files from ~/.chromux/skills/<host>/*.md (if any).
     try {
       const knowledgeHint = siteKnowledgeHintForUrl(result.url);
@@ -760,6 +1012,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
   if (routePath.startsWith('/snapshot/')) {
     const session = decodeURIComponent(routePath.split('/')[2]);
     const s = getSession(sessions, session);
+    touchSession(s);
     const r = await s.cdp.send('Runtime.evaluate', { expression: SNAPSHOT_JS, returnByValue: true });
     return r.result.value;
   }
@@ -768,39 +1021,68 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     const { session, method: cdpMethod, params, timeoutMs } = body;
     if (!session || !cdpMethod) throw httpErr(400, 'session and method required');
     const s = getSession(sessions, session);
-    return await s.cdp.send(cdpMethod, params || {}, timeoutMs);
+    touchSession(s);
+    try {
+      return await s.cdp.send(cdpMethod, params || {}, timeoutMs);
+    } catch (err) {
+      if (settings.mode === 'crawl' && /timeout/i.test(err.message)) {
+        throw await closeUnhealthySession(port, sessions, session, s, err.message);
+      }
+      throw err;
+    }
   }
 
   if (routePath === '/run' && method === 'POST') {
     const { session, code, timeoutMs } = body;
     if (!session || code == null) throw httpErr(400, 'session and code required');
     const s = getSession(sessions, session);
-    const cdp = (m, p = {}, t) => s.cdp.send(m, p, t);
+    touchSession(s);
+    const defaultCdpTimeout = settings.mode === 'crawl' ? 5000 : undefined;
+    const defaultJsTimeout = settings.mode === 'crawl' ? 3000 : undefined;
+    const cdp = (m, p = {}, t) => s.cdp.send(m, p, t || defaultCdpTimeout);
     const evalJs = async (expr, t) => {
       const r = await s.cdp.send('Runtime.evaluate', {
         expression: expr,
         returnByValue: true,
         awaitPromise: true,
-      }, t);
+      }, t || defaultJsTimeout);
       if (r.exceptionDetails) {
         throw new Error(r.exceptionDetails.exception?.description || r.exceptionDetails.text || 'js error');
       }
       return r.result.value;
     };
     const waitLoad = (ms = 30000) => s.cdp.waitForEvent('Page.loadEventFired', ms);
+    const page = async (expr, t) => {
+      const pageExpr = expr || `({
+        url: location.href,
+        title: document.title,
+        text: document.body ? document.body.innerText : '',
+        html: document.documentElement ? document.documentElement.outerHTML : ''
+      })`;
+      const raw = await evalJs(`JSON.stringify(${pageExpr})`, t);
+      return JSON.parse(raw);
+    };
     const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
-    const fn = new AsyncFunction('cdp', 'js', 'sleep', 'waitLoad', code);
-    const runPromise = fn(cdp, evalJs, sleep, waitLoad);
-    const result = (typeof timeoutMs === 'number' && timeoutMs > 0)
-      ? await withTimeout(runPromise, timeoutMs, 'run timeout')
-      : await runPromise;
-    return result === undefined ? null : result;
+    const fn = new AsyncFunction('cdp', 'js', 'sleep', 'waitLoad', 'page', code);
+    const runPromise = fn(cdp, evalJs, sleep, waitLoad, page);
+    try {
+      const result = (typeof timeoutMs === 'number' && timeoutMs > 0)
+        ? await withTimeout(runPromise, timeoutMs, 'run timeout')
+        : await runPromise;
+      return result === undefined ? null : result;
+    } catch (err) {
+      if (settings.mode === 'crawl' && /timeout/i.test(err.message)) {
+        throw await closeUnhealthySession(port, sessions, session, s, err.message);
+      }
+      throw err;
+    }
   }
 
   if (routePath === '/click' && method === 'POST') {
     const { session, selector, xy, button = 'left', clicks = 1 } = body;
     if (!session) throw httpErr(400, 'session required');
     const s = getSession(sessions, session);
+    touchSession(s);
     if (xy) {
       const [x, y] = xy.map(Number);
       if (!Number.isFinite(x) || !Number.isFinite(y)) throw httpErr(400, 'xy must contain numeric x/y');
@@ -830,6 +1112,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
   if (routePath === '/fill' && method === 'POST') {
     const { session, selector, text } = body;
     const s = getSession(sessions, session);
+    touchSession(s);
     const sel = selector.startsWith('@')
       ? `[data-ct-ref="${selector.slice(1)}"]`
       : selector;
@@ -844,6 +1127,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
   if (routePath === '/type' && method === 'POST') {
     const { session, text } = body;
     const s = getSession(sessions, session);
+    touchSession(s);
     const KEY_MAP = { Enter: '\r', Tab: '\t', Escape: '\u001B', Backspace: '\b' };
     if (KEY_MAP[text] || text.length === 1) {
       await s.cdp.send('Input.dispatchKeyEvent', {
@@ -862,6 +1146,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
   if (routePath === '/eval' && method === 'POST') {
     const { session, code, timeoutMs } = body;
     const s = getSession(sessions, session);
+    touchSession(s);
     const evalArgs = {
       expression: code, returnByValue: true, awaitPromise: true,
     };
@@ -876,6 +1161,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     const { session, selector, jsCount, count, maxScrolls = 30, delayMs = 800, target } = body;
     if ((!selector && !jsCount) || !count) throw httpErr(400, 'scroll-until requires (--selector or --js-count) and --count');
     const s = getSession(sessions, session);
+    touchSession(s);
     const counts = [];
     let last = -1;
     let stagnant = 0;
@@ -951,6 +1237,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
   if (routePath === '/screenshot' && method === 'POST') {
     const { session, path: savePath } = body;
     const s = getSession(sessions, session);
+    touchSession(s);
     const r = await s.cdp.send('Page.captureScreenshot', { format: 'png' });
     const p = savePath || `/tmp/chromux-${session}-${Date.now()}.png`;
     const resolved = path.resolve(p);
@@ -966,6 +1253,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
   if (routePath === '/scroll' && method === 'POST') {
     const { session, direction } = body;
     const s = getSession(sessions, session);
+    touchSession(s);
     const delta = direction === 'up' ? -500 : 500;
     await s.cdp.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: 300, y: 300, deltaX: 0, deltaY: delta });
     await sleep(300);
@@ -973,7 +1261,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
   }
 
   if (routePath === '/wait' && method === 'POST') {
-    getSession(sessions, body.session);
+    touchSession(getSession(sessions, body.session));
     await sleep(body.ms || 1000);
     return { waited: body.ms || 1000 };
   }
@@ -1172,6 +1460,59 @@ function openBackgroundDefault() {
   return true;
 }
 
+function envNumber(name, fallback) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function modeSettings(mode = getMode()) {
+  if (mode === 'crawl') {
+    return {
+      mode,
+      maxSessions: envNumber('CHROMUX_MAX_SESSIONS_PER_PROFILE', 12),
+      maxConcurrentOps: envNumber('CHROMUX_MAX_CONCURRENT_OPS_PER_PROFILE', 4),
+      idleTtlMs: envNumber('CHROMUX_IDLE_TTL_MS', 20_000),
+      sessionTtlMs: envNumber('CHROMUX_SESSION_TTL_MS', 300_000),
+      navigationWaitMs: envNumber('CHROMUX_NAVIGATION_WAIT_MS', 5_000),
+      resourceBlocking: envFlag('CHROMUX_BLOCK_RESOURCES') ?? true,
+      closeInitialTabs: envFlag('CHROMUX_CLOSE_INITIAL_TABS') ?? true,
+      maxNavigationsPerSession: envNumber('CHROMUX_MAX_NAVIGATIONS_PER_SESSION', 0),
+      compactRenderers: envFlag('CHROMUX_COMPACT_RENDERERS') ?? false,
+      maxQueuedOps: envNumber('CHROMUX_MAX_QUEUED_OPS_PER_PROFILE', 16),
+      maxChromeProcesses: envNumber('CHROMUX_MAX_CHROME_PROCESSES_PER_PROFILE', 60),
+      maxRenderers: envNumber('CHROMUX_MAX_RENDERERS_PER_PROFILE', 40),
+      maxRssMb: envNumber('CHROMUX_MAX_RSS_MB_PER_PROFILE', 12_000),
+    };
+  }
+  return {
+    mode,
+    maxSessions: envNumber('CHROMUX_MAX_SESSIONS_PER_PROFILE', 0),
+    maxConcurrentOps: envNumber('CHROMUX_MAX_CONCURRENT_OPS_PER_PROFILE', 0),
+    idleTtlMs: envNumber('CHROMUX_IDLE_TTL_MS', 0),
+    sessionTtlMs: envNumber('CHROMUX_SESSION_TTL_MS', 0),
+    navigationWaitMs: envNumber('CHROMUX_NAVIGATION_WAIT_MS', 30_000),
+    resourceBlocking: false,
+    closeInitialTabs: false,
+    maxNavigationsPerSession: envNumber('CHROMUX_MAX_NAVIGATIONS_PER_SESSION', 0),
+    compactRenderers: false,
+    maxQueuedOps: envNumber('CHROMUX_MAX_QUEUED_OPS_PER_PROFILE', 0),
+    maxChromeProcesses: envNumber('CHROMUX_MAX_CHROME_PROCESSES_PER_PROFILE', 0),
+    maxRenderers: envNumber('CHROMUX_MAX_RENDERERS_PER_PROFILE', 0),
+    maxRssMb: envNumber('CHROMUX_MAX_RSS_MB_PER_PROFILE', 0),
+  };
+}
+
+function extraChromeArgs() {
+  const raw = process.env.CHROMUX_EXTRA_CHROME_ARGS || '';
+  return splitCommand(raw).filter(Boolean);
+}
+
+function defaultCliTimeoutMs() {
+  return envNumber('CHROMUX_CLI_TIMEOUT_MS', getMode() === 'crawl' ? 90_000 : 30_000);
+}
+
 function parseOpenArgs(args) {
   const out = [];
   let background = openBackgroundDefault();
@@ -1199,6 +1540,7 @@ function spawnChrome(chrome, chromeArgs) {
 async function cmdLaunch(profileName, explicitPort, launchMode = 'headless') {
   launchMode = normalizeLaunchMode(launchMode);
   const headless = launchMode === 'headless';
+  const settings = modeSettings();
   const cfg = loadConfig();
   const chrome = findChrome(cfg);
   if (!chrome) {
@@ -1243,6 +1585,19 @@ async function cmdLaunch(profileName, explicitPort, launchMode = 'headless') {
   if (headless) {
     chromeArgs.push('--headless=new');
   }
+  if (settings.mode === 'crawl') {
+    chromeArgs.push(
+      '--blink-settings=imagesEnabled=false',
+      '--mute-audio',
+    );
+    if (settings.compactRenderers) {
+      chromeArgs.push(
+        '--disable-features=IsolateOrigins,site-per-process',
+        `--renderer-process-limit=${envNumber('CHROMUX_RENDERER_PROCESS_LIMIT', 8)}`,
+      );
+    }
+  }
+  chromeArgs.push(...extraChromeArgs());
 
   const child = spawnChrome(chrome, chromeArgs);
   child.unref();
@@ -1253,6 +1608,7 @@ async function cmdLaunch(profileName, explicitPort, launchMode = 'headless') {
     await sleep(500);
     const alive = await checkCDP(port);
     if (alive) {
+      if (settings.closeInitialTabs) await closeInitialTabs(port);
       const runtime = await resolveProfileRuntime(profileName, { adopt: false });
       const pid = runtime?.pid || child.pid;
       writeState(profileName, {
@@ -1261,6 +1617,7 @@ async function cmdLaunch(profileName, explicitPort, launchMode = 'headless') {
         sock: sockPath(profileName),
         headless,
         launchMode,
+        mode: settings.mode,
       });
       process.stderr.write(' ready.\n');
       console.log(JSON.stringify({
@@ -1270,6 +1627,7 @@ async function cmdLaunch(profileName, explicitPort, launchMode = 'headless') {
         userDataDir,
         headless,
         launchMode,
+        mode: settings.mode,
       }, null, 2));
       return;
     }
@@ -1356,9 +1714,30 @@ async function cmdKill(profileName) {
   for (const pid of pids) {
     try { process.kill(pid, 'SIGTERM'); } catch {}
   }
+  const deadline = Date.now() + 3000;
+  while ([...pids].some(pid => isProcessAlive(pid)) && Date.now() < deadline) {
+    await sleep(100);
+  }
+  for (const pid of pids) {
+    if (isProcessAlive(pid)) {
+      try { process.kill(pid, 'SIGKILL'); } catch {}
+    }
+  }
   clearState(profileName);
   try { fs.unlinkSync(sock); } catch {}
   console.log(JSON.stringify({ profile: profileName, killed: true, pids: [...pids] }, null, 2));
+}
+
+function cmdPause(profileName) {
+  const stopFile = profileStopPath(profileName);
+  fs.writeFileSync(stopFile, JSON.stringify({ profile: profileName, pid: process.pid, ts: Date.now() }) + '\n');
+  console.log(JSON.stringify({ profile: profileName, paused: true, stopFile }, null, 2));
+}
+
+function cmdResume(profileName) {
+  const stopFile = profileStopPath(profileName);
+  try { fs.unlinkSync(stopFile); } catch {}
+  console.log(JSON.stringify({ profile: profileName, paused: false, stopFile }, null, 2));
 }
 
 // ============================================================
@@ -1430,6 +1809,97 @@ async function cmdRun(args, sock) {
   const { session, code, timeoutMs } = readCodeArg(args, 'Usage: chromux run <session> <code|--file PATH|-> [--timeout MS]');
   const httpTimeout = (timeoutMs ? timeoutMs : 30000) + 5000;
   return cliReq('POST', '/run', { session, code, timeoutMs }, sock, httpTimeout);
+}
+
+function getBatchArg(args, flag, fallback = null) {
+  const idx = args.indexOf(flag);
+  return idx >= 0 ? args[idx + 1] : fallback;
+}
+
+function readBatchRecords(filePath, limit = 0) {
+  const raw = filePath ? fs.readFileSync(filePath, 'utf8') : fs.readFileSync(0, 'utf8');
+  const out = [];
+  for (const line of raw.split(/\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    let record;
+    if (trimmed.startsWith('{')) {
+      try { record = JSON.parse(trimmed); }
+      catch { continue; }
+      record.url = record.url || record.source_url || record.href;
+    } else {
+      record = { url: trimmed };
+    }
+    if (!record.url || !/^https?:\/\//.test(record.url)) continue;
+    out.push(record);
+    if (limit > 0 && out.length >= limit) break;
+  }
+  return out;
+}
+
+async function cmdBatch(args, sock) {
+  const filePath = getBatchArg(args, '--file');
+  const outPath = getBatchArg(args, '--out');
+  const workers = Math.max(1, Number(getBatchArg(args, '--workers', '4')) || 4);
+  const limit = Math.max(0, Number(getBatchArg(args, '--limit', '0')) || 0);
+  const prefix = getBatchArg(args, '--session-prefix', `batch-${Date.now().toString(36)}`);
+  if (!filePath && !args.includes('-')) {
+    console.error('Usage: chromux batch --file urls.txt [--workers N] [--out results.jsonl] [--limit N] [--session-prefix P]');
+    process.exit(1);
+  }
+  const records = readBatchRecords(filePath, limit);
+  if (outPath) fs.writeFileSync(outPath, '');
+  const queue = [...records];
+  const results = [];
+  const writeResult = (record) => {
+    results.push(record);
+    if (outPath) fs.appendFileSync(outPath, JSON.stringify(record) + '\n');
+  };
+
+  const worker = async (workerId) => {
+    const session = `${prefix}-${workerId}`;
+    while (queue.length > 0) {
+      const item = queue.shift();
+      const started = Date.now();
+      const result = {
+        workerId,
+        session,
+        url: item.url,
+        input: item,
+        ok: false,
+        durationMs: 0,
+      };
+      try {
+        const opened = await cliReq('POST', '/open', { session, url: item.url, background: true }, sock, defaultCliTimeoutMs());
+        const pageInfo = await cliReq('POST', '/run', {
+          session,
+          code: `return await page('({url:location.href,title:document.title,textLength:(document.body?document.body.innerText.length:0),htmlLength:(document.documentElement?document.documentElement.outerHTML.length:0)})')`,
+          timeoutMs: 15_000,
+        }, sock, 20_000);
+        result.ok = Boolean(pageInfo?.title) && Number(pageInfo?.htmlLength || 0) > 500;
+        result.opened = opened;
+        result.page = pageInfo;
+      } catch (err) {
+        result.error = err.message;
+      } finally {
+        result.durationMs = Date.now() - started;
+        writeResult(result);
+      }
+    }
+    await cliReq('DELETE', `/session/${encodeURIComponent(session)}`, null, sock).catch(() => {});
+  };
+
+  await Promise.all(Array.from({ length: workers }, (_, i) => worker(i)));
+  const durations = results.map(r => r.durationMs).sort((a, b) => a - b);
+  const p95 = durations.length ? durations[Math.min(durations.length - 1, Math.floor((durations.length - 1) * 0.95))] : 0;
+  return {
+    total: results.length,
+    ok: results.filter(r => r.ok).length,
+    failed: results.filter(r => !r.ok).length,
+    workers,
+    out: outPath || null,
+    p95DurationMs: p95,
+  };
 }
 
 function parseJsonArg(value, label) {
@@ -1556,9 +2026,15 @@ async function resolveProfilePort(profileName) {
 
 async function ensureDaemon(profileName) {
   const sock = sockPath(profileName);
+  const desiredMode = getMode();
 
   // Check if daemon already running (short timeout to fail fast)
-  try { await cliReq('GET', '/health', null, sock, 3000); return sock; } catch {}
+  try {
+    const health = await cliReq('GET', '/health', null, sock, 3000);
+    if (!health.mode || health.mode === desiredMode) return sock;
+    await cliReq('POST', '/stop', {}, sock, 3000).catch(() => {});
+    await waitForSocketGone(sock, 3000);
+  } catch {}
 
   // Daemon not reachable — clean up stale socket before acquiring lock
   try { fs.unlinkSync(sock); } catch {}
@@ -1568,7 +2044,12 @@ async function ensureDaemon(profileName) {
   const lockFd = await acquireLock(lockFile);
   try {
     // Re-check after lock — another process may have started it
-    try { await cliReq('GET', '/health', null, sock, 3000); return sock; } catch {}
+    try {
+      const health = await cliReq('GET', '/health', null, sock, 3000);
+      if (!health.mode || health.mode === desiredMode) return sock;
+      await cliReq('POST', '/stop', {}, sock, 3000).catch(() => {});
+      await waitForSocketGone(sock, 3000);
+    } catch {}
 
     // Clean up stale socket again (in case it appeared during lock wait)
     try { fs.unlinkSync(sock); } catch {}
@@ -1603,6 +2084,14 @@ async function ensureDaemon(profileName) {
   }
 }
 
+async function waitForSocketGone(sock, timeoutMs = 3000) {
+  const deadline = Date.now() + timeoutMs;
+  while (fs.existsSync(sock) && Date.now() < deadline) {
+    await sleep(100);
+  }
+  try { fs.unlinkSync(sock); } catch {}
+}
+
 // ============================================================
 // CLI router
 // ============================================================
@@ -1627,6 +2116,8 @@ async function runCli(cmd, args) {
     if (!args[0]) { console.error('Usage: chromux kill <profile>'); process.exit(1); }
     return cmdKill(args[0]);
   }
+  if (cmd === 'pause') return cmdPause(args[0] || getProfile());
+  if (cmd === 'resume') return cmdResume(args[0] || getProfile());
 
   // Tab commands (need daemon)
   const profile = getProfile();
@@ -1648,11 +2139,12 @@ async function runCli(cmd, args) {
   const routes = {
     open:       () => {
       const openArgs = parseOpenArgs(args);
-      return cliReq('POST', '/open', openArgs, sock);
+      return cliReq('POST', '/open', openArgs, sock, defaultCliTimeoutMs());
     },
     snapshot:   () => cliReq('GET', `/snapshot/${args[0]}`, null, sock),
     cdp:        () => cmdCdp(args, sock),
     run:        () => cmdRun(args, sock),
+    batch:      () => cmdBatch(args, sock),
     click:      () => cmdClick(args, sock),
     fill:       () => cliReq('POST', '/fill', { session: args[0], selector: args[1], text: args[2] }, sock),
     type:       () => cliReq('POST', '/type', { session: args[0], text: args[1] }, sock),
@@ -1771,7 +2263,8 @@ const HELP = `chromux — tmux for Chrome tabs
 The core surface:
   chromux open <session> <url>       Create or navigate a tab
   chromux open --background <s> <u>  Explicitly create a background tab
-  chromux run <session> -            Multi-step async JS with cdp/js/sleep/waitLoad
+  chromux run <session> -            Multi-step async JS with cdp/js/page helpers
+  chromux batch --file urls.txt      Crawl URLs through a worker-tab pool
   chromux cdp <session> <M> '{}'     Raw CDP method passthrough
 
 Lifecycle:
@@ -1779,6 +2272,8 @@ Lifecycle:
   chromux launch <name> --headless   Launch in headless mode (no window)
   chromux launch <name> --port N     Launch with specific port
   chromux ps                         List running profiles
+  chromux pause [name]               Hard-stop new tab work for a profile
+  chromux resume [name]              Allow tab work again for a paused profile
   chromux kill <name>                Stop profile (Chrome + daemon)
   chromux stop                       Stop daemon (keeps Chrome)
   chromux close <session>            Close tab
@@ -1808,9 +2303,17 @@ Policy:
 
 Profile selection:
   chromux --profile <name> <cmd>     Use specific profile
+  chromux --mode crawl <cmd>         Use crawl resource policy for this profile daemon
   CHROMUX_PROFILE=<name> chromux     Via environment variable
+  CHROMUX_MODE=crawl chromux         Efficient crawl mode (default mode preserves legacy behavior)
   CHROMUX_OPEN_BACKGROUND=0 chromux open ...    Create new tabs in foreground
   (default profile: "default")
+
+Crawl mode:
+  Caps expensive profile operations, blocks heavy media/font/analytics resources,
+  uses shorter navigation waits, prunes idle sessions, and closes unresponsive
+  sessions so worker-tab pools can keep moving. It also applies resource guards
+  and honors chromux pause/resume hard-stop files.
 
 Paths:
   ~/.chromux/config.json             Global config
@@ -1829,6 +2332,11 @@ Paths:
   if (idx >= 2 && process.argv[idx + 1]) {
     process.env.CHROMUX_PROFILE = process.argv[idx + 1];
     process.argv.splice(idx, 2);
+  }
+  const modeIdx = process.argv.indexOf('--mode');
+  if (modeIdx >= 2 && process.argv[modeIdx + 1]) {
+    process.env.CHROMUX_MODE = process.argv[modeIdx + 1];
+    process.argv.splice(modeIdx, 2);
   }
 }
 
