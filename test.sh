@@ -130,6 +130,9 @@ check "cdp Runtime.evaluate works" '"value"' "$CDP_TITLE"
 RUN_HOST=$(CHROMUX_PROFILE=$PROFILE node "$CT" run tab-a "return await js('location.hostname')" 2>/dev/null)
 check "run async js helper works" "httpbin.org" "$RUN_HOST"
 
+RUN_PAGE=$(CHROMUX_PROFILE=$PROFILE node "$CT" run tab-a "return await page('({url:location.href,title:document.title})')" 2>/dev/null)
+check "run page helper works" "httpbin.org" "$RUN_PAGE"
+
 TMP_PARAMS="/tmp/chromux-cdp-params-$$.json"
 printf '{"expression":"location.hostname","returnByValue":true}' > "$TMP_PARAMS"
 CDP_FILE=$(CHROMUX_PROFILE=$PROFILE node "$CT" cdp tab-a Runtime.evaluate --params-file "$TMP_PARAMS" 2>/dev/null)
@@ -218,6 +221,49 @@ CHROMUX_PROFILE=$PROFILE node "$CT" close tab-fg-env 2>/dev/null > /dev/null
 CHROMUX_PROFILE=$PROFILE node "$CT" close tab-click 2>/dev/null > /dev/null
 LIST2=$(CHROMUX_PROFILE=$PROFILE node "$CT" list 2>/dev/null)
 check "all tabs closed" "{}" "$LIST2"
+
+# --- Test 9b: Crawl batch, pause/resume, and resource guard ---
+echo ""
+echo "--- Test 9b: Crawl orchestration helpers ---"
+BATCH_IN="/tmp/chromux-batch-urls-$$.txt"
+BATCH_OUT="/tmp/chromux-batch-out-$$.jsonl"
+printf 'https://example.com\nhttps://example.org\n' > "$BATCH_IN"
+BATCH=$(CHROMUX_PROFILE=$PROFILE CHROMUX_MODE=crawl node "$CT" batch --file "$BATCH_IN" --workers 2 --out "$BATCH_OUT" --session-prefix batch-test 2>/dev/null)
+check "batch reports total" '"total": 2' "$BATCH"
+check "batch reports success" '"ok": 2' "$BATCH"
+if [ "$(wc -l < "$BATCH_OUT" | tr -d ' ')" = "2" ]; then
+  echo "  ✓ batch wrote JSONL output"
+  PASS=$((PASS+1))
+else
+  echo "  ✗ batch JSONL output count wrong"
+  FAIL=$((FAIL+1))
+fi
+rm -f "$BATCH_IN" "$BATCH_OUT"
+
+PAUSE=$(CHROMUX_PROFILE=$PROFILE node "$CT" pause 2>/dev/null)
+check "pause creates hard stop" '"paused": true' "$PAUSE"
+if CHROMUX_PROFILE=$PROFILE CHROMUX_MODE=crawl node "$CT" open paused-tab https://example.com >/tmp/chromux-paused-out-$$.txt 2>&1; then
+  echo "  ✗ open unexpectedly succeeded while paused"
+  FAIL=$((FAIL+1))
+else
+  PAUSED_OUT=$(cat /tmp/chromux-paused-out-$$.txt)
+  check "paused profile rejects open" "paused" "$PAUSED_OUT"
+fi
+RESUME=$(CHROMUX_PROFILE=$PROFILE node "$CT" resume 2>/dev/null)
+check "resume clears hard stop" '"paused": false' "$RESUME"
+rm -f /tmp/chromux-paused-out-$$.txt
+
+GUARD_PROFILE="$PROFILE-guard"
+if CHROMUX_PROFILE=$GUARD_PROFILE CHROMUX_MODE=crawl CHROMUX_MAX_CHROME_PROCESSES_PER_PROFILE=1 node "$CT" open guard-tab https://example.com >/tmp/chromux-guard-out-$$.txt 2>&1; then
+  echo "  ✗ resource guard open unexpectedly succeeded"
+  FAIL=$((FAIL+1))
+else
+  GUARD_OUT=$(cat /tmp/chromux-guard-out-$$.txt)
+  check "resource guard rejects open" "resource guard" "$GUARD_OUT"
+fi
+node "$CT" kill "$GUARD_PROFILE" 2>/dev/null > /dev/null || true
+chmod -R u+rwX "$HOME/.chromux/profiles/$GUARD_PROFILE" 2>/dev/null || true
+rm -rf "$HOME/.chromux/profiles/$GUARD_PROFILE" /tmp/chromux-guard-out-$$.txt
 
 # --- Test 10: Kill profile ---
 echo ""

@@ -58,12 +58,67 @@ Run `chromux help` for exact syntax. The day-to-day mental model is:
 - `snapshot` returns an accessibility tree with `@ref` handles.
 - `click`, `fill`, and `type` are convenience shortcuts for visible interaction.
 - `run` executes multi-step async JavaScript with `cdp`, `js`, `sleep`, and
-  `waitLoad` helpers.
+  `waitLoad` helpers. It also exposes `page(expr?)` for common page metadata.
+- `batch --file urls.txt --workers N --out results.jsonl` processes URL lines or
+  JSONL rows through a worker-tab pool in the current profile.
 - `cdp` sends one raw Chrome DevTools Protocol method.
 - `watch` reads console and network diagnostics.
 - `screenshot` saves visual evidence.
 - `show` opens DevTools for a live tab.
 - `close`, `list`, `launch`, `ps`, `kill`, and `stop` manage sessions/profiles.
+- `pause` and `resume` hard-stop or allow new browser work for a profile.
+
+## Modes
+
+Use the default mode for QA, visual verification, login flows, and tasks where
+Chrome should behave as much like a human-driven tab as possible.
+
+Use `crawl` mode for efficient read-only collection:
+
+```bash
+CHROMUX_MODE=crawl CHROMUX_PROFILE=work /path/to/chromux open worker-1 https://example.com
+```
+
+In crawl mode, prefer a small worker-tab pool: reuse 3 to 5 stable session names
+and repeatedly `open` new URLs in those sessions. Reusing a session navigates the
+same tab instead of creating another Chrome renderer.
+
+For a URL batch, prefer the built-in queue:
+
+```bash
+CHROMUX_MODE=crawl CHROMUX_PROFILE=work /path/to/chromux batch --file urls.txt --workers 10 --out results.jsonl
+```
+
+If a parent orchestration decides to stop a wave, use:
+
+```bash
+CHROMUX_PROFILE=work /path/to/chromux pause
+CHROMUX_PROFILE=work /path/to/chromux resume
+```
+
+Crawl mode adds resource guardrails: capped expensive operations, capped active
+sessions, media/font/analytics blocking, shorter navigation waits, initial blank
+tab cleanup, idle session cleanup, optional worker-tab recycling, and automatic
+closure of CDP-unresponsive sessions. It can opt into crawl-only renderer
+compaction flags for iframe-heavy process growth. Tune with:
+
+- `CHROMUX_MAX_CONCURRENT_OPS_PER_PROFILE` (default `4`)
+- `CHROMUX_MAX_QUEUED_OPS_PER_PROFILE` (default `16`)
+- `CHROMUX_MAX_SESSIONS_PER_PROFILE` (default `12`)
+- `CHROMUX_IDLE_TTL_MS` (default `20000`)
+- `CHROMUX_SESSION_TTL_MS` (default `300000`)
+- `CHROMUX_NAVIGATION_WAIT_MS` (default `5000`)
+- `CHROMUX_MAX_CHROME_PROCESSES_PER_PROFILE` (default `60`)
+- `CHROMUX_MAX_RENDERERS_PER_PROFILE` (default `40`)
+- `CHROMUX_MAX_RSS_MB_PER_PROFILE` (default `12000`)
+- `CHROMUX_BLOCK_RESOURCES=0` to disable resource blocking
+- `CHROMUX_CLOSE_INITIAL_TABS=0` to keep launch-created blank/new-tab targets
+- `CHROMUX_MAX_NAVIGATIONS_PER_SESSION` (default `0`; opt in carefully because
+  recycling can increase short-term renderer peaks)
+- `CHROMUX_COMPACT_RENDERERS=1` for iframe-heavy crawls after testing the target
+  site
+- `CHROMUX_RENDERER_PROCESS_LIMIT` (default `8`) for crawl compact mode
+- `CHROMUX_EXTRA_CHROME_ARGS` for explicit launch-flag experiments
 
 Older aliases such as `eval`, `scroll`, `wait`, `console`, `network`, and
 `scroll-until` may still work for compatibility, but do not teach them as the
@@ -90,6 +145,15 @@ Use `cdp` for a single raw protocol call:
 `run` is intentionally small. It does not expose Node `import` or `require`.
 Reusable browser logic should be a copied `run` script, a checked-in helper
 example, or a future chromux helper, not an ad hoc hidden module load.
+
+`run` executes in the runner context, not directly inside the page. Use `js(...)`
+for page expressions or `page(...)` for common page metadata:
+
+```bash
+/path/to/chromux run exp-ab12 - <<'JS'
+return await page('({url:location.href,title:document.title,textLength:document.body.innerText.length})');
+JS
+```
 
 ## Builtin Runner Snippets
 

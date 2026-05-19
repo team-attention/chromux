@@ -59,6 +59,63 @@ chromux close agent-b
 chromux kill default
 ```
 
+## Modes
+
+chromux defaults to the compatibility-oriented `default` mode. It preserves the
+legacy browser behavior and is the right choice for QA, visual checks, login
+flows, and tasks where the page should behave as much like a normal human-driven
+Chrome tab as possible.
+
+For crawling, use `crawl` mode:
+
+```bash
+CHROMUX_MODE=crawl chromux launch crawl-news --headless
+CHROMUX_MODE=crawl CHROMUX_PROFILE=crawl-news chromux open worker-1 https://news.ycombinator.com
+CHROMUX_MODE=crawl CHROMUX_PROFILE=crawl-news chromux open worker-1 https://example.com
+CHROMUX_MODE=crawl CHROMUX_PROFILE=crawl-news chromux close worker-1
+```
+
+For URL batches, use the same crawl mode with `batch`:
+
+```bash
+CHROMUX_MODE=crawl CHROMUX_PROFILE=crawl-news \
+  chromux batch --file urls.txt --workers 10 --out results.jsonl
+```
+
+`batch` reads plain URL lines or JSONL rows with `url`, `source_url`, or `href`,
+reuses a worker-tab pool, writes one JSON result per URL, and closes worker
+sessions when done.
+
+`crawl` mode keeps the public command surface the same, but changes the profile
+daemon policy:
+
+- caps expensive profile operations (`CHROMUX_MAX_CONCURRENT_OPS_PER_PROFILE`,
+  default `4`)
+- caps active sessions (`CHROMUX_MAX_SESSIONS_PER_PROFILE`, default `12`)
+- blocks common heavy media, font, and analytics resources
+- uses shorter navigation waits (`CHROMUX_NAVIGATION_WAIT_MS`, default `5000`)
+- closes idle/stale sessions
+- closes CDP-unresponsive sessions so a worker tab can continue with later URLs
+- closes initial blank/new-tab targets created during crawl-mode launch
+- rejects new work when queue or resource guards are exceeded
+- supports `chromux pause` / `chromux resume` as a profile hard-stop
+- can optionally recycle long-lived worker tabs after a bounded number of
+  navigations
+- can optionally compact renderer growth for iframe-heavy crawl pages
+
+For best crawling throughput, use a small worker-tab pool instead of one tab per
+URL. For example, process 20 URLs through 3 to 5 stable session names and
+repeatedly call `open` on those sessions. Reusing a session navigates the same
+tab instead of creating another renderer.
+
+If an orchestrator needs to stop a wave, pause the profile. Existing `close`,
+`list`, and `stop` still work, but new browser work is rejected until resumed:
+
+```bash
+CHROMUX_PROFILE=crawl-news chromux pause
+CHROMUX_PROFILE=crawl-news chromux resume
+```
+
 ## Profile Management
 
 Each profile is an isolated Chrome instance with its own user-data-dir, logins, cookies, and extensions.
@@ -93,13 +150,14 @@ chromux kill work
 chromux intentionally keeps the visible command surface small. When a new browser
 operation is needed, express it with `run` or `cdp` before adding another verb.
 
-### The 3 You Actually Need
+### Core Commands
 
 | Command | Description |
 |---------|-------------|
 | `open <session> <url>` | Create or navigate a tab |
 | `open --background <session> <url>` | Explicitly create a new tab without activating it |
 | `run <session> <code\|--file PATH\|->` | Run multi-step async JS with `cdp`, `js`, `sleep`, and `waitLoad` helpers |
+| `batch --file urls.txt --workers N --out results.jsonl` | Crawl URLs through a worker-tab pool |
 | `cdp <session> <Method> <params-json>` | Send one raw CDP method to a session |
 
 `run` scripts execute in an async function context:
@@ -109,6 +167,15 @@ chromux run s - <<'JS'
 await cdp('Page.navigate', { url: 'https://example.com' });
 await waitLoad();
 return await js('document.title');
+JS
+```
+
+`run` executes in the runner context, not directly inside the page. Use `js(...)`
+for page expressions or `page(...)` for common page metadata:
+
+```bash
+chromux run s - <<'JS'
+return await page('({url:location.href,title:document.title,textLength:document.body.innerText.length})');
 JS
 ```
 
@@ -125,6 +192,8 @@ chromux cdp s Runtime.evaluate '{"expression":"navigator.userAgent","returnByVal
 | `launch [name]` | Launch Chrome with isolated profile (default: "default") |
 | `launch <name> --port N` | Launch with specific port |
 | `ps` | List running profiles |
+| `pause [name]` | Hard-stop new browser work for a profile |
+| `resume [name]` | Allow browser work again for a paused profile |
 | `kill <name>` | Stop profile (Chrome + daemon) |
 | `close <session>` | Close tab |
 | `list` | List active sessions in current profile |
@@ -237,8 +306,25 @@ chromux open --foreground tab https://example.com
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CHROMUX_PROFILE` | `default` | Active profile name |
+| `CHROMUX_MODE` | `default` | Browser policy mode: `default` for compatibility/QA, `crawl` for efficient crawling |
 | `CHROMUX_LAUNCH_MODE` | `headless` for auto-launch | Auto-launch mode used by tab commands when a profile is not running: `headless` or `headed` |
 | `CHROMUX_OPEN_BACKGROUND` | `1` | New tabs are created through `Target.createTarget({ background: true })` by default. Set to `0`, `false`, `no`, or `off`, or pass `open --foreground`, to activate new tabs instead |
+| `CHROMUX_MAX_CONCURRENT_OPS_PER_PROFILE` | `4` in crawl, unlimited in default | Maximum expensive daemon operations running at once |
+| `CHROMUX_MAX_QUEUED_OPS_PER_PROFILE` | `16` in crawl, unlimited in default | Maximum queued expensive operations before new requests are rejected |
+| `CHROMUX_MAX_SESSIONS_PER_PROFILE` | `12` in crawl, unlimited in default | Maximum active sessions before new sessions are rejected |
+| `CHROMUX_IDLE_TTL_MS` | `20000` in crawl, disabled in default | Idle session age before the daemon closes the tab |
+| `CHROMUX_SESSION_TTL_MS` | `300000` in crawl, disabled in default | Maximum session age before the daemon closes the tab |
+| `CHROMUX_NAVIGATION_WAIT_MS` | `5000` in crawl, `30000` in default | Navigation wait budget for `open` |
+| `CHROMUX_MAX_CHROME_PROCESSES_PER_PROFILE` | `60` in crawl, disabled in default | Reject new opens when profile Chrome process count reaches this value |
+| `CHROMUX_MAX_RENDERERS_PER_PROFILE` | `40` in crawl, disabled in default | Reject new opens when profile renderer count reaches this value |
+| `CHROMUX_MAX_RSS_MB_PER_PROFILE` | `12000` in crawl, disabled in default | Reject new opens when profile Chrome RSS reaches this value |
+| `CHROMUX_BLOCK_RESOURCES` | `1` in crawl | Set to `0` to disable crawl mode media/font/analytics blocking |
+| `CHROMUX_CLOSE_INITIAL_TABS` | `1` in crawl | Set to `0` to keep initial blank/new-tab targets on launch |
+| `CHROMUX_MAX_NAVIGATIONS_PER_SESSION` | `0` | Recreate a worker tab after this many `open` navigations; disabled by default because it can raise short-term renderer peaks |
+| `CHROMUX_COMPACT_RENDERERS` | `0` | Opt into crawl-only Chrome flags that reduce renderer growth on iframe-heavy pages; keep disabled for broad compatibility |
+| `CHROMUX_RENDERER_PROCESS_LIMIT` | `8` in compact mode | Renderer process cap passed to Chrome when compact renderer mode is enabled |
+| `CHROMUX_EXTRA_CHROME_ARGS` | empty | Extra Chrome launch args, split like shell words |
+| `CHROMUX_CLI_TIMEOUT_MS` | `90000` in crawl, `30000` in default | Default CLI request timeout for commands such as `open` |
 
 ## License
 

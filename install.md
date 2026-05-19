@@ -236,6 +236,7 @@ Run a short local smoke before using chromux in a task:
 chromux launch chromux-smoke --headless
 CHROMUX_PROFILE=chromux-smoke chromux open smoke https://example.com
 CHROMUX_PROFILE=chromux-smoke chromux run smoke "return await js('document.title')"
+CHROMUX_PROFILE=chromux-smoke chromux run smoke "return await page('({title:document.title,url:location.href})')"
 CHROMUX_PROFILE=chromux-smoke chromux cdp smoke Runtime.evaluate '{"expression":"location.href","returnByValue":true}'
 CHROMUX_PROFILE=chromux-smoke chromux close smoke
 chromux kill chromux-smoke
@@ -313,6 +314,44 @@ chromux kill <profile>
 
 chromux stores isolated profile state under `~/.chromux/profiles/<profile>/`
 and transient daemon sockets/locks under `~/.chromux/run/`.
+
+### Switch between default and crawl mode
+
+`CHROMUX_MODE` is a daemon policy for a profile. Use `default` for QA/login/visual
+work, and `crawl` for efficient read-only collection:
+
+```bash
+CHROMUX_MODE=crawl CHROMUX_PROFILE=work chromux open worker-1 https://example.com
+```
+
+If a profile daemon is already running in another mode, stop the daemon or kill
+the profile before switching:
+
+```bash
+CHROMUX_PROFILE=work chromux stop
+CHROMUX_MODE=crawl CHROMUX_PROFILE=work chromux open worker-1 https://example.com
+```
+
+For crawl throughput, reuse a small worker-tab pool instead of creating one tab
+per URL. Tune limits with `CHROMUX_MAX_CONCURRENT_OPS_PER_PROFILE`,
+`CHROMUX_MAX_QUEUED_OPS_PER_PROFILE`, `CHROMUX_MAX_SESSIONS_PER_PROFILE`,
+`CHROMUX_IDLE_TTL_MS`, `CHROMUX_NAVIGATION_WAIT_MS`,
+`CHROMUX_MAX_RENDERERS_PER_PROFILE`, `CHROMUX_MAX_CHROME_PROCESSES_PER_PROFILE`,
+and `CHROMUX_MAX_RSS_MB_PER_PROFILE`.
+
+For URL-only queues, prefer the built-in worker pool:
+
+```bash
+CHROMUX_MODE=crawl CHROMUX_PROFILE=work chromux batch --file urls.txt --workers 10 --out results.jsonl
+```
+
+To stop a crawl wave without killing Chrome, pause the profile. New browser
+work is rejected until resumed, while `list`, `close`, and `stop` still work:
+
+```bash
+CHROMUX_PROFILE=work chromux pause
+CHROMUX_PROFILE=work chromux resume
+```
 
 ### A site asks for login
 

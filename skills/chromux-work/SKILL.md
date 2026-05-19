@@ -26,6 +26,12 @@ skill and `chromux help`.
   use unique session names.
 - Recon first. Do not fan out before checking login state, page shape, blockers,
   site hints, and whether the task is parallel-safe.
+- For crawling, use `CHROMUX_MODE=crawl` and a small worker-tab pool instead of
+  one tab per URL. Default recommendation: 3 to 5 worker sessions per profile.
+- For plain URL batches, prefer `chromux batch --file urls.txt --workers N`
+  instead of asking subagents to hand-roll `open`/`run` loops.
+- For parent-controlled shutdown, use `chromux pause <profile>` to reject new
+  browser work, then `chromux resume <profile>` before the next wave.
 - Keep work read-only unless the user explicitly asked to mutate state.
 - Close every session you open. Do not suppress `chromux close` output unless
   the user explicitly asked for silence.
@@ -71,6 +77,22 @@ tabs are background by default so they should not steal focus:
 Use `CHROMUX_PROFILE=<profile>` or `--profile <profile>` for every tab command.
 Use `open --foreground` only when bringing Chrome to the front is intentional.
 
+For efficient read-only crawling, launch/use the same profile with crawl mode:
+
+```bash
+CHROMUX_MODE=crawl /path/to/chromux launch <profile> --headless
+```
+
+Use `CHROMUX_MODE=crawl` on every command for that profile. If a profile daemon
+is already running in another mode, stop it first with `chromux stop` or use a
+fresh profile.
+
+For URL-only queues, use the built-in batch worker pool:
+
+```bash
+CHROMUX_MODE=crawl CHROMUX_PROFILE=<profile> /path/to/chromux batch --file urls.txt --workers 10 --out results.jsonl
+```
+
 ## 2. Recon Pass
 
 Open one recon session before planning the work split:
@@ -99,6 +121,15 @@ Parallelize only when all are true:
 - no form submission, settings change, purchase, messaging, or account mutation
 - rate-limit or bot-risk is acceptable
 
+Hard limits for browser fan-out:
+- default/QA work: keep browser sessions low and prefer single-agent operation
+- crawl mode: use 3 to 5 worker sessions per profile
+- never create one browser tab per URL for large crawls
+- avoid more than 12 active sessions in one profile unless the user explicitly
+  asked to stress test resource limits
+- if a wave must stop, create the profile hard-stop before messaging workers:
+  `CHROMUX_PROFILE=<profile> /path/to/chromux pause`
+
 Do not parallelize when the task depends on one evolving UI state, a single
 modal/login flow, or a fragile site that throttles quickly.
 
@@ -115,8 +146,8 @@ When using subagents, give each one:
 Example assignment:
 
 ```text
-Use CHROMUX_PROFILE=default for every command.
-Use session names worker-a-* only.
+Use CHROMUX_MODE=crawl and CHROMUX_PROFILE=default for every command.
+Use session names worker-a-1 through worker-a-3 only; reuse them for all URLs.
 Collect public posts for query "vibe coding"; do not mutate the account.
 Close opened sessions and include any knowledgeHint in your report.
 ```
