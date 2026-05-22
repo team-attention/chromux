@@ -1037,21 +1037,30 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     if (!session || code == null) throw httpErr(400, 'session and code required');
     const s = getSession(sessions, session);
     touchSession(s);
-    const defaultCdpTimeout = settings.mode === 'crawl' ? 5000 : undefined;
-    const defaultJsTimeout = settings.mode === 'crawl' ? 3000 : undefined;
-    const cdp = (m, p = {}, t) => s.cdp.send(m, p, t || defaultCdpTimeout);
+    const requestedTimeout = (typeof timeoutMs === 'number' && timeoutMs > 0) ? timeoutMs : undefined;
+    const defaultCdpTimeout = requestedTimeout ?? (settings.mode === 'crawl' ? 5000 : undefined);
+    const defaultJsTimeout = requestedTimeout ?? (settings.mode === 'crawl' ? 3000 : undefined);
+    const cdp = (m, p = {}, t) => s.cdp.send(m, p, t ?? defaultCdpTimeout);
     const evalJs = async (expr, t) => {
-      const r = await s.cdp.send('Runtime.evaluate', {
-        expression: expr,
+      const evalTimeout = t ?? defaultJsTimeout;
+      let r = await s.cdp.send('Runtime.evaluate', {
+        expression: isolatePageExpression(expr),
         returnByValue: true,
         awaitPromise: true,
-      }, t || defaultJsTimeout);
+      }, evalTimeout);
+      if (r.exceptionDetails && isLikelyPageExpressionSyntaxError(r.exceptionDetails)) {
+        r = await s.cdp.send('Runtime.evaluate', {
+          expression: isolatePageBlock(expr),
+          returnByValue: true,
+          awaitPromise: true,
+        }, evalTimeout);
+      }
       if (r.exceptionDetails) {
         throw new Error(r.exceptionDetails.exception?.description || r.exceptionDetails.text || 'js error');
       }
       return r.result.value;
     };
-    const waitLoad = (ms = 30000) => s.cdp.waitForEvent('Page.loadEventFired', ms);
+    const waitLoad = (ms = (requestedTimeout ?? 30000)) => s.cdp.waitForEvent('Page.loadEventFired', ms);
     const page = async (expr, t) => {
       const pageExpr = expr || `({
         url: location.href,
@@ -2244,6 +2253,22 @@ function readBody(req) {
       catch { reject(httpErr(400, 'Invalid JSON in request body')); }
     });
   });
+}
+function isolatePageExpression(expr) {
+  return `(() => (\n${String(expr)}\n))()`;
+}
+function isolatePageBlock(expr) {
+  return `(async () => {\n${String(expr)}\n})()`;
+}
+function exceptionDetailsText(details) {
+  return [
+    details?.exception?.description,
+    details?.exception?.value,
+    details?.text,
+  ].filter(Boolean).join('\n');
+}
+function isLikelyPageExpressionSyntaxError(details) {
+  return /SyntaxError|Unexpected token|Unexpected identifier|Invalid or unexpected token|missing \)/i.test(exceptionDetailsText(details));
 }
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 function withTimeout(promise, ms, message) {

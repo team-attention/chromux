@@ -273,6 +273,10 @@ npm install -g .
 chromux help
 ```
 
+The global `chromux` command runs the package copy installed by npm or pnpm; it
+does not automatically follow local edits in the checkout until you reinstall
+from that checkout.
+
 If a running daemon appears stale after an update, stop the profile and retry:
 
 ```bash

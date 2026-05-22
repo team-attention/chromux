@@ -155,6 +155,12 @@ return await page('({url:location.href,title:document.title,textLength:document.
 JS
 ```
 
+`js(...)` runs page code in an isolated function scope, so lexical declarations
+such as `const input = ...` do not leak into later `js(...)` calls for the same
+tab. When `chromux run --timeout MS` is provided, that timeout is also used as
+the default CDP timeout for `js(...)`, `cdp(...)`, and `page(...)` helper calls
+unless the helper call passes its own timeout.
+
 ## Builtin Runner Snippets
 
 Before recreating common browser loops, check the bundled snippets under
@@ -217,6 +223,8 @@ Bad site knowledge:
   chromux path and session ID literally.
 - A successful `open` means the browser navigated, not that the page is ready
   for the intended task. Use `snapshot`, `run`, or `watch` to verify state.
+- For long page-side promises inside `run`, pass `--timeout MS`; the value now
+  applies to the outer run and to default helper CDP calls.
 - Prefer `@ref` clicks over CSS selectors for normal page interaction.
 - Coordinate click is available when visual geometry is the right tool:
   `<chromux> click exp-ab12 --xy X Y`.

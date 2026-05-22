@@ -133,6 +133,16 @@ check "run async js helper works" "httpbin.org" "$RUN_HOST"
 RUN_PAGE=$(CHROMUX_PROFILE=$PROFILE node "$CT" run tab-a "return await page('({url:location.href,title:document.title})')" 2>/dev/null)
 check "run page helper works" "httpbin.org" "$RUN_PAGE"
 
+RUN_TIMEOUT_PROPAGATES=$(CHROMUX_PROFILE=$PROFILE node "$CT" run tab-a --timeout 15000 "return await js('new Promise(resolve => setTimeout(() => resolve(location.hostname), 11000))')" 2>/dev/null)
+check "run --timeout propagates to js helper" "httpbin.org" "$RUN_TIMEOUT_PROPAGATES"
+
+RUN_JS_ISOLATED=$(CHROMUX_PROFILE=$PROFILE node "$CT" run tab-a - <<'JS' 2>/dev/null
+await js('const input = 1; return input;');
+return await js('const input = 2; return input;');
+JS
+)
+check "run js helper isolates lexical declarations" "2" "$RUN_JS_ISOLATED"
+
 TMP_PARAMS="/tmp/chromux-cdp-params-$$.json"
 printf '{"expression":"location.hostname","returnByValue":true}' > "$TMP_PARAMS"
 CDP_FILE=$(CHROMUX_PROFILE=$PROFILE node "$CT" cdp tab-a Runtime.evaluate --params-file "$TMP_PARAMS" 2>/dev/null)
