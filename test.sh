@@ -174,6 +174,16 @@ CHROMUX_PROFILE=$PROFILE node "$CT" eval tab-a "const __chromux_iife_probe = 42;
 EVAL_IIFE_SCOPED=$(CHROMUX_PROFILE=$PROFILE node "$CT" eval tab-a "typeof __chromux_iife_probe" 2>/dev/null)
 check "top-level const stays scoped to IIFE" "undefined" "$EVAL_IIFE_SCOPED"
 
+# Top-level const preceded by leading comments must still be IIFE-wrapped.
+CHROMUX_PROFILE=$PROFILE node "$CT" eval tab-a "$(cat <<'JS'
+// leading single-line comment
+/* and a block comment */
+const __chromux_iife_probe_comment = 99;
+JS
+)" >/dev/null 2>&1 || true
+EVAL_IIFE_COMMENT_SCOPED=$(CHROMUX_PROFILE=$PROFILE node "$CT" eval tab-a "typeof __chromux_iife_probe_comment" 2>/dev/null)
+check "top-level const with leading comments stays scoped" "undefined" "$EVAL_IIFE_COMMENT_SCOPED"
+
 # --- Test 5c: click --xy ---
 echo ""
 echo "--- Test 5c: Coordinate click ---"

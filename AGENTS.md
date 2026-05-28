@@ -38,6 +38,12 @@ Before committing, pushing, tagging, or publishing a final chromux change:
 
 - Run `git status --short` and confirm the staged files are only the intended
   repo changes.
+- Bump `package.json` `version` (patch for bug fixes, minor for new features,
+  major for breaking CLI changes). `.github/workflows/npm-publish.yml` runs on
+  every push to `main` and will fail with `<pkg>@<version> is already published`
+  if the version was not bumped — so the bump is a release gate, not just
+  hygiene. Bumping in the same PR as the change keeps the publish trigger
+  one merge away.
 - Run `node chromux.mjs help` and confirm the documented public command surface
   matches the CLI output.
 - Run `./test.sh` for behavioral coverage.

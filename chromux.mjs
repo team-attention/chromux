@@ -1824,7 +1824,14 @@ async function cmdEval(args, sock) {
   // Match only at the start of the code — `m` flag would match `const` inside nested
   // function bodies of an expression (e.g. `JSON.stringify([...].map(x => { const y = ... }))`)
   // and wrong-wrap the expression, swallowing its return value.
-  if (!noIife && /^\s*(?:const|let|var|async|function)\s/.test(code) && !/^\s*\(/.test(code)) {
+  // Strip leading comments first so `// note\nconst x = ...` still gets wrapped.
+  let probe = code;
+  while (true) {
+    const stripped = probe.replace(/^\s*(?:\/\*[\s\S]*?\*\/|\/\/.*(?:\r?\n|$))/, '');
+    if (stripped === probe) break;
+    probe = stripped;
+  }
+  if (!noIife && /^\s*(?:const|let|var|async|function)\s/.test(probe) && !/^\s*\(/.test(probe)) {
     code = `(async () => { ${code} })()`;
   }
   const httpTimeout = (timeoutMs ? timeoutMs : 30000) + 5000;
