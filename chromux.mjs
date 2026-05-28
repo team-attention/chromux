@@ -1821,8 +1821,10 @@ async function cmdEval(args, sock) {
   }
   if (code == null) { console.error('No code provided'); process.exit(1); }
   // Auto-wrap top-level statements in an IIFE so const/let don't pollute global REPL scope.
-  // Skip wrapping for already-wrapped expressions (`(...)`) or single statements without const/let.
-  if (!noIife && /^\s*(?:const|let|var|async|function)\s/m.test(code) && !/^\s*\(/.test(code)) {
+  // Match only at the start of the code — `m` flag would match `const` inside nested
+  // function bodies of an expression (e.g. `JSON.stringify([...].map(x => { const y = ... }))`)
+  // and wrong-wrap the expression, swallowing its return value.
+  if (!noIife && /^\s*(?:const|let|var|async|function)\s/.test(code) && !/^\s*\(/.test(code)) {
     code = `(async () => { ${code} })()`;
   }
   const httpTimeout = (timeoutMs ? timeoutMs : 30000) + 5000;

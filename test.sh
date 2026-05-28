@@ -155,6 +155,25 @@ CDP_FILE=$(CHROMUX_PROFILE=$PROFILE node "$CT" cdp tab-a Runtime.evaluate --para
 rm -f "$TMP_PARAMS"
 check "cdp --params-file works" "httpbin.org" "$CDP_FILE"
 
+# Regression: multi-line expression containing nested `const` must not be IIFE-wrapped.
+# Previously the IIFE auto-wrap regex used the `m` flag and matched `const` inside nested
+# function bodies, wrapping the top-level expression and swallowing its return value.
+EVAL_MULTILINE_EXPR=$(CHROMUX_PROFILE=$PROFILE node "$CT" eval tab-a "$(cat <<'JS'
+JSON.stringify(
+  [1,2,3].map(x => {
+    const y = x * 2;
+    return y;
+  })
+)
+JS
+)" 2>/dev/null)
+check "eval returns value of multi-line expression with nested const" "2,4,6" "$EVAL_MULTILINE_EXPR"
+
+# Top-level const must still be IIFE-wrapped (no global REPL pollution).
+CHROMUX_PROFILE=$PROFILE node "$CT" eval tab-a "const __chromux_iife_probe = 42;" >/dev/null 2>&1 || true
+EVAL_IIFE_SCOPED=$(CHROMUX_PROFILE=$PROFILE node "$CT" eval tab-a "typeof __chromux_iife_probe" 2>/dev/null)
+check "top-level const stays scoped to IIFE" "undefined" "$EVAL_IIFE_SCOPED"
+
 # --- Test 5c: click --xy ---
 echo ""
 echo "--- Test 5c: Coordinate click ---"
