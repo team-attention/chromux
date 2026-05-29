@@ -17,7 +17,9 @@ CLI surface for tab work, multi-step JavaScript, raw CDP, screenshots, and
 diagnostics.
 
 For setup, installation, or connection problems, read the repo's `install.md`.
-For multi-step browser work orchestration, use the `chromux-work` skill. For the
+For multi-step browser work orchestration, use the Browser Work Orchestration
+reference in this skill (`references/browser-work-orchestration-full.md`; the
+shorter `references/browser-work-orchestration.md` is a quick version). For the
 current command surface, run `chromux help`; it is the source of truth.
 
 ## First Rule

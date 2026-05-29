@@ -145,6 +145,12 @@ chromux open my-tab https://...  # → uses "default" profile (auto-launches if 
 chromux kill work
 ```
 
+On macOS, chromux may be invoked from agent runtimes that set `HOME` to a
+synthetic profile directory. Chrome's `--user-data-dir` still controls browser
+profile isolation, but the Chrome child process is launched with the real macOS
+account home so Chrome can initialize its per-user framework services and expose
+the DevTools/CDP port reliably.
+
 ## Commands
 
 chromux intentionally keeps the visible command surface small. When a new browser
@@ -273,6 +279,9 @@ CLI / AI agents
 - **Cold-start coordination** — concurrent first `open` calls for the same profile
   share one startup lock so only one process launches Chrome and the daemon while
   the others wait for the profile socket to become healthy.
+- **macOS agent-home compatibility** — chromux state follows the invoking
+  process `HOME`, while the Chrome child uses the real account home on macOS;
+  `--user-data-dir` still keeps the Chrome profile isolated
 
 ## Configuration
 

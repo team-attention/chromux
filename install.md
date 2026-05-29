@@ -287,6 +287,26 @@ chromux kill <profile>
 If the checkout has uncommitted changes, do not overwrite them. Report the dirty
 files and let the user decide whether to keep, commit, or discard them.
 
+## Publishing
+
+The npm package is published by the GitHub Actions workflow at
+`.github/workflows/npm-publish.yml` when a commit lands on `main` with a new
+`package.json` version. The workflow validates `node --check`, `chromux help`,
+skill files, built-in snippets, and `npm pack --dry-run`, then runs
+`npm publish --provenance` using the repository `NPM_TOKEN` secret.
+
+For a publishable fix:
+
+```bash
+node chromux.mjs help
+./test.sh
+npm pack --dry-run
+git status --short
+```
+
+Then bump `package.json`, commit, and push to `main`. Do not run `npm publish`
+locally unless the user explicitly requests a local/manual publish.
+
 ## Troubleshooting
 
 ### `chromux` is not found
@@ -306,6 +326,17 @@ Then reinstall from the repo checkout with `npm install -g .` or
 Install Google Chrome. chromux currently searches common macOS/Linux Chrome and
 Chromium paths. The supported validation target for this installer is
 macOS/Linux; Windows support is deferred.
+
+### Chrome starts but CDP/DevTools never opens on macOS
+
+If `chromux open` hangs or `http://127.0.0.1:<port>/json/version` refuses a
+connection even though the Chrome process is alive, check whether the agent
+runtime is using a synthetic `HOME` such as a Hermes profile home. chromux 0.7.4+
+keeps chromux state under the invoking process `HOME` but launches the Chrome
+child with the real macOS account home from `os.userInfo().homedir`; the
+explicit `--user-data-dir` still provides Chrome profile isolation. Older
+chromux versions may need to be updated before CDP becomes reachable in that
+environment.
 
 ### Profile is locked or stale
 

@@ -32,6 +32,17 @@ npm pack --dry-run
 `npm pack --dry-run` should include only the package allowlist from
 `package.json`; local planning or handoff artifacts should not be published.
 
+## Release / Publish
+
+Publishing is handled by `.github/workflows/npm-publish.yml` on pushes to
+`main` and by manual `workflow_dispatch`. The workflow validates the package,
+checks whether the exact `package.json` version is already present on npm, and
+then runs `npm publish --provenance` with the repository `NPM_TOKEN` secret.
+
+Before pushing a publishable change, bump `package.json` to a version that is not
+already published. Do not publish manually from a local machine unless the user
+explicitly asks for it; the repo workflow is the deployment path.
+
 ## Pre-Publish Checklist
 
 Before committing, pushing, tagging, or publishing a final chromux change:
@@ -49,6 +60,8 @@ Before committing, pushing, tagging, or publishing a final chromux change:
 - Run `./test.sh` for behavioral coverage.
 - Run `npm pack --dry-run` and confirm the tarball contains only the package
   allowlist from `package.json`.
+- For publishable fixes, bump `package.json` before pushing; the GitHub Actions
+  workflow publishes on `main` when the version is new.
 - If behavior changed, update the matching docs and skills in the same change:
   `README.md`, `install.md`, `skills/chromux/`, and `skills/chromux-work/`.
 - Before finalizing, read `install.md` and the relevant files under `skills/`

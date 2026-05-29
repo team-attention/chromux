@@ -1576,10 +1576,25 @@ function parseOpenArgs(args) {
   return { session: out[0], url: out[1], background };
 }
 
+function chromeLaunchEnv() {
+  const env = { ...process.env };
+  // On macOS, Google Chrome may start but never expose the DevTools HTTP port
+  // when HOME is an agent/runtime synthetic home (for example Hermes profile
+  // homes). The explicit --user-data-dir still provides browser-profile
+  // isolation, so give Chrome the real account home for macOS framework and
+  // per-user service lookups while keeping chromux state under process HOME.
+  if (process.platform === 'darwin') {
+    const accountHome = os.userInfo().homedir;
+    if (accountHome) env.HOME = accountHome;
+  }
+  return env;
+}
+
 function spawnChrome(chrome, chromeArgs) {
   return spawn(chrome, chromeArgs, {
     detached: true,
     stdio: 'ignore',
+    env: chromeLaunchEnv(),
   });
 }
 
