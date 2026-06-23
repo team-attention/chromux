@@ -871,6 +871,21 @@ function shouldRecycleSession(session, settings) {
     && (session.navigations || 0) >= settings.maxNavigationsPerSession;
 }
 
+const KEY_DEFS = {
+  Enter: { key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13, text: '\r' },
+  Tab: { key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9, nativeVirtualKeyCode: 9 },
+  Escape: { key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 },
+  Backspace: { key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8, nativeVirtualKeyCode: 8 },
+};
+
+async function pressKey(cdp, key) {
+  const def = KEY_DEFS[key];
+  if (!def) throw httpErr(400, `Unsupported key "${key}". Supported keys: ${Object.keys(KEY_DEFS).join(', ')}`);
+  await cdp.send('Page.bringToFront', {});
+  await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', ...def });
+  await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', ...def });
+}
+
 function enforceResourceGuard(settings) {
   if (settings.mode !== 'crawl' || !settings.profileName) return;
   const resources = profileResourceSnapshot(settings.profileName);
@@ -897,9 +912,10 @@ async function closeUnhealthySession(port, sessions, sessionId, session, reason)
 
 async function navigateSession(cdp, url, settings) {
   if (settings.mode !== 'crawl') {
-    const loaded = cdp.waitForEvent('Page.loadEventFired', 30000);
+    const loaded = cdp.waitForEvent('Page.loadEventFired', 30000).then(() => null, err => err);
     await cdp.send('Page.navigate', { url });
-    await loaded;
+    const loadError = await loaded;
+    if (loadError) throw loadError;
     return;
   }
 
@@ -1133,6 +1149,15 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
       const [x, y] = xy.map(Number);
       if (!Number.isFinite(x) || !Number.isFinite(y)) throw httpErr(400, 'xy must contain numeric x/y');
       const clickCount = Number.isFinite(Number(clicks)) ? Number(clicks) : 1;
+      await s.cdp.send('Page.bringToFront', {});
+      const viewport = await s.cdp.send('Runtime.evaluate', {
+        expression: '({width: window.innerWidth, height: window.innerHeight})',
+        returnByValue: true,
+      });
+      const { width, height } = viewport.result?.value || {};
+      if (x < 0 || y < 0 || x >= width || y >= height) {
+        throw httpErr(400, `xy outside viewport: [${x}, ${y}] not within ${width}x${height}`);
+      }
       await s.cdp.send('Input.dispatchMouseEvent', {
         type: 'mousePressed', x, y, button, clickCount,
       });
@@ -1146,11 +1171,56 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     const sel = selector.startsWith('@')
       ? `[data-ct-ref="${selector.slice(1)}"]`
       : selector;
+    await s.cdp.send('Page.bringToFront', {});
     const r = await s.cdp.send('Runtime.evaluate', {
-      expression: `(sel => { const el = document.querySelector(sel); if (!el) throw new Error('Element not found: ' + sel); el.click(); return true; })(${JSON.stringify(sel)})`,
+      expression: `((sel) => {
+        function describe(node) {
+          if (!node || node.nodeType !== 1) return String(node);
+          const id = node.id ? '#' + node.id : '';
+          const cls = node.className && typeof node.className === 'string'
+            ? '.' + node.className.trim().split(/\\s+/).filter(Boolean).slice(0, 3).join('.')
+            : '';
+          return node.tagName.toLowerCase() + id + cls;
+        }
+        const el = document.querySelector(sel);
+        if (!el) throw new Error('Element not found: ' + sel);
+        el.scrollIntoView?.({ block: 'center', inline: 'center' });
+        const rect = el.getBoundingClientRect();
+        const style = getComputedStyle(el);
+        const visible = rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+        if (!visible) throw new Error('Click target is not interactable: ' + sel);
+        const x = rect.left + rect.width / 2;
+        const y = rect.top + rect.height / 2;
+        if (x < 0 || y < 0 || x >= window.innerWidth || y >= window.innerHeight) {
+          throw new Error('Click target outside viewport after scroll: ' + sel);
+        }
+        const hit = document.elementFromPoint(x, y);
+        if (!hit) throw new Error('Click target has no element at click point: ' + sel);
+        if (hit !== el && !el.contains(hit)) {
+          throw new Error('Click target is covered: ' + sel + ' hit ' + describe(hit));
+        }
+        return {
+          x,
+          y,
+          hit: describe(hit),
+        };
+      })(${JSON.stringify(sel)})`,
       returnByValue: true, awaitPromise: false,
     });
     if (r.exceptionDetails) throw httpErr(400, r.exceptionDetails.exception?.description || 'click failed');
+    const point = r.result?.value;
+    if (point) {
+      const clickCount = Number.isFinite(Number(clicks)) ? Number(clicks) : 1;
+      await s.cdp.send('Input.dispatchMouseEvent', {
+        type: 'mouseMoved', x: point.x, y: point.y, button: 'none',
+      });
+      await s.cdp.send('Input.dispatchMouseEvent', {
+        type: 'mousePressed', x: point.x, y: point.y, button, clickCount,
+      });
+      await s.cdp.send('Input.dispatchMouseEvent', {
+        type: 'mouseReleased', x: point.x, y: point.y, button, clickCount,
+      });
+    }
     await sleep(500);
     return { clicked: selector };
   }
@@ -1163,7 +1233,29 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
       ? `[data-ct-ref="${selector.slice(1)}"]`
       : selector;
     const r = await s.cdp.send('Runtime.evaluate', {
-      expression: `((sel, txt) => { const el = document.querySelector(sel); if (!el) throw new Error('Element not found: ' + sel); el.focus(); el.value = txt; el.dispatchEvent(new Event('input', {bubbles:true})); return true; })(${JSON.stringify(sel)}, ${JSON.stringify(text)})`,
+      expression: `((sel, txt) => {
+        const el = document.querySelector(sel);
+        if (!el) throw new Error('Element not found: ' + sel);
+        if (!('value' in el)) throw new Error('Element is not fillable: ' + sel);
+        el.focus();
+        const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+        const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set
+          || Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value')?.set;
+        if (setter) setter.call(el, txt);
+        else el.value = txt;
+        try {
+          el.dispatchEvent(new InputEvent('input', {
+            bubbles: true,
+            cancelable: true,
+            inputType: 'insertText',
+            data: txt,
+          }));
+        } catch {
+          el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+        }
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        return { value: el.value };
+      })(${JSON.stringify(sel)}, ${JSON.stringify(text)})`,
       returnByValue: true, awaitPromise: false,
     });
     if (r.exceptionDetails) throw httpErr(400, r.exceptionDetails.exception?.description || 'fill failed');
@@ -1172,21 +1264,61 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
 
   if (routePath === '/type' && method === 'POST') {
     const { session, text } = body;
+    if (!session || text == null) throw httpErr(400, 'session and text required');
     const s = getSession(sessions, session);
     touchSession(s);
-    const KEY_MAP = { Enter: '\r', Tab: '\t', Escape: '\u001B', Backspace: '\b' };
-    if (KEY_MAP[text] || text.length === 1) {
-      await s.cdp.send('Input.dispatchKeyEvent', {
-        type: 'keyDown', key: text, text: KEY_MAP[text] || text,
-      });
-      await s.cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: text });
-    } else {
-      for (const ch of text) {
-        await s.cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: ch, text: ch });
-        await s.cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: ch });
-      }
-    }
+    await s.cdp.send('Page.bringToFront', {});
+    await s.cdp.send('Input.insertText', { text });
     return { typed: text };
+  }
+
+  if (routePath === '/press' && method === 'POST') {
+    const { session, key } = body;
+    if (!session || !key) throw httpErr(400, 'session and key required');
+    const s = getSession(sessions, session);
+    touchSession(s);
+    await pressKey(s.cdp, key);
+    return { pressed: key };
+  }
+
+  if ((routePath === '/wait-for-text' || routePath === '/wait-for-selector') && method === 'POST') {
+    const { session, text, selector, timeoutMs = 5000 } = body;
+    if (!session) throw httpErr(400, 'session required');
+    const s = getSession(sessions, session);
+    touchSession(s);
+    const timeout = Number.isFinite(Number(timeoutMs)) && Number(timeoutMs) > 0 ? Number(timeoutMs) : 5000;
+    const deadline = Date.now() + timeout;
+    const isTextWait = routePath === '/wait-for-text';
+    const needle = isTextWait ? text : selector;
+    if (!needle) throw httpErr(400, isTextWait ? 'text required' : 'selector required');
+    let lastError = null;
+    while (Date.now() <= deadline) {
+      const expression = isTextWait
+        ? `document.body ? document.body.innerText.includes(${JSON.stringify(needle)}) : false`
+        : `((sel) => {
+            const el = document.querySelector(sel);
+            if (!el) return false;
+            const style = getComputedStyle(el);
+            const rect = el.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+          })(${JSON.stringify(needle)})`;
+      const r = await s.cdp.send('Runtime.evaluate', {
+        expression,
+        returnByValue: true,
+      }, Math.min(timeout + 1000, 30000));
+      if (r.exceptionDetails) {
+        lastError = r.exceptionDetails.exception?.description || r.exceptionDetails.text || 'wait evaluation failed';
+        break;
+      }
+      if (r.result?.value === true) {
+        return isTextWait
+          ? { foundText: needle, timeoutMs: timeout }
+          : { foundSelector: needle, timeoutMs: timeout };
+      }
+      await sleep(100);
+    }
+    if (lastError) throw httpErr(400, lastError);
+    throw httpErr(408, `${isTextWait ? 'text' : 'selector'} not found before timeout ${timeout}ms: ${needle}`);
   }
 
   if (routePath === '/eval' && method === 'POST') {
@@ -2028,6 +2160,27 @@ async function cmdClick(args, sock) {
   return cliReq('POST', '/click', { session, selector: args[1] }, sock);
 }
 
+async function cmdPress(args, sock) {
+  const session = args[0];
+  const key = args[1];
+  if (!session || !key) { console.error('Usage: chromux press <session> <Enter|Tab|Escape|Backspace>'); process.exit(1); }
+  return cliReq('POST', '/press', { session, key }, sock);
+}
+
+async function cmdWaitFor(args, sock, kind) {
+  const session = args[0];
+  const needle = args[1];
+  const timeoutMs = args[2] ? Number(args[2]) : 5000;
+  if (!session || !needle || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    console.error(`Usage: chromux wait-for-${kind} <session> <${kind}> [timeout-ms]`);
+    process.exit(1);
+  }
+  const body = kind === 'text'
+    ? { session, text: needle, timeoutMs }
+    : { session, selector: needle, timeoutMs };
+  return cliReq('POST', `/wait-for-${kind}`, body, sock, timeoutMs + 5000);
+}
+
 async function cmdWatch(args, sock) {
   const session = args[0];
   const what = args[1];
@@ -2219,6 +2372,9 @@ async function runCli(cmd, args) {
     click:      () => cmdClick(args, sock),
     fill:       () => cliReq('POST', '/fill', { session: args[0], selector: args[1], text: args[2] }, sock),
     type:       () => cliReq('POST', '/type', { session: args[0], text: args[1] }, sock),
+    press:      () => cmdPress(args, sock),
+    'wait-for-text': () => cmdWaitFor(args, sock, 'text'),
+    'wait-for-selector': () => cmdWaitFor(args, sock, 'selector'),
     eval:       () => cmdEval(args, sock),
     'scroll-until': () => cmdScrollUntil(args, sock),
     screenshot: () => cliReq('POST', '/screenshot', { session: args[0], path: args[1] }, sock),
@@ -2391,7 +2547,10 @@ Convenience shortcuts:
   chromux click <session> "selector" Click by CSS selector
   chromux click <session> --xy X Y   Click by viewport coordinates
   chromux fill <session> @<ref> "t"  Fill input field
-  chromux type <session> "text"      Keyboard input (Enter, Tab, etc.)
+  chromux type <session> "text"      Insert text into focused field
+  chromux press <session> Enter      Press Enter, Tab, Escape, or Backspace
+  chromux wait-for-text <s> "text"   Wait for visible page text
+  chromux wait-for-selector <s> SEL  Wait for visible selector
   chromux screenshot <session> [p]   Take PNG screenshot
   chromux show <session>             Open DevTools in browser (inspect live tab)
 

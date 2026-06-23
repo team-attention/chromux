@@ -43,12 +43,16 @@ browser work.
 4. Prefer `@ref` interactions from the snapshot:
    - `<chromux> click exp-ab12 @<N>`
    - `<chromux> fill exp-ab12 @<N> "text"`
-   - `<chromux> type exp-ab12 "Enter"`
-5. Re-run `snapshot` after every meaningful click, fill, type, navigation, or
-   state change. `@ref` numbers can go stale.
-6. Use `screenshot` for visual verification and evidence, not as the primary
+   - `<chromux> type exp-ab12 "text to insert"`
+   - `<chromux> press exp-ab12 Enter`
+5. After an action or navigation, wait for observable state when possible:
+   - `<chromux> wait-for-text exp-ab12 "Saved" 5000`
+   - `<chromux> wait-for-selector exp-ab12 ".toast" 5000`
+6. Re-run `snapshot` after every meaningful click, fill, type, press,
+   navigation, or state change. `@ref` numbers can go stale.
+7. Use `screenshot` for visual verification and evidence, not as the primary
    way to locate elements.
-7. Close the session when done: `<chromux> close exp-ab12`.
+8. Close the session when done: `<chromux> close exp-ab12`.
 
 ## Current Core Surface
 
@@ -58,7 +62,10 @@ Run `chromux help` for exact syntax. The day-to-day mental model is:
   headed profile is not activated for each new tab. Use `open --foreground` or
   `CHROMUX_OPEN_BACKGROUND=0` only when activation is intentional.
 - `snapshot` returns an accessibility tree with `@ref` handles.
-- `click`, `fill`, and `type` are convenience shortcuts for visible interaction.
+- `click`, `fill`, `type`, `press`, `wait-for-text`, and `wait-for-selector`
+  are convenience shortcuts for visible interaction and observable UI state.
+- `type` inserts literal text into the focused field. Use `press` for Enter,
+  Tab, Escape, and Backspace.
 - `run` executes multi-step async JavaScript with `cdp`, `js`, `sleep`, and
   `waitLoad` helpers. It also exposes `page(expr?)` for common page metadata.
 - `batch --file urls.txt --workers N --out results.jsonl` processes URL lines or
@@ -226,11 +233,18 @@ Bad site knowledge:
   chromux path and session ID literally.
 - A successful `open` means the browser navigated, not that the page is ready
   for the intended task. Use `snapshot`, `run`, or `watch` to verify state.
+- A successful action response means chromux dispatched the action, not that
+  the application accepted it. Prefer `wait-for-text`, `wait-for-selector`,
+  another `snapshot`, or a focused `run` assertion before reporting success.
 - For long page-side promises inside `run`, pass `--timeout MS`; the value now
   applies to the outer run and to default helper CDP calls.
 - Prefer `@ref` clicks over CSS selectors for normal page interaction.
+- `click` brings the tab forward, scrolls ref/selector targets into view, and
+  fails if the target is stale, hidden, zero-size, still outside the viewport,
+  or covered by another element at the click point.
 - Coordinate click is available when visual geometry is the right tool:
-  `<chromux> click exp-ab12 --xy X Y`.
+  `<chromux> click exp-ab12 --xy X Y`. Coordinates must be inside the current
+  viewport.
 - Auth walls are user-owned. If a site redirects to login and no saved profile
   is available, stop and ask the user to log in manually.
 - Always close sessions you open. Use `chromux ps` and `chromux kill <profile>`

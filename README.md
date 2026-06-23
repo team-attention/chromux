@@ -49,6 +49,7 @@ chromux open agent-c https://example.com
 # Each operates independently
 chromux snapshot agent-a
 chromux click agent-a @3
+chromux wait-for-text agent-a "expected text"
 chromux run agent-b "return await js('document.title')"
 chromux cdp agent-b Runtime.evaluate '{"expression":"location.href","returnByValue":true}'
 chromux screenshot agent-a /tmp/hn.png
@@ -155,6 +156,10 @@ the DevTools/CDP port reliably.
 
 chromux intentionally keeps the visible command surface small. When a new browser
 operation is needed, express it with `run` or `cdp` before adding another verb.
+The convenience commands below are for common human-like verification loops:
+snapshot, act on fresh refs, wait for observable state, then snapshot or
+screenshot again. A successful `open`, `click`, `fill`, `type`, or `press`
+response is not proof that the page reached the intended state.
 
 ### Core Commands
 
@@ -218,11 +223,21 @@ chromux cdp s Runtime.evaluate '{"expression":"navigator.userAgent","returnByVal
 | `snapshot <session>` | Accessibility tree with `@ref` numbers |
 | `click <session> @<ref>` | Click element by ref |
 | `click <session> "selector"` | Click by CSS selector |
-| `click <session> --xy X Y` | Click viewport coordinates via CDP mouse events |
+| `click <session> --xy X Y` | Click validated viewport coordinates via CDP mouse events |
 | `fill <session> @<ref> "text"` | Fill input field |
-| `type <session> "text"` | Keyboard input (Enter, Tab, etc.) |
+| `type <session> "text"` | Insert text into the focused field |
+| `press <session> <Enter\|Tab\|Escape\|Backspace>` | Press a supported special key |
+| `wait-for-text <session> "text" [timeout-ms]` | Wait until page text appears |
+| `wait-for-selector <session> "selector" [timeout-ms]` | Wait until a selector is visible |
 | `screenshot <session> [path]` | Take PNG screenshot |
 | `show <session>` | Open DevTools in browser (inspect live tab, even headless) |
+
+`click` brings the tab forward before acting. Ref/selector clicks scroll the
+target into view and fail when the element is hidden, zero-size, stale, outside
+the viewport after scroll, or covered by another element at the click point.
+Coordinate clicks validate that `X,Y` are inside the current viewport. `fill`
+updates input state through the native value setter and dispatches input/change
+events so common frontend frameworks observe the value.
 
 ### Watch / Debug
 

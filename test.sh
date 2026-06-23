@@ -41,8 +41,8 @@ echo "profile: $PROFILE"
 echo ""
 
 # --- Test 1: Launch ---
-echo "--- Test 1: Launch profile ---"
-R1=$(node "$CT" launch "$PROFILE" 2>/dev/null)
+echo "--- Test 1: Launch headless profile ---"
+R1=$(node "$CT" launch "$PROFILE" --headless 2>/dev/null)
 check "profile launched" "port" "$R1"
 check "profile name" "$PROFILE" "$R1"
 
@@ -91,11 +91,11 @@ fi
 # --- Test 3: Open tabs ---
 echo ""
 echo "--- Test 3: Open tabs ---"
-R3A=$(CHROMUX_PROFILE=$PROFILE node "$CT" open tab-a https://httpbin.org/user-agent 2>/dev/null)
-check "tab-a opened" "httpbin.org/user-agent" "$R3A"
+R3A=$(CHROMUX_PROFILE=$PROFILE node "$CT" open tab-a https://example.com 2>/dev/null)
+check "tab-a opened" "example.com" "$R3A"
 
-R3B=$(CHROMUX_PROFILE=$PROFILE node "$CT" open tab-b https://httpbin.org/ip 2>/dev/null)
-check "tab-b opened" "httpbin.org/ip" "$R3B"
+R3B=$(CHROMUX_PROFILE=$PROFILE node "$CT" open tab-b https://example.org 2>/dev/null)
+check "tab-b opened" "example.org" "$R3B"
 
 R3C=$(CHROMUX_PROFILE=$PROFILE node "$CT" open --background tab-bg https://example.com 2>/dev/null)
 check "background tab opened" "example.com" "$R3C"
@@ -111,8 +111,8 @@ echo ""
 echo "--- Test 4: Tab isolation ---"
 URL_A=$(CHROMUX_PROFILE=$PROFILE node "$CT" eval tab-a "location.href" 2>/dev/null)
 URL_B=$(CHROMUX_PROFILE=$PROFILE node "$CT" eval tab-b "location.href" 2>/dev/null)
-check "tab-a URL correct" "user-agent" "$URL_A"
-check "tab-b URL correct" "/ip" "$URL_B"
+check "tab-a URL correct" "example.com" "$URL_A"
+check "tab-b URL correct" "example.org" "$URL_B"
 
 # --- Test 5: Real Chrome ---
 echo ""
@@ -134,13 +134,13 @@ CDP_TITLE=$(CHROMUX_PROFILE=$PROFILE node "$CT" cdp tab-a Runtime.evaluate '{"ex
 check "cdp Runtime.evaluate works" '"value"' "$CDP_TITLE"
 
 RUN_HOST=$(CHROMUX_PROFILE=$PROFILE node "$CT" run tab-a "return await js('location.hostname')" 2>/dev/null)
-check "run async js helper works" "httpbin.org" "$RUN_HOST"
+check "run async js helper works" "example.com" "$RUN_HOST"
 
 RUN_PAGE=$(CHROMUX_PROFILE=$PROFILE node "$CT" run tab-a "return await page('({url:location.href,title:document.title})')" 2>/dev/null)
-check "run page helper works" "httpbin.org" "$RUN_PAGE"
+check "run page helper works" "example.com" "$RUN_PAGE"
 
 RUN_TIMEOUT_PROPAGATES=$(CHROMUX_PROFILE=$PROFILE node "$CT" run tab-a --timeout 15000 "return await js('new Promise(resolve => setTimeout(() => resolve(location.hostname), 11000))')" 2>/dev/null)
-check "run --timeout propagates to js helper" "httpbin.org" "$RUN_TIMEOUT_PROPAGATES"
+check "run --timeout propagates to js helper" "example.com" "$RUN_TIMEOUT_PROPAGATES"
 
 RUN_JS_ISOLATED=$(CHROMUX_PROFILE=$PROFILE node "$CT" run tab-a - <<'JS' 2>/dev/null
 await js('const input = 1; return input;');
@@ -153,7 +153,7 @@ TMP_PARAMS="/tmp/chromux-cdp-params-$$.json"
 printf '{"expression":"location.hostname","returnByValue":true}' > "$TMP_PARAMS"
 CDP_FILE=$(CHROMUX_PROFILE=$PROFILE node "$CT" cdp tab-a Runtime.evaluate --params-file "$TMP_PARAMS" 2>/dev/null)
 rm -f "$TMP_PARAMS"
-check "cdp --params-file works" "httpbin.org" "$CDP_FILE"
+check "cdp --params-file works" "example.com" "$CDP_FILE"
 
 # Regression: multi-line expression containing nested `const` must not be IIFE-wrapped.
 # Previously the IIFE auto-wrap regex used the `m` flag and matched `const` inside nested
@@ -193,6 +193,116 @@ XY_CLICK=$(CHROMUX_PROFILE=$PROFILE node "$CT" click tab-click --xy 40 40 2>/dev
 check "click --xy reports success" '"xy"' "$XY_CLICK"
 CLICK_TITLE=$(CHROMUX_PROFILE=$PROFILE node "$CT" eval tab-click "document.title" 2>/dev/null)
 check "click --xy changed page state" "clicked" "$CLICK_TITLE"
+if CHROMUX_PROFILE=$PROFILE node "$CT" click tab-click --xy 999999 999999 >/tmp/chromux-xy-out-$$.txt 2>&1; then
+  echo "  ✗ click --xy outside viewport unexpectedly succeeded"
+  FAIL=$((FAIL+1))
+else
+  XY_OUT=$(cat /tmp/chromux-xy-out-$$.txt)
+  check "click --xy outside viewport fails clearly" "outside viewport" "$XY_OUT"
+fi
+rm -f /tmp/chromux-xy-out-$$.txt
+
+# --- Test 5c.1: text input shortcuts ---
+echo ""
+echo "--- Test 5c.1: Text input shortcuts ---"
+INPUT_HTML='<input id="name" aria-label="Name"><script>window.inputCount=0;window.changeCount=0;const el=document.getElementById("name");el.addEventListener("input",()=>{window.inputCount+=1});el.addEventListener("change",()=>{window.changeCount+=1});</script>'
+INPUT_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$INPUT_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-input "$INPUT_URL" 2>/dev/null > /dev/null
+INPUT_SNAP=$(CHROMUX_PROFILE=$PROFILE node "$CT" snapshot tab-input 2>/dev/null)
+check "input snapshot has textbox ref" "@1" "$INPUT_SNAP"
+CHROMUX_PROFILE=$PROFILE node "$CT" click tab-input @1 2>/dev/null > /dev/null
+CHROMUX_PROFILE=$PROFILE node "$CT" type tab-input "Browser Test" 2>/dev/null > /dev/null
+TYPE_STATE=$(CHROMUX_PROFILE=$PROFILE node "$CT" eval tab-input "document.getElementById('name').value" 2>/dev/null)
+check "click then type updates focused input" "Browser Test" "$TYPE_STATE"
+CHROMUX_PROFILE=$PROFILE node "$CT" eval tab-input "window.inputCount=0;window.changeCount=0" 2>/dev/null > /dev/null
+CHROMUX_PROFILE=$PROFILE node "$CT" fill tab-input @1 "Filled Value" 2>/dev/null > /dev/null
+FILL_STATE=$(CHROMUX_PROFILE=$PROFILE node "$CT" eval tab-input "JSON.stringify({value:document.getElementById('name').value,input:window.inputCount,change:window.changeCount})" 2>/dev/null)
+check "fill sets input value" "Filled Value" "$FILL_STATE"
+FILL_CHANGE_OK=$(CHROMUX_PROFILE=$PROFILE node "$CT" eval tab-input "window.changeCount > 0" 2>/dev/null)
+check "fill dispatches change event" "true" "$FILL_CHANGE_OK"
+
+# --- Test 5c.2: click target validation ---
+echo ""
+echo "--- Test 5c.2: Click target validation ---"
+COVERED_HTML='<button id="target" style="position:absolute;left:20px;top:20px;width:120px;height:60px" onclick="document.title=&quot;clicked&quot;">Covered</button><div id="cover" style="position:absolute;left:0;top:0;width:200px;height:120px;background:rgba(0,0,0,.1)"></div>'
+COVERED_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$COVERED_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-covered "$COVERED_URL" 2>/dev/null > /dev/null
+COVERED_SNAP=$(CHROMUX_PROFILE=$PROFILE node "$CT" snapshot tab-covered 2>/dev/null)
+check "covered page exposes target ref" "@1" "$COVERED_SNAP"
+if CHROMUX_PROFILE=$PROFILE node "$CT" click tab-covered @1 >/tmp/chromux-covered-out-$$.txt 2>&1; then
+  echo "  ✗ covered target click unexpectedly succeeded"
+  FAIL=$((FAIL+1))
+else
+  COVERED_OUT=$(cat /tmp/chromux-covered-out-$$.txt)
+  check "covered target click fails clearly" "covered" "$COVERED_OUT"
+fi
+CHROMUX_PROFILE=$PROFILE node "$CT" eval tab-covered "document.getElementById('target').remove()" 2>/dev/null > /dev/null
+if CHROMUX_PROFILE=$PROFILE node "$CT" click tab-covered @1 >/tmp/chromux-stale-ref-out-$$.txt 2>&1; then
+  echo "  ✗ stale ref click unexpectedly succeeded"
+  FAIL=$((FAIL+1))
+else
+  STALE_REF_OUT=$(cat /tmp/chromux-stale-ref-out-$$.txt)
+  check "stale ref click fails clearly" "Element not found" "$STALE_REF_OUT"
+fi
+rm -f /tmp/chromux-covered-out-$$.txt /tmp/chromux-stale-ref-out-$$.txt
+
+HIDDEN_HTML='<button id="hidden" style="display:none">Hidden</button><button id="zero" style="width:0;height:0;padding:0;border:0;overflow:hidden">Zero</button>'
+HIDDEN_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$HIDDEN_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-hidden "$HIDDEN_URL" 2>/dev/null > /dev/null
+if CHROMUX_PROFILE=$PROFILE node "$CT" click tab-hidden "#hidden" >/tmp/chromux-hidden-out-$$.txt 2>&1; then
+  echo "  ✗ hidden target click unexpectedly succeeded"
+  FAIL=$((FAIL+1))
+else
+  HIDDEN_OUT=$(cat /tmp/chromux-hidden-out-$$.txt)
+  check "hidden target click fails clearly" "not interactable" "$HIDDEN_OUT"
+fi
+if CHROMUX_PROFILE=$PROFILE node "$CT" click tab-hidden "#zero" >/tmp/chromux-zero-out-$$.txt 2>&1; then
+  echo "  ✗ zero-size target click unexpectedly succeeded"
+  FAIL=$((FAIL+1))
+else
+  ZERO_OUT=$(cat /tmp/chromux-zero-out-$$.txt)
+  check "zero-size target click fails clearly" "not interactable" "$ZERO_OUT"
+fi
+rm -f /tmp/chromux-hidden-out-$$.txt /tmp/chromux-zero-out-$$.txt
+
+# --- Test 5c.3: press and waits ---
+echo ""
+echo "--- Test 5c.3: Press and wait shortcuts ---"
+PRESS_HTML='<input id="first" aria-label="First"><input id="second" aria-label="Second"><div id="root"></div><script>window.keys=[];document.addEventListener("keydown",e=>window.keys.push(e.key));setTimeout(()=>{document.getElementById("root").innerHTML="<strong id=\"ready\">Ready Text</strong>"},250);</script>'
+PRESS_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$PRESS_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-press "$PRESS_URL" 2>/dev/null > /dev/null
+PRESS_SNAP=$(CHROMUX_PROFILE=$PROFILE node "$CT" snapshot tab-press 2>/dev/null)
+check "press page exposes input refs" "@1" "$PRESS_SNAP"
+CHROMUX_PROFILE=$PROFILE node "$CT" click tab-press @1 2>/dev/null > /dev/null
+CHROMUX_PROFILE=$PROFILE node "$CT" type tab-press "abc" 2>/dev/null > /dev/null
+CHROMUX_PROFILE=$PROFILE node "$CT" press tab-press Backspace 2>/dev/null > /dev/null
+CHROMUX_PROFILE=$PROFILE node "$CT" press tab-press Enter 2>/dev/null > /dev/null
+CHROMUX_PROFILE=$PROFILE node "$CT" press tab-press Tab 2>/dev/null > /dev/null
+CHROMUX_PROFILE=$PROFILE node "$CT" press tab-press Escape 2>/dev/null > /dev/null
+PRESS_STATE=$(CHROMUX_PROFILE=$PROFILE node "$CT" eval tab-press "JSON.stringify({value:document.getElementById('first').value,active:document.activeElement.id,keys:window.keys})" 2>/dev/null)
+check "press Backspace edits focused input" '"value":"ab"' "$PRESS_STATE"
+check "press Tab moves focus" '"active":"second"' "$PRESS_STATE"
+check "press Enter recorded" "Enter" "$PRESS_STATE"
+check "press Escape recorded" "Escape" "$PRESS_STATE"
+WAIT_TEXT=$(CHROMUX_PROFILE=$PROFILE node "$CT" wait-for-text tab-press "Ready Text" 2000 2>/dev/null)
+check "wait-for-text reports success" "Ready Text" "$WAIT_TEXT"
+WAIT_SELECTOR=$(CHROMUX_PROFILE=$PROFILE node "$CT" wait-for-selector tab-press "#ready" 2000 2>/dev/null)
+check "wait-for-selector reports success" "#ready" "$WAIT_SELECTOR"
+if CHROMUX_PROFILE=$PROFILE node "$CT" wait-for-text tab-press "Never Appears" 300 >/tmp/chromux-wait-text-out-$$.txt 2>&1; then
+  echo "  ✗ wait-for-text missing text unexpectedly succeeded"
+  FAIL=$((FAIL+1))
+else
+  WAIT_TEXT_OUT=$(cat /tmp/chromux-wait-text-out-$$.txt)
+  check "wait-for-text timeout names text" "Never Appears" "$WAIT_TEXT_OUT"
+fi
+if CHROMUX_PROFILE=$PROFILE node "$CT" wait-for-selector tab-press "#missing" 300 >/tmp/chromux-wait-selector-out-$$.txt 2>&1; then
+  echo "  ✗ wait-for-selector missing selector unexpectedly succeeded"
+  FAIL=$((FAIL+1))
+else
+  WAIT_SELECTOR_OUT=$(cat /tmp/chromux-wait-selector-out-$$.txt)
+  check "wait-for-selector timeout names selector" "#missing" "$WAIT_SELECTOR_OUT"
+fi
+rm -f /tmp/chromux-wait-text-out-$$.txt /tmp/chromux-wait-selector-out-$$.txt
 
 # --- Test 5d: watch and quiet aliases ---
 echo ""
@@ -264,6 +374,10 @@ CHROMUX_PROFILE=$PROFILE node "$CT" close tab-bg 2>/dev/null > /dev/null
 CHROMUX_PROFILE=$PROFILE node "$CT" close tab-bg-env 2>/dev/null > /dev/null
 CHROMUX_PROFILE=$PROFILE node "$CT" close tab-fg-env 2>/dev/null > /dev/null
 CHROMUX_PROFILE=$PROFILE node "$CT" close tab-click 2>/dev/null > /dev/null
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-input 2>/dev/null > /dev/null
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-covered 2>/dev/null > /dev/null
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-hidden 2>/dev/null > /dev/null
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-press 2>/dev/null > /dev/null
 LIST2=$(CHROMUX_PROFILE=$PROFILE node "$CT" list 2>/dev/null)
 check "all tabs closed" "{}" "$LIST2"
 

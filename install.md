@@ -235,6 +235,7 @@ Run a short local smoke before using chromux in a task:
 ```bash
 chromux launch chromux-smoke --headless
 CHROMUX_PROFILE=chromux-smoke chromux open smoke https://example.com
+CHROMUX_PROFILE=chromux-smoke chromux wait-for-text smoke "Example Domain" 5000
 CHROMUX_PROFILE=chromux-smoke chromux run smoke "return await js('document.title')"
 CHROMUX_PROFILE=chromux-smoke chromux run smoke "return await page('({title:document.title,url:location.href})')"
 CHROMUX_PROFILE=chromux-smoke chromux cdp smoke Runtime.evaluate '{"expression":"location.href","returnByValue":true}'
@@ -242,9 +243,9 @@ CHROMUX_PROFILE=chromux-smoke chromux close smoke
 chromux kill chromux-smoke
 ```
 
-Expected result: the `run` command prints `Example Domain`, the `cdp` command
-returns a `Runtime.evaluate` result containing `https://example.com/`, and the
-profile is killed at the end.
+Expected result: `wait-for-text` reports `Example Domain`, the `run` command
+prints `Example Domain`, the `cdp` command returns a `Runtime.evaluate` result
+containing `https://example.com/`, and the profile is killed at the end.
 
 ## Builtin Helper Material
 

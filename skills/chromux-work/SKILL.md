@@ -34,6 +34,9 @@ skill and `chromux help`.
 - Treat `batch` as a browser execution primitive, not a domain-specific
   extractor. Use it for URL load verification and simple page metadata; use
   checked-in per-site extractors when a task needs structured records.
+- For UI work, do not treat `open` or an action response as proof. Use
+  `snapshot`, `wait-for-text`, `wait-for-selector`, `run`, or `screenshot` to
+  prove the resulting state.
 - For parent-controlled shutdown, use `chromux pause <profile>` to reject new
   browser work, then `chromux resume <profile>` before the next wave.
 - Keep work read-only unless the user explicitly asked to mutate state.
@@ -125,7 +128,8 @@ user-owned.
 Classify the work before choosing an execution pattern:
 
 - Single-page QA or logged-in UI inspection: use one normal session in default
-  mode, then `snapshot`, `click`, `run`, and `screenshot`.
+  mode, then `snapshot`, `click`/`fill`/`type`/`press`, `wait-for-text` or
+  `wait-for-selector`, another `snapshot` or `run` assertion, and `screenshot`.
 - URL load verification or broad URL inventory: use `CHROMUX_MODE=crawl` with
   `chromux batch`.
 - Structured raw record extraction: generate or reuse URL seeds, run bounded
@@ -192,15 +196,21 @@ Main agent responsibilities:
 Prefer this order:
 1. `batch` for large URL load verification or metadata collection
 2. `snapshot` for accessible structure and `@ref` handles
-3. `run` with `page(...)` or `js(...)` for DOM extraction, scrolling, and
+3. `click`, `fill`, `type`, and `press` for visible UI work from fresh refs
+4. `wait-for-text` and `wait-for-selector` after state-changing actions
+5. `run` with `page(...)` or `js(...)` for DOM extraction, scrolling, and
    repeated collection
-4. `cdp` for precise protocol operations
-5. `screenshot` for visual evidence
+6. `cdp` for precise protocol operations
+7. `screenshot` for visual evidence
 
 Record enough evidence to distinguish:
 - actually verified page content
 - inferred summaries
 - blockers or missing data
+
+For form or modal flows, a clean evidence loop is: fresh `snapshot`, action by
+`@ref`, bounded wait for visible text/selector, fresh `snapshot` or `run`
+assertion, screenshot if the final visual state matters.
 
 Do not rely on `batch` results alone for domain-specific fields such as address,
 price, date, or recommendation reason. Those should come from explicit extractor
