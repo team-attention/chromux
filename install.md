@@ -292,9 +292,14 @@ files and let the user decide whether to keep, commit, or discard them.
 
 The npm package is published by the GitHub Actions workflow at
 `.github/workflows/npm-publish.yml` when a commit lands on `main` with a new
-`package.json` version. The workflow validates `node --check`, `chromux help`,
-skill files, built-in snippets, and `npm pack --dry-run`, then runs
-`npm publish --provenance` using the repository `NPM_TOKEN` secret.
+`package.json` version. The workflow first runs the same static/package checks
+used by CI plus the real headless Chrome `./test.sh` suite. Only after that
+validation job passes does it run `npm publish --provenance` using the repository
+`NPM_TOKEN` secret.
+
+Pull requests, manual CI runs, and non-main pushes are validated by
+`.github/workflows/ci.yml`. Main pushes are validated inside the publish workflow
+to avoid a publish path that can skip browser coverage.
 
 For a publishable fix:
 
