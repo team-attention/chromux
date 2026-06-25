@@ -232,6 +232,24 @@ check "fill sets input value" "Filled Value" "$FILL_STATE"
 FILL_CHANGE_OK=$(CHROMUX_PROFILE=$PROFILE node "$CT" eval tab-input "window.changeCount > 0" 2>/dev/null)
 check "fill dispatches change event" "true" "$FILL_CHANGE_OK"
 
+# --- Test 5c.1b: snapshot --interactive filter ---
+echo ""
+echo "--- Test 5c.1b: snapshot --interactive filter ---"
+FILTER_HTML='<h1>Headline Heading</h1><p>Some descriptive paragraph text.</p><button aria-label="Do It">Go</button>'
+FILTER_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$FILTER_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-filter "$FILTER_URL" 2>/dev/null > /dev/null
+FILTER_FULL=$(CHROMUX_PROFILE=$PROFILE node "$CT" snapshot tab-filter 2>/dev/null)
+check "full snapshot includes heading" "Headline Heading" "$FILTER_FULL"
+FILTER_ONLY=$(CHROMUX_PROFILE=$PROFILE node "$CT" snapshot tab-filter --interactive 2>/dev/null)
+check "interactive snapshot keeps button ref" "@1 button" "$FILTER_ONLY"
+if echo "$FILTER_ONLY" | grep -q "Headline Heading"; then
+  echo "  ✗ interactive snapshot leaked non-interactive heading"
+  FAIL=$((FAIL+1))
+else
+  echo "  ✓ interactive snapshot drops non-interactive nodes"
+  PASS=$((PASS+1))
+fi
+
 # --- Test 5c.2: click target validation ---
 echo ""
 echo "--- Test 5c.2: Click target validation ---"
@@ -389,6 +407,7 @@ CHROMUX_PROFILE=$PROFILE node "$CT" close tab-input 2>/dev/null > /dev/null
 CHROMUX_PROFILE=$PROFILE node "$CT" close tab-covered 2>/dev/null > /dev/null
 CHROMUX_PROFILE=$PROFILE node "$CT" close tab-hidden 2>/dev/null > /dev/null
 CHROMUX_PROFILE=$PROFILE node "$CT" close tab-press 2>/dev/null > /dev/null
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-filter 2>/dev/null > /dev/null
 LIST2=$(CHROMUX_PROFILE=$PROFILE node "$CT" list 2>/dev/null)
 check "all tabs closed" "{}" "$LIST2"
 

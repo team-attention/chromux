@@ -651,7 +651,8 @@ async function closeInitialTabs(port) {
 // Adding JS patches via Page.addScriptToEvaluateOnNewDocument is ITSELF detectable.
 // The best stealth is minimizing CDP footprint — remove calls, don't add patches.
 
-const SNAPSHOT_JS = `(() => {
+const SNAPSHOT_JS = `((FILTER) => {
+  const INTERACTIVE_ONLY = FILTER === 'interactive';
   let refId = 0;
   const ROLES = {
     a:'link', button:'button', input:'textbox', select:'combobox',
@@ -698,11 +699,12 @@ const SNAPSHOT_JS = `(() => {
     const interactive = isInteractive(el);
     const label = getLabel(el);
     const has = role || interactive || label;
-    const cd = has ? depth + 1 : depth;
+    const keep = INTERACTIVE_ONLY ? interactive : has;
+    const cd = keep ? depth + 1 : depth;
     let children = '';
     for (const c of el.children) children += walk(c, cd);
-    if (!has && !children) return '';
-    if (!has) return children;
+    if (!keep && !children) return '';
+    if (!keep) return children;
     const indent = '  '.repeat(depth);
     let line = indent;
     if (interactive) {
@@ -721,7 +723,7 @@ const SNAPSHOT_JS = `(() => {
     return line + '\\n' + children;
   }
   return '# ' + document.title + '\\n# ' + location.href + '\\n\\n' + walk(document.body, 0);
-})()`;
+})`;
 
 // ============================================================
 // Daemon server (per-profile)
@@ -754,7 +756,7 @@ async function startDaemon(profileName, port) {
 
     // Wrap handler with timeout to prevent daemon hang
     const handlerPromise = routeWithGate(gate, () =>
-      route(port, req.method, url.pathname, body, sessions, isHeadless, settings)
+      route(port, req.method, url.pathname + url.search, body, sessions, isHeadless, settings)
     , url.pathname, settings);
     const timeoutPromise = new Promise((_, reject) =>
       setTimeout(() => reject(new Error('Handler timeout')), HANDLER_TIMEOUT)
@@ -1063,10 +1065,13 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
   }
 
   if (routePath.startsWith('/snapshot/')) {
-    const session = decodeURIComponent(routePath.split('/')[2]);
+    const u = new URL(routePath, 'http://x');
+    const session = decodeURIComponent(u.pathname.split('/')[2]);
+    const filter = u.searchParams.get('filter');
     const s = getSession(sessions, session);
     touchSession(s);
-    const r = await s.cdp.send('Runtime.evaluate', { expression: SNAPSHOT_JS, returnByValue: true });
+    const expression = `(${SNAPSHOT_JS})(${JSON.stringify(filter)})`;
+    const r = await s.cdp.send('Runtime.evaluate', { expression, returnByValue: true });
     return r.result.value;
   }
 
@@ -2365,7 +2370,11 @@ async function runCli(cmd, args) {
       const openArgs = parseOpenArgs(args);
       return cliReq('POST', '/open', openArgs, sock, defaultCliTimeoutMs());
     },
-    snapshot:   () => cliReq('GET', `/snapshot/${args[0]}`, null, sock),
+    snapshot:   () => {
+      const filter = getArgValue(args, '--filter') || (args.includes('--interactive') ? 'interactive' : null);
+      const q = filter ? `?filter=${encodeURIComponent(filter)}` : '';
+      return cliReq('GET', `/snapshot/${args[0]}${q}`, null, sock);
+    },
     cdp:        () => cmdCdp(args, sock),
     run:        () => cmdRun(args, sock),
     batch:      () => cmdBatch(args, sock),
@@ -2543,6 +2552,7 @@ Lifecycle:
 
 Convenience shortcuts:
   chromux snapshot <session>         Accessibility tree with @ref
+  chromux snapshot <s> --interactive Only interactive elements (smaller payload)
   chromux click <session> @<ref>     Click by ref number
   chromux click <session> "selector" Click by CSS selector
   chromux click <session> --xy X Y   Click by viewport coordinates

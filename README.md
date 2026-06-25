@@ -221,6 +221,7 @@ chromux cdp s Runtime.evaluate '{"expression":"navigator.userAgent","returnByVal
 | Command | Description |
 |---------|-------------|
 | `snapshot <session>` | Accessibility tree with `@ref` numbers |
+| `snapshot <session> --interactive` | Only interactive elements (smaller payload) |
 | `click <session> @<ref>` | Click element by ref |
 | `click <session> "selector"` | Click by CSS selector |
 | `click <session> --xy X Y` | Click validated viewport coordinates via CDP mouse events |

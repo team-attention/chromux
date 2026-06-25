@@ -37,6 +37,15 @@ skill and `chromux help`.
 - For UI work, do not treat `open` or an action response as proof. Use
   `snapshot`, `wait-for-text`, `wait-for-selector`, `run`, or `screenshot` to
   prove the resulting state.
+- Minimize round-trips: bundle a known multi-step sequence (navigate, click,
+  fill, wait, read back) into a single `chromux run` call instead of issuing
+  many separate `click`/`fill`/`snapshot` commands. Each separate command is a
+  full agent round-trip; one `run` with `page(...)`/`js(...)` is far faster and
+  is the main reason a single-call browser flow feels fast.
+- Observe with `snapshot` before reaching for `screenshot`. Use
+  `snapshot --interactive` when you only need actionable elements (buttons,
+  links, inputs) — it returns a much smaller payload. Reserve `screenshot` for
+  visual verification a text snapshot cannot capture.
 - For parent-controlled shutdown, use `chromux pause <profile>` to reject new
   browser work, then `chromux resume <profile>` before the next wave.
 - Keep work read-only unless the user explicitly asked to mutate state.
@@ -195,13 +204,15 @@ Main agent responsibilities:
 
 Prefer this order:
 1. `batch` for large URL load verification or metadata collection
-2. `snapshot` for accessible structure and `@ref` handles
+2. `snapshot` for accessible structure and `@ref` handles; add `--interactive`
+   when you only need actionable elements and want a smaller payload
 3. `click`, `fill`, `type`, and `press` for visible UI work from fresh refs
 4. `wait-for-text` and `wait-for-selector` after state-changing actions
 5. `run` with `page(...)` or `js(...)` for DOM extraction, scrolling, and
-   repeated collection
+   repeated collection — also the right tool to bundle a multi-step action
+   sequence into one fast round-trip
 6. `cdp` for precise protocol operations
-7. `screenshot` for visual evidence
+7. `screenshot` for visual evidence a text snapshot cannot capture
 
 Record enough evidence to distinguish:
 - actually verified page content

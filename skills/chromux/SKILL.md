@@ -61,9 +61,13 @@ Run `chromux help` for exact syntax. The day-to-day mental model is:
 - `open` creates or navigates a tab. New tabs are background by default so a
   headed profile is not activated for each new tab. Use `open --foreground` or
   `CHROMUX_OPEN_BACKGROUND=0` only when activation is intentional.
-- `snapshot` returns an accessibility tree with `@ref` handles.
+- `snapshot` returns an accessibility tree with `@ref` handles. Add
+  `--interactive` (or `--filter interactive`) to return only actionable
+  elements (buttons, links, inputs) for a smaller payload.
 - `click`, `fill`, `type`, `press`, `wait-for-text`, and `wait-for-selector`
   are convenience shortcuts for visible interaction and observable UI state.
+  For a known multi-step sequence, prefer a single `run` call over many separate
+  shortcut commands — it collapses several agent round-trips into one.
 - `type` inserts literal text into the focused field. Use `press` for Enter,
   Tab, Escape, and Backspace.
 - `run` executes multi-step async JavaScript with `cdp`, `js`, `sleep`, and
