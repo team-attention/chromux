@@ -6,6 +6,8 @@ APP_DIR="$ROOT/apps/macos-status-bar/dist/Chromux Status.app"
 CONTENTS="$APP_DIR/Contents"
 MACOS="$CONTENTS/MacOS"
 RESOURCES="$CONTENTS/Resources"
+VERSION="${CHROMUX_STATUS_APP_VERSION:-$(PACKAGE_JSON="$ROOT/package.json" node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(process.env.PACKAGE_JSON, 'utf8')).version)")}"
+BUILD_NUMBER="${CHROMUX_STATUS_APP_BUILD:-1}"
 
 rm -rf "$APP_DIR"
 mkdir -p "$MACOS" "$RESOURCES/status-app"
@@ -21,7 +23,7 @@ cp "$ROOT/status-app/index.html" "$RESOURCES/status-app/index.html"
 cp "$ROOT/status-app/app.js" "$RESOURCES/status-app/app.js"
 cp "$ROOT/status-app/styles.css" "$RESOURCES/status-app/styles.css"
 
-cat > "$CONTENTS/Info.plist" <<'PLIST'
+cat > "$CONTENTS/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -38,9 +40,9 @@ cat > "$CONTENTS/Info.plist" <<'PLIST'
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.1.0</string>
+  <string>$VERSION</string>
   <key>CFBundleVersion</key>
-  <string>1</string>
+  <string>$BUILD_NUMBER</string>
   <key>LSMinimumSystemVersion</key>
   <string>13.0</string>
   <key>LSUIElement</key>

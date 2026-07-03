@@ -20,6 +20,7 @@
     "CLAUDE.md",
     "apps/macos-status-bar/README.md",
     "apps/macos-status-bar/build.sh",
+    "apps/macos-status-bar/package-release.sh",
     "apps/macos-status-bar/src",
     "skills",
     "install.md",

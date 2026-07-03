@@ -26,6 +26,8 @@ jobs:
         run: |
           node --check chromux.mjs
           bash -n test.sh
+          bash -n apps/macos-status-bar/build.sh
+          bash -n apps/macos-status-bar/package-release.sh
           node chromux.mjs help >/tmp/chromux-help.txt
           grep -q "wait-for-selector" /tmp/chromux-help.txt
           test -f skills/chromux/SKILL.md

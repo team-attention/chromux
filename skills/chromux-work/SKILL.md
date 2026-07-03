@@ -317,6 +317,9 @@ app instead of a browser tab:
 open "/path/to/chromux/apps/macos-status-bar/dist/Chromux Status.app"
 ```
 
+Release zips contain the same app bundle for double-click use on Macs with
+Node.js >= 22 installed.
+
 It shows known profiles, selected profile status, raw activity events,
 Task-first timeline groups, site knowledge note paths, and lifecycle controls
 for retention, deletion, and URL/title redaction. It does not read Chrome

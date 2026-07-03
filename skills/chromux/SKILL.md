@@ -239,7 +239,8 @@ open "/path/to/chromux/apps/macos-status-bar/dist/Chromux Status.app"
 ```
 
 The wrapper adds a `cx` item to the macOS menu bar and opens the same local
-dashboard in a WebKit window.
+dashboard in a WebKit window. GitHub Release zips contain the same app bundle
+for double-click use on Macs with Node.js >= 22 installed.
 
 The app and activity layer do not read Chrome History. Full URL retention
 defaults to 90 days and can be changed in the app.
