@@ -2,19 +2,21 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-APP_DIR="$ROOT/apps/macos-status-bar/dist/Chromux Status.app"
+APP_NAME="chromux"
+APP_DIR="$ROOT/apps/macos-status-bar/dist/$APP_NAME.app"
+LEGACY_APP_DIR="$ROOT/apps/macos-status-bar/dist/Chromux Status.app"
 CONTENTS="$APP_DIR/Contents"
 MACOS="$CONTENTS/MacOS"
 RESOURCES="$CONTENTS/Resources"
 VERSION="${CHROMUX_STATUS_APP_VERSION:-$(PACKAGE_JSON="$ROOT/package.json" node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(process.env.PACKAGE_JSON, 'utf8')).version)")}"
 BUILD_NUMBER="${CHROMUX_STATUS_APP_BUILD:-1}"
 
-rm -rf "$APP_DIR"
+rm -rf "$APP_DIR" "$LEGACY_APP_DIR"
 mkdir -p "$MACOS" "$RESOURCES/status-app"
 
 swiftc \
   "$ROOT/apps/macos-status-bar/src/ChromuxStatusBar/main.swift" \
-  -o "$MACOS/Chromux Status" \
+  -o "$MACOS/$APP_NAME" \
   -framework AppKit \
   -framework WebKit
 
@@ -30,13 +32,13 @@ cat > "$CONTENTS/Info.plist" <<PLIST
 <plist version="1.0">
 <dict>
   <key>CFBundleExecutable</key>
-  <string>Chromux Status</string>
+  <string>$APP_NAME</string>
   <key>CFBundleIdentifier</key>
-  <string>com.teamattention.chromux.status</string>
+  <string>com.teamattention.chromux</string>
   <key>CFBundleName</key>
-  <string>Chromux Status</string>
+  <string>$APP_NAME</string>
   <key>CFBundleDisplayName</key>
-  <string>Chromux Status</string>
+  <string>$APP_NAME</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>

@@ -52,9 +52,9 @@ CHROMUX_TASK=research-pass chromux open agent-d https://example.com
 # Open the local profile/activity companion app
 chromux app --open
 
-# Build and launch the native macOS status bar wrapper from a checkout
+# Build and launch the native macOS app from a checkout
 ./apps/macos-status-bar/build.sh
-open "apps/macos-status-bar/dist/Chromux Status.app"
+open "apps/macos-status-bar/dist/chromux.app"
 
 # Each operates independently
 chromux snapshot agent-a
@@ -320,7 +320,7 @@ chromux status app (local HTTP)
 - **Companion status app** — `chromux app` serves a zero-dependency local UI for
   profile status, raw events, Task timeline, site-note links, retention,
   deletion, and redaction
-- **macOS status bar wrapper** — `apps/macos-status-bar` builds a native AppKit
+- **macOS app** — `apps/macos-status-bar` builds a native AppKit
   menu bar app that starts the local status server and opens the dashboard in a
   WebKit window
 - **macOS release package** — `apps/macos-status-bar/package-release.sh` creates
@@ -417,25 +417,29 @@ session windows, and site knowledge note paths under
 `~/.chromux/skills/<host>/*.md`. V1 does not read Chrome History.
 
 On macOS, use the GitHub Release asset when you want a real menu bar app instead
-of a browser tab. The release zip contains `Chromux Status.app`; unzip it, move
-it to `/Applications` if desired, and open it from Finder:
+of a browser tab. The release zip contains `chromux.app`; unzip it, move it to
+`/Applications` if desired, and open it from Finder:
 
 ```bash
-unzip Chromux-Status-macos-<version>.zip
-open "Chromux Status.app"
+unzip chromux-macos-<version>.zip
+open "chromux.app"
 ```
 
-The release app still requires Node.js >= 22 on the Mac. It runs the bundled
-`chromux.mjs` and dashboard with the local `node` binary, looking at
-`CHROMUX_NODE`, common Homebrew/system paths, and then `PATH`. If macOS blocks an
-unsigned download on first launch, use Control-click > Open or approve it in
-System Settings > Privacy & Security.
+The release app still requires Node.js >= 22 on the Mac. It does not install or
+update the global `chromux` CLI. It runs the bundled `chromux.mjs` and dashboard
+with the local `node` binary, looking at `CHROMUX_NODE`, common Homebrew/system
+paths, and then `PATH`. If macOS blocks an unsigned download on first launch,
+use Control-click > Open or approve it in System Settings > Privacy & Security.
+
+The one-pass installer in `install.md` asks macOS users whether to download the
+latest release app, copy it to `/Applications/chromux.app`, and launch it. If
+`/Applications` is not writable, it falls back to `~/Applications/chromux.app`.
 
 From a repo checkout, build and launch the same native wrapper locally:
 
 ```bash
 ./apps/macos-status-bar/build.sh
-open "apps/macos-status-bar/dist/Chromux Status.app"
+open "apps/macos-status-bar/dist/chromux.app"
 ```
 
 To produce the GitHub Release zip on macOS:

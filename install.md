@@ -100,6 +100,10 @@ if ! grep -Fq '<!-- chromux-browser-guide:start -->' "$HOME/.claude/CLAUDE.md" &
    ! grep -Fq 'Use `chromux` for browser work when available.' "$HOME/.claude/CLAUDE.md"; then
   printf '\n%s\n' "$CHROMUX_GUIDE" >> "$HOME/.claude/CLAUDE.md"
 fi
+
+if [ "$(uname -s)" = "Darwin" ]; then
+  ./apps/macos-status-bar/install-release-app.sh
+fi
 ```
 
 Then run the smoke test below. New Codex, Claude Code, or Hermes sessions should
@@ -130,25 +134,35 @@ It sorts active profiles first, filters profiles by name/status, and can
 bulk-delete selected local profile directories. The app does not require
 Electron, Playwright, Puppeteer, Python, an account, or an external service.
 
-On macOS, install the status bar app from a GitHub Release when you want a
-double-clickable menu bar app:
+On macOS, install the menu bar app from a GitHub Release when you want a
+double-clickable app:
 
 ```bash
-unzip Chromux-Status-macos-<version>.zip
-open "Chromux Status.app"
+./apps/macos-status-bar/install-release-app.sh
 ```
 
-The release app requires Node.js >= 22 on the Mac. It bundles `chromux.mjs` and
-the dashboard UI, then runs them with the local `node` binary. It resolves Node
-from `CHROMUX_NODE`, common Homebrew/system paths, and then `PATH`. If the
-download is unsigned and macOS blocks the first launch, use Control-click > Open
-or approve it in System Settings > Privacy & Security.
+The installer asks before downloading the latest `chromux-macos-<version>.zip`
+release asset, copying `chromux.app` to `/Applications/chromux.app`, and
+launching it.
+If `/Applications` is not writable, it falls back to
+`~/Applications/chromux.app`.
+For non-interactive installs, pass `--yes`.
+
+The release app requires Node.js >= 22 on the Mac.
+It bundles `chromux.mjs` and the dashboard UI, then runs them with the local
+`node` binary.
+It resolves Node from `CHROMUX_NODE`, common Homebrew/system paths, and then
+`PATH`.
+It does not install or update the global `chromux` CLI.
+Use the checkout install above for terminal and agent usage.
+If the download is unsigned and macOS blocks the first launch, use Control-click
+> Open or approve it in System Settings > Privacy & Security.
 
 From a repo checkout, build the same native wrapper locally:
 
 ```bash
 ./apps/macos-status-bar/build.sh
-open "apps/macos-status-bar/dist/Chromux Status.app"
+open "apps/macos-status-bar/dist/chromux.app"
 ```
 
 The wrapper creates a `cx` menu bar item, starts the local `chromux app` server,
@@ -334,11 +348,12 @@ workflow at `.github/workflows/ci.yml` runs on pull requests, pushes, and manual
 runs. It validates `node --check`, `chromux help`, skill files, built-in
 snippets, `npm pack --dry-run`, and the real headless Chrome `./test.sh` suite.
 
-The macOS status app release workflow at
+The macOS app release workflow at
 `.github/workflows/release-macos-status-app.yml` runs on `v*` tags and manual
-dispatch. It builds `Chromux Status.app`, uploads a workflow artifact, and
-attaches `Chromux-Status-macos-<version>.zip` plus its SHA-256 file to the
-GitHub Release for tag runs.
+dispatch.
+It builds `chromux.app`, uploads a workflow artifact, and attaches
+`chromux-macos-<version>.zip` plus its SHA-256 file to the GitHub Release for
+tag runs.
 
 If a manual npm release is needed later, run the CI checks first and publish only
 when the user explicitly asks for a package release.

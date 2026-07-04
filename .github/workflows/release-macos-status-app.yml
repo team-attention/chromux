@@ -1,4 +1,4 @@
-name: macOS Status App Release
+name: macOS App Release
 
 on:
   push:
@@ -29,7 +29,7 @@ jobs:
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: chromux-status-macos
+          name: chromux-macos
           path: |
             apps/macos-status-bar/release/*.zip
             apps/macos-status-bar/release/*.sha256
@@ -48,5 +48,5 @@ jobs:
           else
             gh release create "$TAG_NAME" "${assets[@]}" \
               --title "$TAG_NAME" \
-              --notes "macOS status bar app release for chromux $TAG_NAME."
+              --notes "macOS app release for chromux $TAG_NAME."
           fi

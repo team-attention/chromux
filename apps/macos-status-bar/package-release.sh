@@ -2,17 +2,17 @@
 set -euo pipefail
 
 if [ "$(uname -s)" != "Darwin" ]; then
-  echo "The macOS status app release package must be built on macOS." >&2
+  echo "The chromux macOS app release package must be built on macOS." >&2
   exit 1
 fi
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-APP_NAME="Chromux Status"
+APP_NAME="chromux"
 VERSION="${CHROMUX_STATUS_APP_VERSION:-$(PACKAGE_JSON="$ROOT/package.json" node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(process.env.PACKAGE_JSON, 'utf8')).version)")}"
 DIST_DIR="$ROOT/apps/macos-status-bar/dist"
 RELEASE_DIR="$ROOT/apps/macos-status-bar/release"
 APP_DIR="$DIST_DIR/$APP_NAME.app"
-ZIP_PATH="$RELEASE_DIR/Chromux-Status-macos-$VERSION.zip"
+ZIP_PATH="$RELEASE_DIR/chromux-macos-$VERSION.zip"
 SHA_PATH="$ZIP_PATH.sha256"
 
 "$ROOT/apps/macos-status-bar/build.sh"

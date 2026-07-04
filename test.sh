@@ -71,8 +71,8 @@ check "status app tests Task grouping" "timeline groups Task-labeled events" "$S
 check "status app tests redaction" "profile redaction removes URL and title fields" "$SELF_TEST"
 if [ "$(uname -s)" = "Darwin" ] && command -v swiftc >/dev/null 2>&1; then
   MAC_APP_BUILD=$(./apps/macos-status-bar/build.sh 2>&1)
-  check "macOS status bar app builds" "Built" "$MAC_APP_BUILD"
-  if [ -f "apps/macos-status-bar/dist/Chromux Status.app/Contents/MacOS/Chromux Status" ]; then
+  check "macOS app builds" "Built" "$MAC_APP_BUILD"
+  if [ -f "apps/macos-status-bar/dist/chromux.app/Contents/MacOS/chromux" ]; then
     echo "  ✓ macOS app executable exists"
     PASS=$((PASS+1))
   else
@@ -80,7 +80,7 @@ if [ "$(uname -s)" = "Darwin" ] && command -v swiftc >/dev/null 2>&1; then
     FAIL=$((FAIL+1))
   fi
 else
-  echo "  ✓ macOS status bar app build skipped on non-Darwin or without swiftc"
+  echo "  ✓ macOS app build skipped on non-Darwin or without swiftc"
   PASS=$((PASS+1))
 fi
 echo ""
