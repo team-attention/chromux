@@ -21,6 +21,8 @@ chromux solves this by talking to Chrome's DevTools Protocol directly using only
 
 - **Node.js >= 22** (for built-in `WebSocket`)
 - **Google Chrome** installed
+- CLI support: macOS, Linux, and native Windows. The native AppKit status bar
+  wrapper is macOS-only.
 
 ## Agent Skills
 
@@ -52,7 +54,7 @@ CHROMUX_TASK=research-pass chromux open agent-d https://example.com
 # Open the local profile/activity companion app
 chromux app --open
 
-# Build and launch the native macOS app from a checkout
+# Build and launch the native macOS app from a checkout (macOS only)
 ./apps/macos-status-bar/build.sh
 open "apps/macos-status-bar/dist/chromux.app"
 
@@ -278,19 +280,19 @@ pattern.
   config.json                    Global config (optional)
   profiles/
     default/                     Chrome user-data-dir
-      .state                     PID, port, socket path cache
+      .state                     PID, Chrome CDP port, daemonPort cache
     work/
       .state
 
 Chrome instance A (port 9300, ~/.chromux/profiles/default/)
   ↑ CDP WebSocket per tab
-chromux daemon (Unix socket ~/.chromux/run/default.sock)
+chromux daemon (localhost TCP 127.0.0.1:9400)
   ↑ HTTP
 CLI / AI agents
 
 Chrome instance B (port 9301, ~/.chromux/profiles/work/)
   ↑ CDP WebSocket per tab
-chromux daemon (Unix socket ~/.chromux/run/work.sock)
+chromux daemon (localhost TCP 127.0.0.1:9401)
   ↑ HTTP
 CLI / AI agents
 
@@ -304,13 +306,16 @@ chromux status app (local HTTP)
 - **Tab CRUD** via Chrome's `/json/*` HTTP endpoints
 - **Page ops** via CDP WebSocket JSON-RPC
 - **Daemon per profile** keeps WebSocket connections alive across CLI invocations
+- **Localhost TCP daemon transport** binds profile daemons to `127.0.0.1` on
+  macOS, Linux, and Windows; `.state.port`/`.state.cdpPort` remain Chrome CDP
+  ports, while `.state.daemonPort` is the daemon HTTP endpoint
 - **Auto-launch** — `chromux open` auto-launches default profile if needed
 - **Profile adoption** — `.state` is a cache, not the source of truth; `chromux ps`,
   `launch`, `open`, and `kill` rediscover live Chrome processes from
-  `--user-data-dir` + CDP when daemon/socket/state files drift or disappear
+  `--user-data-dir` + CDP when daemon endpoint or state files drift or disappear
 - **Cold-start coordination** — concurrent first `open` calls for the same profile
   share one startup lock so only one process launches Chrome and the daemon while
-  the others wait for the profile socket to become healthy.
+  the others wait for the profile daemon endpoint to become healthy.
 - **macOS agent-home compatibility** — chromux state follows the invoking
   process `HOME`, while the Chrome child uses the real account home on macOS;
   `--user-data-dir` still keeps the Chrome profile isolated
@@ -320,9 +325,12 @@ chromux status app (local HTTP)
 - **Companion status app** — `chromux app` serves a zero-dependency local UI for
   profile status, raw events, Task timeline, site-note links, retention,
   deletion, and redaction
+- **Windows Chrome discovery** — native Windows CLI runs auto-discover Google
+  Chrome Stable from normal Program Files or LocalAppData installations, while
+  explicit `chromePath` remains available for custom locations
 - **macOS app** — `apps/macos-status-bar` builds a native AppKit
   menu bar app that starts the local status server and opens the dashboard in a
-  WebKit window
+  WebKit window; native app packaging is macOS-only
 - **macOS release package** — `apps/macos-status-bar/package-release.sh` creates
   a zipped `.app` bundle for GitHub Releases and manual downloads
 
@@ -334,9 +342,15 @@ Optional `~/.chromux/config.json`:
 {
   "chromePath": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
   "portRangeStart": 9300,
-  "portRangeEnd": 9399
+  "portRangeEnd": 9399,
+  "daemonPortRangeStart": 9400,
+  "daemonPortRangeEnd": 9499
 }
 ```
+
+On Windows, Chrome Stable is auto-discovered from normal Program Files or
+LocalAppData install locations. Use `chromePath` only for custom locations, for
+example `C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe`.
 
 ## Launch Modes
 

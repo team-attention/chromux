@@ -21,11 +21,12 @@ do the work end to end without asking follow-up questions unless the next step
 requires a user-owned action, such as entering a password, installing Google
 Chrome, or resolving uncommitted changes in an existing checkout.
 
-The default supported install target is macOS/Linux.
+The supported CLI install targets are macOS, Linux, and native Windows. The
+native status bar app is macOS-only.
 
-## One-Pass Agent Setup
+## One-Pass Agent Setup (macOS/Linux shell)
 
-Run this from any directory. It installs or updates chromux from a durable
+Run this from any macOS/Linux shell. It installs or updates chromux from a durable
 checkout, registers the Codex, Claude Code, and Hermes skills, adds lightweight
 browser-work guidance without duplicating it, and verifies the CLI surface.
 
@@ -121,6 +122,38 @@ npm install -g .
 command -v chromux
 chromux help
 ```
+
+### Native Windows PowerShell Setup
+
+Run PowerShell or cmd with Node.js 22 and Google Chrome Stable installed.
+PowerShell is the preferred documented flow:
+
+```powershell
+git clone https://github.com/team-attention/chromux "$HOME\Developer\chromux"
+Set-Location "$HOME\Developer\chromux"
+npm install -g .
+Get-Command chromux
+chromux help
+chromux launch default --headless
+$env:CHROMUX_PROFILE = "default"
+chromux open smoke https://example.com
+chromux snapshot smoke
+chromux kill default
+Remove-Item Env:\CHROMUX_PROFILE -ErrorAction SilentlyContinue
+```
+
+chromux auto-discovers Google Chrome Stable from normal Program Files and
+LocalAppData locations on native Windows. For custom Chrome installs, set
+`chromePath` in `%USERPROFILE%\.chromux\config.json`.
+
+The local dashboard works from the CLI on Windows:
+
+```powershell
+chromux app --open
+```
+
+The native AppKit status bar wrapper and release zip are macOS-only; Windows
+does not have a native tray app or installer in this release.
 
 The optional local companion app is served by the same zero-dependency CLI:
 
@@ -346,7 +379,9 @@ files and let the user decide whether to keep, commit, or discard them.
 GitHub Actions does not publish the npm package automatically. The repository CI
 workflow at `.github/workflows/ci.yml` runs on pull requests, pushes, and manual
 runs. It validates `node --check`, `chromux help`, skill files, built-in
-snippets, `npm pack --dry-run`, and the real headless Chrome `./test.sh` suite.
+snippets, `npm pack --dry-run`, the real headless Chrome `./test.sh` suite on
+Linux, and a native Windows PowerShell Chrome smoke covering launch, open,
+snapshot, list, ps, kill, and `chromux app --open`.
 
 The macOS app release workflow at
 `.github/workflows/release-macos-status-app.yml` runs on `v*` tags and manual
@@ -393,9 +428,11 @@ Then reinstall from the repo checkout with `npm install -g .` or
 
 ### Chrome is not found
 
-Install Google Chrome. chromux currently searches common macOS/Linux Chrome and
-Chromium paths. The supported validation target for this installer is
-macOS/Linux; Windows support is deferred.
+Install Google Chrome Stable. chromux searches common macOS/Linux Chrome and
+Chromium paths, plus native Windows Google Chrome Stable locations under
+Program Files and LocalAppData. If Chrome is installed somewhere else, set
+`chromePath` in `~/.chromux/config.json` on macOS/Linux or
+`%USERPROFILE%\.chromux\config.json` on Windows.
 
 ### Chrome starts but CDP/DevTools never opens on macOS
 
@@ -417,8 +454,9 @@ chromux ps
 chromux kill <profile>
 ```
 
-chromux stores isolated profile state under `~/.chromux/profiles/<profile>/`
-and transient daemon sockets/locks under `~/.chromux/run/`.
+chromux stores isolated profile state under `~/.chromux/profiles/<profile>/`.
+The `.state` file keeps Chrome CDP `port`/`cdpPort` separate from daemon HTTP
+`daemonPort`; profile startup locks live under `~/.chromux/run/`.
 `chromux kill <profile>` also removes stale Chrome singleton lock files after it
 has confirmed that no Chrome process is still using that isolated profile. The
 cleanup can include Chrome's profile version marker when Chrome left it behind.

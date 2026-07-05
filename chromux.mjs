@@ -14,6 +14,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import net from 'node:net';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -32,6 +33,9 @@ const ACTIVITY_AGGREGATES_PATH = path.join(ACTIVITY_DIR, 'aggregates.json');
 const STATUS_APP_DIR = path.join(MODULE_DIR, 'status-app');
 const PORT_RANGE_START = 9300;
 const PORT_RANGE_END = 9399;
+const DAEMON_HOST = '127.0.0.1';
+const DAEMON_PORT_RANGE_START = 9400;
+const DAEMON_PORT_RANGE_END = 9499;
 const DEFAULT_PROFILE = 'default';
 const DEFAULT_ACTIVITY_RETENTION_DAYS = 90;
 const ACTIVITY_RETENTION_OPTIONS = new Set([7, 30, 90, 365, 'unlimited']);
@@ -63,7 +67,7 @@ const CRAWL_BLOCK_URLS = [
   '*://*.facebook.com/tr/*',
 ];
 
-const CHROME_PATHS = [
+const POSIX_CHROME_PATHS = [
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
   '/usr/bin/google-chrome',
   '/usr/bin/chromium-browser',
@@ -119,6 +123,25 @@ function sockPath(name) {
   validateName(name);
   fs.mkdirSync(RUN_DIR, { recursive: true, mode: 0o700 });
   return path.join(RUN_DIR, `${name}.sock`);
+}
+
+function daemonEndpointForPort(port) {
+  if (!Number.isInteger(Number(port))) return null;
+  return { type: 'tcp', host: DAEMON_HOST, port: Number(port) };
+}
+
+function legacySocketEndpoint(sock) {
+  return sock ? { type: 'unix', socketPath: sock } : null;
+}
+
+function daemonEndpointFromState(state) {
+  if (!state) return null;
+  if (state.daemonEndpoint?.type === 'tcp' && state.daemonEndpoint.port) {
+    return daemonEndpointForPort(state.daemonEndpoint.port);
+  }
+  if (state.daemonPort) return daemonEndpointForPort(state.daemonPort);
+  if (state.sock) return legacySocketEndpoint(state.sock);
+  return null;
 }
 
 function chromeSingletonPaths(name) {
@@ -499,16 +522,27 @@ function saveConfig(cfg) {
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2) + '\n');
 }
 
-function findChrome(cfg) {
+function chromePathCandidates(platform = process.platform, env = process.env) {
+  if (platform === 'win32') {
+    return [
+      env.PROGRAMFILES && path.join(env.PROGRAMFILES, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+      env['PROGRAMFILES(X86)'] && path.join(env['PROGRAMFILES(X86)'], 'Google', 'Chrome', 'Application', 'chrome.exe'),
+      env.LOCALAPPDATA && path.join(env.LOCALAPPDATA, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+    ].filter(Boolean);
+  }
+  return POSIX_CHROME_PATHS;
+}
+
+function findChrome(cfg, platform = process.platform, env = process.env) {
   if (cfg.chromePath && fs.existsSync(cfg.chromePath)) return cfg.chromePath;
-  for (const p of CHROME_PATHS) {
+  for (const p of chromePathCandidates(platform, env)) {
     if (fs.existsSync(p)) return p;
   }
   return null;
 }
 
 // ============================================================
-// State file helpers (per-profile cache: pid, port, sock)
+// State file helpers (per-profile cache: pid, Chrome CDP port, daemon endpoint)
 // ============================================================
 
 function readState(profileName) {
@@ -520,6 +554,31 @@ function writeState(profileName, state) {
   const dir = profileDir(profileName);
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(statePath(profileName), JSON.stringify(state, null, 2) + '\n');
+}
+
+function updateState(profileName, patch) {
+  const current = readState(profileName) || {};
+  const next = { ...current, ...patch };
+  writeState(profileName, next);
+  return next;
+}
+
+function writeDaemonEndpointState(profileName, daemonPort) {
+  return updateState(profileName, {
+    daemonPort,
+    daemonEndpoint: daemonEndpointForPort(daemonPort),
+    sock: undefined,
+  });
+}
+
+function clearDaemonEndpointState(profileName, expectedPort = null) {
+  const state = readState(profileName);
+  if (!state) return;
+  if (expectedPort !== null && Number(state.daemonPort) !== Number(expectedPort)) return;
+  delete state.daemonPort;
+  delete state.daemonEndpoint;
+  delete state.sock;
+  writeState(profileName, state);
 }
 
 function clearState(profileName) {
@@ -584,7 +643,38 @@ function getArgValue(args, name) {
   return null;
 }
 
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function getCommandArgValue(command, name) {
+  const re = new RegExp(`(?:^|\\s)${escapeRegExp(name)}(?:=|\\s+)(?:"([^"]*)"|'([^']*)'|(\\S+))`);
+  const match = String(command || '').match(re);
+  if (!match) return null;
+  return stripQuotes(match[1] ?? match[2] ?? match[3] ?? '');
+}
+
+function listWindowsProcesses() {
+  const script = "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress";
+  const res = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+    encoding: 'utf8',
+    maxBuffer: 32 * 1024 * 1024,
+  });
+  if (res.error || res.status !== 0 || !res.stdout.trim()) return [];
+  try {
+    const parsed = JSON.parse(res.stdout);
+    const rows = Array.isArray(parsed) ? parsed : [parsed];
+    return rows.map(row => ({
+      pid: Number(row.ProcessId),
+      command: row.CommandLine || '',
+    })).filter(proc => Number.isInteger(proc.pid) && proc.command);
+  } catch {
+    return [];
+  }
+}
+
 function listProcesses() {
+  if (process.platform === 'win32') return listWindowsProcesses();
   const psArgs = process.platform === 'darwin'
     ? ['-axo', 'pid=,command=']
     : ['-eo', 'pid=,args='];
@@ -612,13 +702,13 @@ function isChromuxCommand(command) {
 function parseChromuxChromeProcess(proc) {
   if (!proc.command.includes('--user-data-dir')) return null;
   const args = splitCommand(proc.command);
-  const userDataDir = getArgValue(args, '--user-data-dir');
+  const userDataDir = getCommandArgValue(proc.command, '--user-data-dir') || getArgValue(args, '--user-data-dir');
   if (!userDataDir) return null;
   const resolvedUserDataDir = path.resolve(userDataDir);
   const rel = path.relative(PROFILES_DIR, resolvedUserDataDir);
   if (!rel || rel.startsWith('..') || path.isAbsolute(rel) || rel.includes(path.sep)) return null;
   if (!VALID_NAME.test(rel)) return null;
-  const portValue = getArgValue(args, '--remote-debugging-port');
+  const portValue = getCommandArgValue(proc.command, '--remote-debugging-port') || getArgValue(args, '--remote-debugging-port');
   const port = portValue ? Number(portValue) : null;
   return {
     pid: proc.pid,
@@ -635,7 +725,7 @@ function listChromuxChromeProcesses() {
 }
 
 function commandUsesProfileDir(command, profileName) {
-  const userDataDir = getArgValue(splitCommand(command), '--user-data-dir');
+  const userDataDir = getCommandArgValue(command, '--user-data-dir') || getArgValue(splitCommand(command), '--user-data-dir');
   if (!userDataDir) return false;
   return path.resolve(userDataDir) === path.resolve(profileDir(profileName));
 }
@@ -651,22 +741,27 @@ function profileResourceSnapshot(profileName) {
     if (proc.command.includes('--type=renderer')) renderers++;
   }
 
-  const psArgs = process.platform === 'darwin'
-    ? ['-axo', 'pid=,rss=,command=']
-    : ['-eo', 'pid=,rss=,args='];
-  const res = spawnSync('ps', psArgs, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
-  if (!res.error && res.status === 0) {
-    for (const line of res.stdout.split('\n')) {
-      const m = line.match(/^\s*(\d+)\s+(\d+)\s+(.*)$/);
-      if (!m) continue;
-      if (commandUsesProfileDir(m[3], profileName)) rssKb += Number(m[2]) || 0;
+  let rssAvailable = false;
+  if (process.platform !== 'win32') {
+    const psArgs = process.platform === 'darwin'
+      ? ['-axo', 'pid=,rss=,command=']
+      : ['-eo', 'pid=,rss=,args='];
+    const res = spawnSync('ps', psArgs, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+    if (!res.error && res.status === 0) {
+      rssAvailable = true;
+      for (const line of res.stdout.split('\n')) {
+        const m = line.match(/^\s*(\d+)\s+(\d+)\s+(.*)$/);
+        if (!m) continue;
+        if (commandUsesProfileDir(m[3], profileName)) rssKb += Number(m[2]) || 0;
+      }
     }
   }
 
   return {
     chromeProcesses,
     renderers,
-    rssMb: Math.round(rssKb / 1024),
+    rssMb: rssAvailable ? Math.round(rssKb / 1024) : null,
+    telemetry: rssAvailable ? 'ok' : 'best-effort',
   };
 }
 
@@ -704,17 +799,20 @@ async function resolveProfileRuntime(profileName, { adopt = true } = {}) {
 
   if (state) {
     const statePidAlive = state.pid && isProcessAlive(state.pid);
-    const stateCdpOk = state.port && await checkCDP(state.port);
+    const stateCdpPort = state.cdpPort || state.port;
+    const stateCdpOk = stateCdpPort && await checkCDP(stateCdpPort);
     if (statePidAlive && stateCdpOk) {
-      const proc = byPid.get(state.pid) || candidates.find(p => p.port === state.port);
+      const proc = byPid.get(state.pid) || candidates.find(p => p.port === stateCdpPort);
       if (!proc || proc.browser) {
         return {
           profile: profileName,
           pid: state.pid,
-          port: state.port,
+          port: stateCdpPort,
+          cdpPort: stateCdpPort,
           headless: proc ? proc.headless : !!state.headless,
           launchMode: (proc?.headless || state.headless) ? 'headless' : 'headed',
-          sock: state.sock || sockPath(profileName),
+          daemonEndpoint: daemonEndpointFromState(state),
+          sock: state.sock || null,
           userDataDir: proc ? proc.userDataDir : profileDir(profileName),
           source: 'state',
           status: 'running',
@@ -732,18 +830,20 @@ async function resolveProfileRuntime(profileName, { adopt = true } = {}) {
       profile: profileName,
       pid: proc.pid,
       port: proc.port,
+      cdpPort: proc.port,
       headless: proc.headless,
       launchMode: proc.headless ? 'headless' : 'headed',
-      sock: sockPath(profileName),
+      daemonEndpoint: daemonEndpointFromState(state),
+      sock: state?.sock || null,
       userDataDir: proc.userDataDir,
       source: 'process',
       status: 'running',
     };
     if (adopt) {
-      writeState(profileName, {
+      updateState(profileName, {
         pid: runtime.pid,
         port: runtime.port,
-        sock: runtime.sock,
+        cdpPort: runtime.cdpPort,
         headless: runtime.headless,
         launchMode: runtime.launchMode,
         adopted: true,
@@ -756,10 +856,12 @@ async function resolveProfileRuntime(profileName, { adopt = true } = {}) {
     return {
       profile: profileName,
       pid: state.pid,
-      port: state.port || null,
+      port: state.cdpPort || state.port || null,
+      cdpPort: state.cdpPort || state.port || null,
       headless: !!state.headless,
       launchMode: state.headless ? 'headless' : 'headed',
-      sock: state.sock || sockPath(profileName),
+      daemonEndpoint: daemonEndpointFromState(state),
+      sock: state.sock || null,
       userDataDir: profileDir(profileName),
       source: 'state',
       status: 'locked',
@@ -773,9 +875,11 @@ async function resolveProfileRuntime(profileName, { adopt = true } = {}) {
       profile: profileName,
       pid: proc.pid,
       port: proc.port,
+      cdpPort: proc.port,
       headless: proc.headless,
       launchMode: proc.headless ? 'headless' : 'headed',
-      sock: sockPath(profileName),
+      daemonEndpoint: daemonEndpointFromState(state),
+      sock: state?.sock || null,
       userDataDir: proc.userDataDir,
       source: 'process',
       status: 'locked',
@@ -809,13 +913,41 @@ async function findFreePort(cfg) {
   try {
     for (const name of fs.readdirSync(PROFILES_DIR)) {
       const st = readState(name);
-      if (st && isProcessAlive(st.pid)) usedPorts.add(st.port);
+      if (st && isProcessAlive(st.pid)) usedPorts.add(st.cdpPort || st.port);
     }
   } catch {}
   for (let port = start; port <= end; port++) {
     if (usedPorts.has(port)) continue;
     const taken = await checkCDP(port);
     if (!taken) return port;
+  }
+  return null;
+}
+
+function isTcpPortAvailable(port, host = DAEMON_HOST) {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.once('error', () => resolve(false));
+    server.once('listening', () => {
+      server.close(() => resolve(true));
+    });
+    server.listen(port, host);
+  });
+}
+
+async function findFreeDaemonPort(cfg = loadConfig()) {
+  const start = cfg.daemonPortRangeStart || DAEMON_PORT_RANGE_START;
+  const end = cfg.daemonPortRangeEnd || DAEMON_PORT_RANGE_END;
+  const usedPorts = new Set();
+  try {
+    for (const name of fs.readdirSync(PROFILES_DIR)) {
+      const st = readState(name);
+      if (st?.daemonPort) usedPorts.add(Number(st.daemonPort));
+    }
+  } catch {}
+  for (let port = start; port <= end; port++) {
+    if (usedPorts.has(port)) continue;
+    if (await isTcpPortAvailable(port)) return port;
   }
   return null;
 }
@@ -853,12 +985,12 @@ function profileFileInfo(profileName) {
   }
 }
 
-async function readDaemonSnapshot(sock) {
-  if (!fs.existsSync(sock)) {
+async function readDaemonSnapshot(endpoint) {
+  if (!endpoint) {
     return { status: 'idle', sessions: null, mode: null, paused: false, resources: null };
   }
   try {
-    const health = await cliReq('GET', '/health', null, sock, 1500);
+    const health = await cliReq('GET', '/health', null, endpoint, 1500);
     return {
       status: 'ok',
       sessions: health.sessions ?? null,
@@ -891,8 +1023,7 @@ async function profileInventoryItem(profileName) {
     status: 'error',
     reason: err.message,
   }));
-  const sock = sockPath(profileName);
-  const daemon = await readDaemonSnapshot(sock);
+  const daemon = await readDaemonSnapshot(runtime?.daemonEndpoint || daemonEndpointFromState(readState(profileName)));
   const activeTabs = await readActiveTabCount(runtime);
   const paused = fs.existsSync(profileStopPath(profileName));
   return {
@@ -1193,9 +1324,13 @@ const SNAPSHOT_JS = `((FILTER) => {
 // Daemon server (per-profile)
 // ============================================================
 
-async function startDaemon(profileName, port) {
-  const sock = sockPath(profileName);
-  try { fs.unlinkSync(sock); } catch {}
+async function startDaemon(profileName, port, daemonPort) {
+  try { fs.unlinkSync(sockPath(profileName)); } catch {}
+  daemonPort = Number(daemonPort);
+  if (!Number.isInteger(daemonPort) || daemonPort <= 0 || daemonPort > 65535) {
+    console.error('Usage: --daemon <profile> <chrome-cdp-port> <daemon-port>');
+    process.exit(1);
+  }
   const settings = modeSettings();
   settings.profileName = profileName;
   settings.stopFile = process.env.CHROMUX_STOP_FILE || profileStopPath(profileName);
@@ -1239,9 +1374,9 @@ async function startDaemon(profileName, port) {
     }
   });
 
-  server.listen(sock, () => {
-    try { fs.chmodSync(sock, 0o600); } catch {}
-    console.log(`chromux daemon [${profileName}] mode=${settings.mode} on ${sock} → port ${port}`);
+  server.listen(daemonPort, DAEMON_HOST, () => {
+    writeDaemonEndpointState(profileName, daemonPort);
+    console.log(`chromux daemon [${profileName}] mode=${settings.mode} on http://${DAEMON_HOST}:${daemonPort} -> CDP ${port}`);
   });
 
   // Watchdog: prune dead, stale, or idle sessions. Crawl mode uses a shorter
@@ -1272,7 +1407,7 @@ async function startDaemon(profileName, port) {
 
   const cleanup = () => {
     for (const s of sessions.values()) s.cdp.close();
-    try { fs.unlinkSync(sock); } catch {};
+    clearDaemonEndpointState(profileName, daemonPort);
   };
   process.on('exit', cleanup);
   process.on('SIGTERM', () => process.exit(0));
@@ -2202,6 +2337,17 @@ function spawnChrome(chrome, chromeArgs) {
   });
 }
 
+function externalOpenerCommand(url, platform = process.platform) {
+  if (platform === 'darwin') return { command: 'open', args: [url] };
+  if (platform === 'win32') return { command: 'cmd.exe', args: ['/c', 'start', '', url] };
+  return { command: 'xdg-open', args: [url] };
+}
+
+function openExternal(url) {
+  const opener = externalOpenerCommand(url);
+  return spawn(opener.command, opener.args, { detached: true, stdio: 'ignore' }).unref();
+}
+
 async function cmdLaunch(profileName, explicitPort, launchMode = 'headless') {
   launchMode = normalizeLaunchMode(launchMode);
   const headless = launchMode === 'headless';
@@ -2280,7 +2426,7 @@ async function cmdLaunch(profileName, explicitPort, launchMode = 'headless') {
       writeState(profileName, {
         pid,
         port,
-        sock: sockPath(profileName),
+        cdpPort: port,
         headless,
         launchMode,
         mode: settings.mode,
@@ -2324,19 +2470,19 @@ async function cmdPs() {
     let tabs = '-';
     if (cdpOk) {
       try {
-        const list = await cliReq('GET', '/list', null, runtime.sock, 5000);
+        const list = await cliReq('GET', '/list', null, runtime.daemonEndpoint, 5000);
         tabs = String(Object.keys(list).length);
       } catch {}
     }
 
-    // Check daemon status via socket existence + health.
-    // "idle" = no socket yet (daemon lazy-starts on first tab command) — not a failure.
-    // "stale" = socket exists but /health fails (daemon crashed, needs cleanup).
-    // "ok"   = socket exists and /health succeeds.
+    // Check daemon status via endpoint state + health.
+    // "idle" = no daemon endpoint yet (daemon lazy-starts on first tab command) — not a failure.
+    // "stale" = endpoint state exists but /health fails (daemon crashed, needs cleanup).
+    // "ok"   = endpoint state exists and /health succeeds.
     let daemon = 'idle';
-    if (fs.existsSync(runtime.sock)) {
+    if (runtime.daemonEndpoint) {
       try {
-        await cliReq('GET', '/health', null, runtime.sock, 2000);
+        await cliReq('GET', '/health', null, runtime.daemonEndpoint, 2000);
         daemon = 'ok';
       } catch { daemon = 'stale'; }
     }
@@ -2366,19 +2512,35 @@ async function cmdPs() {
 // CLI: kill — stop a profile's Chrome + daemon
 // ============================================================
 
+function terminateProcess(pid, force = false) {
+  if (!isProcessAlive(pid)) return;
+  try {
+    process.kill(pid, force ? 'SIGKILL' : 'SIGTERM');
+    return;
+  } catch {}
+  if (process.platform === 'win32') {
+    spawnSync('taskkill.exe', ['/PID', String(pid), force ? '/F' : '', '/T'].filter(Boolean), {
+      stdio: 'ignore',
+    });
+  }
+}
+
 async function cmdKill(profileName) {
   // Stop daemon first
-  const sock = sockPath(profileName);
-  try { await cliReq('POST', '/stop', {}, sock); } catch {}
+  const st = readState(profileName);
+  const endpoint = daemonEndpointFromState(st);
+  try { await cliReq('POST', '/stop', {}, endpoint); } catch {}
+  if (st?.sock) {
+    try { await cliReq('POST', '/stop', {}, legacySocketEndpoint(st.sock)); } catch {}
+  }
 
   const pids = new Set();
-  const st = readState(profileName);
   if (st && isProcessAlive(st.pid)) pids.add(st.pid);
   for (const proc of findProfileProcesses(profileName)) {
     if (isProcessAlive(proc.pid)) pids.add(proc.pid);
   }
   for (const pid of pids) {
-    try { process.kill(pid, 'SIGTERM'); } catch {}
+    terminateProcess(pid, false);
   }
   const deadline = Date.now() + 3000;
   while ([...pids].some(pid => isProcessAlive(pid)) && Date.now() < deadline) {
@@ -2386,11 +2548,11 @@ async function cmdKill(profileName) {
   }
   for (const pid of pids) {
     if (isProcessAlive(pid)) {
-      try { process.kill(pid, 'SIGKILL'); } catch {}
+      terminateProcess(pid, true);
     }
   }
   clearState(profileName);
-  try { fs.unlinkSync(sock); } catch {}
+  try { fs.unlinkSync(sockPath(profileName)); } catch {}
   const removedProfileFiles = clearStaleChromeSingletons(profileName);
   console.log(JSON.stringify({ profile: profileName, killed: true, pids: [...pids], removedProfileFiles }, null, 2));
 }
@@ -2408,7 +2570,7 @@ function cmdResume(profileName) {
 }
 
 // ============================================================
-// CLI client (talks to daemon over Unix socket)
+// CLI client (talks to the profile daemon endpoint)
 // ============================================================
 
 /**
@@ -2685,13 +2847,25 @@ async function cmdScrollUntil(args, sock) {
   return cliReq('POST', '/scroll-until', { session, selector, jsCount, count, maxScrolls, delayMs, target }, sock, maxScrolls * (delayMs + 500) + 10000);
 }
 
-function cliReq(method, urlPath, body, sock, timeoutMs = 30000) {
+function cliReq(method, urlPath, body, endpoint, timeoutMs = 30000) {
   return new Promise((resolve, reject) => {
+    const normalized = typeof endpoint === 'string' ? legacySocketEndpoint(endpoint) : endpoint;
+    if (!normalized) {
+      reject(new Error('Daemon endpoint unavailable'));
+      return;
+    }
     const opts = {
-      socketPath: sock, path: urlPath, method,
+      path: urlPath,
+      method,
       headers: body ? { 'Content-Type': 'application/json' } : {},
       timeout: timeoutMs,
     };
+    if (normalized.type === 'tcp') {
+      opts.hostname = normalized.host || DAEMON_HOST;
+      opts.port = normalized.port;
+    } else {
+      opts.socketPath = normalized.socketPath;
+    }
     const req = http.request(opts, (res) => {
       let d = '';
       res.on('data', c => d += c);
@@ -2722,15 +2896,16 @@ async function resolveProfilePort(profileName) {
 }
 
 async function ensureDaemon(profileName) {
-  const sock = sockPath(profileName);
+  let endpoint = daemonEndpointFromState(readState(profileName));
   const desiredMode = getMode();
 
   // Check if daemon already running (short timeout to fail fast)
   try {
-    const health = await cliReq('GET', '/health', null, sock, 3000);
-    if (!health.mode || health.mode === desiredMode) return sock;
-    await cliReq('POST', '/stop', {}, sock, 3000).catch(() => {});
-    await waitForSocketGone(sock, 3000);
+    const health = await cliReq('GET', '/health', null, endpoint, 3000);
+    if (endpoint?.type === 'tcp' && (!health.mode || health.mode === desiredMode)) return endpoint;
+    await cliReq('POST', '/stop', {}, endpoint, 3000).catch(() => {});
+    await waitForEndpointGone(endpoint, 3000);
+    clearDaemonEndpointState(profileName);
   } catch {}
 
   // Acquire lockfile to prevent concurrent daemon starts (CR-008)
@@ -2738,17 +2913,20 @@ async function ensureDaemon(profileName) {
   const lockFd = await acquireLock(lockFile);
   try {
     // Re-check after lock — another process may have started it
+    endpoint = daemonEndpointFromState(readState(profileName));
     try {
-      const health = await cliReq('GET', '/health', null, sock, 3000);
-      if (!health.mode || health.mode === desiredMode) return sock;
-      await cliReq('POST', '/stop', {}, sock, 3000).catch(() => {});
-      await waitForSocketGone(sock, 3000);
+      const health = await cliReq('GET', '/health', null, endpoint, 3000);
+      if (endpoint?.type === 'tcp' && (!health.mode || health.mode === desiredMode)) return endpoint;
+      await cliReq('POST', '/stop', {}, endpoint, 3000).catch(() => {});
+      await waitForEndpointGone(endpoint, 3000);
+      clearDaemonEndpointState(profileName);
     } catch {}
 
-    // Clean up stale socket only while holding the startup lock. During
+    // Clean up stale legacy socket only while holding the startup lock. During
     // concurrent cold-start, another CLI may be starting the daemon; deleting
     // its socket before taking the lock can produce ECONNRESET/socket hang up.
-    try { fs.unlinkSync(sock); } catch {}
+    try { fs.unlinkSync(sockPath(profileName)); } catch {}
+    clearDaemonEndpointState(profileName);
 
     // Auto-launch profile if not running
     let port = await resolveProfilePort(profileName);
@@ -2762,16 +2940,23 @@ async function ensureDaemon(profileName) {
       }
     }
 
+    const daemonPort = await findFreeDaemonPort(loadConfig());
+    if (!daemonPort) {
+      console.error(`No free daemon port in range ${DAEMON_PORT_RANGE_START}-${DAEMON_PORT_RANGE_END}`);
+      process.exit(1);
+    }
+    endpoint = daemonEndpointForPort(daemonPort);
+
     // Start daemon
     process.stderr.write(`Starting chromux daemon [${profileName}]...`);
-    const child = spawn(process.execPath, [process.argv[1], '--daemon', profileName, String(port)], {
+    const child = spawn(process.execPath, [process.argv[1], '--daemon', profileName, String(port), String(daemonPort)], {
       detached: true, stdio: 'ignore',
     });
     child.unref();
 
     for (let i = 0; i < 50; i++) {
       await sleep(200);
-      try { await cliReq('GET', '/health', null, sock, 3000); process.stderr.write(' ready.\n'); return sock; } catch {}
+      try { await cliReq('GET', '/health', null, endpoint, 3000); process.stderr.write(' ready.\n'); return endpoint; } catch {}
     }
     console.error(' daemon failed to start.');
     process.exit(1);
@@ -2780,12 +2965,23 @@ async function ensureDaemon(profileName) {
   }
 }
 
-async function waitForSocketGone(sock, timeoutMs = 3000) {
+async function waitForEndpointGone(endpoint, timeoutMs = 3000) {
   const deadline = Date.now() + timeoutMs;
-  while (fs.existsSync(sock) && Date.now() < deadline) {
+  while (Date.now() < deadline) {
+    if (endpoint?.type === 'unix') {
+      if (!fs.existsSync(endpoint.socketPath)) break;
+    } else {
+      try {
+        await cliReq('GET', '/health', null, endpoint, 500);
+      } catch {
+        break;
+      }
+    }
     await sleep(100);
   }
-  try { fs.unlinkSync(sock); } catch {}
+  if (endpoint?.type === 'unix') {
+    try { fs.unlinkSync(endpoint.socketPath); } catch {}
+  }
 }
 
 // ============================================================
@@ -2928,9 +3124,7 @@ async function runCli(cmd, args) {
       const info = await cliReq('GET', `/show/${args[0]}`, null, sock);
       const url = info.devtoolsFrontendUrl;
       if (!url) { console.error('No DevTools URL available'); process.exit(1); }
-      // Open in user's default browser (macOS: open, Linux: xdg-open)
-      const opener = process.platform === 'darwin' ? 'open' : 'xdg-open';
-      spawn(opener, [url], { detached: true, stdio: 'ignore' }).unref();
+      openExternal(url);
       recordCliActivity({ cmd, args, profile, session, result: info, startedAt });
       console.log(JSON.stringify(info, null, 2));
       return;
@@ -3076,10 +3270,11 @@ async function performProfileAction(profileName, action) {
     });
   }
   if (action === 'stop-daemon') {
-    const sock = sockPath(profileName);
-    if (!fs.existsSync(sock)) return { ok: false, code: null, stdout: '', stderr: 'No daemon socket found for this profile.' };
+    const state = readState(profileName);
+    const endpoint = daemonEndpointFromState(state);
+    if (!endpoint) return { ok: false, code: null, stdout: '', stderr: 'No daemon endpoint found for this profile.' };
     try {
-      const result = await cliReq('POST', '/stop', {}, sock, 3000);
+      const result = await cliReq('POST', '/stop', {}, endpoint, 3000);
       return { ok: true, code: 0, stdout: JSON.stringify(result, null, 2), stderr: '' };
     } catch (err) {
       return { ok: false, code: null, stdout: '', stderr: err.message };
@@ -3278,6 +3473,23 @@ async function runStatusAppSelfTest() {
   assertSelfTest(deletion.deleted === 2, 'Task-scoped deletion removes matching raw events', checks);
   const retention = setActivityRetention('unlimited');
   assertSelfTest(retention.config.retentionDays === 'unlimited', 'retention accepts unlimited', checks);
+  const winCandidates = chromePathCandidates('win32', {
+    PROGRAMFILES: 'C:\\Program Files',
+    'PROGRAMFILES(X86)': 'C:\\Program Files (x86)',
+    LOCALAPPDATA: 'C:\\Users\\agent\\AppData\\Local',
+  });
+  assertSelfTest(winCandidates.some(candidate => candidate.endsWith(path.join('Google', 'Chrome', 'Application', 'chrome.exe'))), 'Windows Chrome Stable candidates are generated', checks);
+  const winCommand = '"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" --user-data-dir="C:\\Users\\agent\\.chromux\\profiles\\alpha" --remote-debugging-port=9301';
+  assertSelfTest(getCommandArgValue(winCommand, '--user-data-dir').includes('profiles\\alpha'), 'Windows command parsing preserves profile paths', checks);
+  const winOpener = externalOpenerCommand('http://127.0.0.1:9340/', 'win32');
+  assertSelfTest(winOpener.command === 'cmd.exe' && winOpener.args.includes('start'), 'Windows opener uses cmd start', checks);
+  writeState('alpha', { pid: 123, port: 9301, cdpPort: 9301, sock: '/tmp/legacy.sock' });
+  writeDaemonEndpointState('alpha', 9401);
+  const alphaState = readState('alpha');
+  assertSelfTest(alphaState.port === 9301 && alphaState.cdpPort === 9301 && alphaState.daemonPort === 9401, 'daemonPort is stored separately from Chrome CDP port', checks);
+  assertSelfTest(!alphaState.sock && daemonEndpointFromState(alphaState)?.type === 'tcp', 'legacy daemon socket state migrates to TCP endpoint state', checks);
+  clearState('alpha');
+  fs.mkdirSync(profileDir('alpha'), { recursive: true });
   const inventory = await collectProfileInventory();
   assertSelfTest(inventory.some(profile => profile.name === 'alpha') && inventory.some(profile => profile.name === 'beta'), 'profile inventory lists known local profiles', checks);
   const sortedSample = [
@@ -3320,8 +3532,7 @@ async function cmdApp(args) {
   const url = `http://${host}:${actualPort}/`;
   console.log(`chromux status app: ${url}`);
   if (args.includes('--open')) {
-    const opener = process.platform === 'darwin' ? 'open' : 'xdg-open';
-    spawn(opener, [url], { detached: true, stdio: 'ignore' }).unref();
+    openExternal(url);
   }
 }
 
@@ -3518,7 +3729,7 @@ Paths:
   CHROMUX_HOME                       Override chromux state root for tests or isolation
   ~/.chromux/config.json             Global config
   ~/.chromux/profiles/<name>/        Chrome user-data-dir per profile
-  ~/.chromux/run/<name>.sock          Daemon socket per profile
+  ~/.chromux/profiles/<name>/.state   Profile state with Chrome CDP port and daemonPort
   ~/.chromux/run/<name>.lock          Daemon startup lock (transient)
   ~/.chromux/activity/events.jsonl    Local full-URL activity event log
   ~/.chromux/activity/config.json     Activity retention config
@@ -3548,8 +3759,9 @@ const [,, cmd, ...args] = process.argv;
 if (cmd === '--daemon') {
   const profileName = args[0] || DEFAULT_PROFILE;
   const port = parseInt(args[1]);
-  if (!port) { console.error('Usage: --daemon <profile> <port>'); process.exit(1); }
-  await startDaemon(profileName, port);
+  const daemonPort = parseInt(args[2]);
+  if (!port || !daemonPort) { console.error('Usage: --daemon <profile> <chrome-cdp-port> <daemon-port>'); process.exit(1); }
+  await startDaemon(profileName, port, daemonPort);
 } else if (!cmd || cmd === 'help' || cmd === '--help') {
   console.log(HELP);
 } else {
