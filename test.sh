@@ -136,8 +136,21 @@ fi
 # --- Test 3: Open tabs ---
 echo ""
 echo "--- Test 3: Open tabs ---"
+node -e 'const fs=require("fs"); const state=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); state.sock=process.argv[2]; delete state.daemonPort; delete state.daemonEndpoint; fs.writeFileSync(process.argv[1], JSON.stringify(state,null,2)+"\n");' "$STATE" "/tmp/chromux-legacy-$PROFILE.sock"
 R3A=$(CHROMUX_PROFILE=$PROFILE node "$CT" open tab-a https://example.com 2>/dev/null)
 check "tab-a opened" "example.com" "$R3A"
+STATE_ENDPOINT=$(node -e 'const fs=require("fs"); const st=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); console.log(`port=${st.port} cdpPort=${st.cdpPort} daemonPort=${st.daemonPort} sock=${Object.prototype.hasOwnProperty.call(st,"sock")}`);' "$STATE")
+check "state keeps Chrome CDP port" "cdpPort=" "$STATE_ENDPOINT"
+check "state stores daemonPort separately" "daemonPort=" "$STATE_ENDPOINT"
+if echo "$STATE_ENDPOINT" | grep -q "sock=true"; then
+  echo "  ✗ legacy socket state was not migrated away"
+  FAIL=$((FAIL+1))
+else
+  echo "  ✓ legacy socket state migrated away"
+  PASS=$((PASS+1))
+fi
+STATE_PORT_SEPARATE=$(node -e 'const fs=require("fs"); const st=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); console.log(st.port !== st.daemonPort && st.cdpPort !== st.daemonPort ? "separate" : "mixed");' "$STATE")
+check "daemonPort differs from Chrome CDP port" "separate" "$STATE_PORT_SEPARATE"
 
 R3B=$(CHROMUX_PROFILE=$PROFILE node "$CT" open tab-b https://example.org 2>/dev/null)
 check "tab-b opened" "example.org" "$R3B"

@@ -2,7 +2,7 @@
 name: chromux-work
 description: Browser work orchestration with chromux. Use when an agent needs to plan and execute a browser task through profile selection, recon, safe parallel subagents, evidence collection, synthesis, cleanup, and domain note updates.
 version: 0.1.0
-platforms: [macos, linux]
+platforms: [macos, linux, windows]
 metadata:
   hermes:
     tags: [browser, chrome, cdp, orchestration]
@@ -15,6 +15,10 @@ Use this workflow for browser tasks that need more than a single page check:
 research, feed/search collection, logged-in site inspection, cross-page
 verification, or parallel browser work. For command syntax, use the `chromux`
 skill and `chromux help`.
+
+This workflow applies to macOS, Linux, and native Windows. On Windows, prefer
+PowerShell examples when installing or smoke-testing the CLI; browser work still
+uses the same `chromux` command surface.
 
 ## Contract
 
@@ -319,6 +323,8 @@ open "/path/to/chromux/apps/macos-status-bar/dist/Chromux Status.app"
 
 Release zips contain the same app bundle for double-click use on Macs with
 Node.js >= 22 installed.
+The wrapper is macOS-only. On Windows and Linux, use `chromux app` or
+`chromux app --open` for the same local dashboard.
 
 It shows known profiles, selected profile status, raw activity events,
 Task-first timeline groups, site knowledge note paths, and lifecycle controls

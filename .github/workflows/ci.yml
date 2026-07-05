@@ -55,3 +55,90 @@ jobs:
           name: chromux-state-${{ github.job }}
           path: ${{ runner.temp }}/chromux-home/.chromux
           if-no-files-found: ignore
+
+  windows-runtime:
+    runs-on: windows-latest
+    timeout-minutes: 12
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Validate package surface
+        shell: pwsh
+        run: |
+          node --check chromux.mjs
+          node chromux.mjs help | Out-File -FilePath "$env:RUNNER_TEMP\chromux-help.txt" -Encoding utf8
+          Select-String -Path "$env:RUNNER_TEMP\chromux-help.txt" -Pattern "wait-for-selector"
+          $env:CHROMUX_HOME = Join-Path $env:RUNNER_TEMP "chromux-self-test"
+          node chromux.mjs app --self-test
+          npm pack --dry-run
+
+      - name: Run Windows Chrome smoke
+        shell: pwsh
+        env:
+          CHROMUX_EXTRA_CHROME_ARGS: --disable-dev-shm-usage --no-first-run --no-default-browser-check
+        run: |
+          $ErrorActionPreference = "Stop"
+          $env:CHROMUX_HOME = Join-Path $env:RUNNER_TEMP "chromux-home"
+          New-Item -ItemType Directory -Force -Path $env:CHROMUX_HOME | Out-Null
+          try {
+            node chromux.mjs launch win-ci --headless
+            $env:CHROMUX_PROFILE = "win-ci"
+            node chromux.mjs open tab-a https://example.com
+
+            $launchAgain = (node chromux.mjs launch win-ci --headless) -join "`n"
+            if ($launchAgain -notmatch "already running|adopted running profile") { throw "second launch did not reuse running profile" }
+
+            $snapshot = (node chromux.mjs snapshot tab-a) -join "`n"
+            if ($snapshot -notmatch "Example Domain") { throw "snapshot did not include Example Domain" }
+
+            $list = (node chromux.mjs list) -join "`n"
+            if ($list -notmatch "tab-a") { throw "list did not include tab-a" }
+
+            $ps = (node chromux.mjs ps) -join "`n"
+            if ($ps -notmatch "win-ci" -or $ps -notmatch "ok") { throw "ps did not show healthy win-ci daemon" }
+
+            node chromux.mjs close tab-a
+            $closedList = (node chromux.mjs list) -join "`n"
+            if ($closedList -notmatch "\{\}") { throw "close did not remove tab-a" }
+
+            $app = Start-Process -FilePath "node" -ArgumentList @("chromux.mjs", "app", "--host", "127.0.0.1", "--port", "9348", "--open") -PassThru -NoNewWindow
+            try {
+              Start-Sleep -Seconds 3
+              $state = Invoke-RestMethod -Uri "http://127.0.0.1:9348/api/state" -TimeoutSec 5
+              if (-not $state.ok) { throw "status app state endpoint returned ok=false" }
+            } finally {
+              if ($app) { Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue }
+            }
+          } finally {
+            Remove-Item Env:\CHROMUX_PROFILE -ErrorAction SilentlyContinue
+            node chromux.mjs kill win-ci
+          }
+
+          try {
+            $env:CHROMUX_PROFILE = "win-stale"
+            $runDir = Join-Path $env:CHROMUX_HOME "run"
+            New-Item -ItemType Directory -Force -Path $runDir | Out-Null
+            $lockPath = Join-Path $runDir "win-stale.lock"
+            Set-Content -Path $lockPath -Value '{"pid":999999,"ts":946684800000}'
+            node chromux.mjs open stale-tab https://example.com
+            $staleList = (node chromux.mjs list) -join "`n"
+            if ($staleList -notmatch "stale-tab") { throw "stale lock recovery did not open stale-tab" }
+          } finally {
+            Remove-Item Env:\CHROMUX_PROFILE -ErrorAction SilentlyContinue
+            node chromux.mjs kill win-stale
+          }
+
+      - name: Upload chromux state on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chromux-state-${{ github.job }}
+          path: ${{ runner.temp }}/chromux-home
+          if-no-files-found: ignore

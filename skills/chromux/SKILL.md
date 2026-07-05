@@ -2,7 +2,7 @@
 name: chromux
 description: Real Chrome browser automation through the chromux CLI. Use when an agent needs to open, inspect, interact with, scrape, test, or verify web pages using isolated Chrome profiles and raw CDP.
 version: 0.1.0
-platforms: [macos, linux]
+platforms: [macos, linux, windows]
 metadata:
   hermes:
     tags: [browser, chrome, cdp, automation]
@@ -15,6 +15,10 @@ Direct browser control through the `chromux` CLI. chromux launches or reuses an
 isolated real Chrome profile, keeps one daemon per profile, and exposes a small
 CLI surface for tab work, multi-step JavaScript, raw CDP, screenshots, and
 diagnostics.
+
+The CLI supports macOS, Linux, and native Windows with Node.js >= 22 and Google
+Chrome Stable. On Windows, use PowerShell or cmd; Chrome Stable is auto-detected
+from normal Program Files or LocalAppData installs unless `chromePath` is set.
 
 For setup, installation, or connection problems, read the repo's `install.md`.
 For multi-step browser work orchestration, use the Browser Work Orchestration
@@ -241,6 +245,8 @@ open "/path/to/chromux/apps/macos-status-bar/dist/Chromux Status.app"
 The wrapper adds a `cx` item to the macOS menu bar and opens the same local
 dashboard in a WebKit window. GitHub Release zips contain the same app bundle
 for double-click use on Macs with Node.js >= 22 installed.
+This native wrapper is macOS-only; on Windows and Linux use `chromux app` or
+`chromux app --open`.
 
 The app and activity layer do not read Chrome History. Full URL retention
 defaults to 90 days and can be changed in the app.
