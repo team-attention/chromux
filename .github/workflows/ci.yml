@@ -92,6 +92,9 @@ jobs:
             $env:CHROMUX_PROFILE = "win-ci"
             node chromux.mjs open tab-a https://example.com
 
+            $launchAgain = (node chromux.mjs launch win-ci --headless) -join "`n"
+            if ($launchAgain -notmatch "already running|adopted running profile") { throw "second launch did not reuse running profile" }
+
             $snapshot = (node chromux.mjs snapshot tab-a) -join "`n"
             if ($snapshot -notmatch "Example Domain") { throw "snapshot did not include Example Domain" }
 
@@ -100,6 +103,10 @@ jobs:
 
             $ps = (node chromux.mjs ps) -join "`n"
             if ($ps -notmatch "win-ci" -or $ps -notmatch "ok") { throw "ps did not show healthy win-ci daemon" }
+
+            node chromux.mjs close tab-a
+            $closedList = (node chromux.mjs list) -join "`n"
+            if ($closedList -notmatch "\{\}") { throw "close did not remove tab-a" }
 
             $app = Start-Process -FilePath "node" -ArgumentList @("chromux.mjs", "app", "--host", "127.0.0.1", "--port", "9348", "--open") -PassThru -NoNewWindow
             try {
@@ -112,6 +119,20 @@ jobs:
           } finally {
             Remove-Item Env:\CHROMUX_PROFILE -ErrorAction SilentlyContinue
             node chromux.mjs kill win-ci
+          }
+
+          try {
+            $env:CHROMUX_PROFILE = "win-stale"
+            $runDir = Join-Path $env:CHROMUX_HOME "run"
+            New-Item -ItemType Directory -Force -Path $runDir | Out-Null
+            $lockPath = Join-Path $runDir "win-stale.lock"
+            Set-Content -Path $lockPath -Value '{"pid":999999,"ts":946684800000}'
+            node chromux.mjs open stale-tab https://example.com
+            $staleList = (node chromux.mjs list) -join "`n"
+            if ($staleList -notmatch "stale-tab") { throw "stale lock recovery did not open stale-tab" }
+          } finally {
+            Remove-Item Env:\CHROMUX_PROFILE -ErrorAction SilentlyContinue
+            node chromux.mjs kill win-stale
           }
 
       - name: Upload chromux state on failure
