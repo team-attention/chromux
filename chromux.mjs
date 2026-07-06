@@ -187,6 +187,17 @@ function siteKnowledgePathsForHost(host) {
   }
 }
 
+// Exact host first, then parent domains down to two labels, so notes saved
+// under naver.com also surface on search.naver.com. Reading a nonexistent
+// parent dir (e.g. co.uk) is harmless — it simply yields no files.
+function siteKnowledgeHostChain(host) {
+  if (!host) return [];
+  const chain = [host];
+  const parts = host.split('.');
+  for (let i = 1; i <= parts.length - 2; i++) chain.push(parts.slice(i).join('.'));
+  return chain;
+}
+
 function siteKnowledgeHintForUrl(rawUrl) {
   const host = hostFromUrl(rawUrl);
   if (!host) return null;
@@ -1279,7 +1290,13 @@ const SNAPSHOT_JS = `((FILTER) => {
     if (tag === 'img') return el.alt || '';
     let text = '';
     for (const n of el.childNodes) { if (n.nodeType === 3) text += n.textContent; }
-    return text.trim().substring(0, 100);
+    text = text.trim();
+    // Links/buttons often wrap their text in spans; fall back to rendered
+    // innerText so snapshot lines stay identifiable without a follow-up js().
+    if (!text && (tag === 'a' || tag === 'button')) {
+      text = (el.innerText || '').trim().split('\\n').map(s => s.trim()).filter(Boolean).join(' / ');
+    }
+    return text.substring(0, 100);
   }
   function walk(el, depth) {
     if (!el || el.nodeType !== 1) return '';
@@ -1647,18 +1664,35 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     s.navigations = (s.navigations || 0) + 1;
     touchSession(s);
     const result = { session, ...pageInfo };
-    // Surface host-specific hint files from ~/.chromux/skills/<host>/*.md (if any).
+    // Nudge structure-first workflows: report how many interactive elements the
+    // page has and the snapshot command that reveals them. Skipped in crawl mode
+    // to keep worker-tab throughput unchanged.
+    if (settings.mode !== 'crawl') {
+      try {
+        const cr = await s.cdp.send('Runtime.evaluate', {
+          expression: `document.querySelectorAll('a[href],button,input,select,textarea,[role="button"],[role="link"],[role="tab"],[role="menuitem"]').length`,
+          returnByValue: true,
+        }, 2000);
+        const n = cr?.result?.value;
+        if (typeof n === 'number') {
+          result.interactive = n;
+          result.next = `chromux snapshot ${session} --interactive`;
+        }
+      } catch {}
+    }
+    // Surface host-specific hint files from ~/.chromux/skills/<host>/*.md,
+    // including parent-domain notes (search.naver.com also reads naver.com).
     try {
       const knowledgeHint = siteKnowledgeHintForUrl(result.url);
-      const host = knowledgeHint?.host;
-      const dir = host ? path.join(CHROMUX_HOME, 'skills', host) : null;
-      if (dir && fs.existsSync(dir)) {
-        const files = fs.readdirSync(dir).filter(f => f.endsWith('.md'));
-        if (files.length) {
-          const hints = files.map(f => `# Hint: ${host}/${f}\n` + fs.readFileSync(path.join(dir, f), 'utf8').trim()).join('\n\n');
-          result.hints = hints;
+      const hints = [];
+      for (const h of siteKnowledgeHostChain(knowledgeHint?.host)) {
+        const dir = path.join(CHROMUX_HOME, 'skills', h);
+        if (!fs.existsSync(dir)) continue;
+        for (const f of fs.readdirSync(dir).filter(f => f.endsWith('.md')).sort()) {
+          hints.push(`# Hint: ${h}/${f}\n` + fs.readFileSync(path.join(dir, f), 'utf8').trim());
         }
       }
+      if (hints.length) result.hints = hints.join('\n\n');
     } catch {}
     return result;
   }
@@ -1713,7 +1747,15 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
         }, evalTimeout);
       }
       if (r.exceptionDetails) {
-        throw new Error(r.exceptionDetails.exception?.description || r.exceptionDetails.text || 'js error');
+        const desc = r.exceptionDetails.exception?.description || r.exceptionDetails.text || 'js error';
+        if (isLikelyPageExpressionSyntaxError(r.exceptionDetails)) {
+          // Shell quoting is the usual culprit; echo what actually reached the
+          // page so the damage is visible, and point at the escape-free path.
+          const src = String(expr);
+          const preview = src.slice(0, 120).replace(/\s+/g, ' ');
+          throw new Error(`${desc}\njs() code as received (check shell escaping): ${preview}${src.length > 120 ? '…' : ''}\nhint: for multi-line page code prefer chromux run <session> --page-file PATH`);
+        }
+        throw new Error(desc);
       }
       return r.result.value;
     };
@@ -1740,6 +1782,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
       if (settings.mode === 'crawl' && /timeout/i.test(err.message)) {
         throw await closeUnhealthySession(port, sessions, session, s, err.message);
       }
+      decorateRunError(err);
       throw err;
     }
   }
@@ -2205,7 +2248,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     return { stopping: true };
   }
 
-  throw httpErr(404, `Not found: ${method} ${routePath}`);
+  throw httpErr(404, `Not found: ${method} ${routePath}. Known routes: POST /open /run /eval /cdp /click /fill /type /press /screenshot /scroll /scroll-until /wait /wait-for-text /console /network /stop, GET /health /list /snapshot/<session> /show/<session>, DELETE /session/<session>`);
 }
 
 // ============================================================
@@ -2525,6 +2568,89 @@ function terminateProcess(pid, force = false) {
   }
 }
 
+// ---- Site knowledge notes (write side of the learning loop) ----
+
+function normalizeNoteHost(raw) {
+  const fromUrl = hostFromUrl(raw);
+  const host = fromUrl || String(raw || '').replace(/^www\./, '').trim().toLowerCase();
+  if (!host || !host.includes('.') || !VALID_NAME.test(host.replace(/\./g, '_'))) return null;
+  return host;
+}
+
+async function cmdNote(args) {
+  const skillsRoot = path.join(CHROMUX_HOME, 'skills');
+  if (!args[0]) {
+    let hosts = [];
+    try {
+      hosts = fs.readdirSync(skillsRoot).filter(h => siteKnowledgePathsForHost(h).length);
+    } catch {}
+    if (!hosts.length) {
+      console.log('No site notes yet. Add one: chromux note <host> --add "durable finding"');
+      return;
+    }
+    for (const h of hosts.sort()) {
+      console.log(h);
+      for (const p of siteKnowledgePathsForHost(h)) console.log(`  ${p}`);
+    }
+    return;
+  }
+  const host = normalizeNoteHost(args[0]);
+  if (!host) { console.error(`Invalid host: ${args[0]}. Use a hostname like naver.com`); process.exit(1); }
+  const addIdx = args.indexOf('--add');
+  if (addIdx >= 0) {
+    const text = args[addIdx + 1];
+    if (!text || !text.trim()) { console.error('--add requires note text'); process.exit(1); }
+    const fIdx = args.indexOf('--file');
+    const fileName = fIdx >= 0 ? args[fIdx + 1] : 'notes.md';
+    if (!fileName || !fileName.endsWith('.md') || !VALID_NAME.test(fileName.replace(/\./g, '_'))) {
+      console.error(`Invalid note file name: ${fileName}. Use a simple name ending in .md`);
+      process.exit(1);
+    }
+    const dir = path.join(skillsRoot, host);
+    fs.mkdirSync(dir, { recursive: true });
+    const filePath = path.join(dir, fileName);
+    if (!fs.existsSync(filePath)) {
+      fs.writeFileSync(filePath, `# ${host}\n\nDurable, non-secret site notes. Surfaced by \`chromux open\` on ${host} pages (and subdomains).\n\n`);
+    }
+    fs.appendFileSync(filePath, `- ${text.trim()} (${new Date().toISOString().slice(0, 10)})\n`);
+    console.log(JSON.stringify({ host, path: displayChromuxPath(filePath), added: text.trim() }, null, 2));
+    return;
+  }
+  // Show notes for the host, including parent-domain notes.
+  let shown = 0;
+  for (const h of siteKnowledgeHostChain(host)) {
+    const dir = path.join(skillsRoot, h);
+    let files = [];
+    try { files = fs.readdirSync(dir).filter(f => f.endsWith('.md')).sort(); } catch { continue; }
+    for (const f of files) {
+      console.log(`# ${h}/${f}\n${fs.readFileSync(path.join(dir, f), 'utf8').trim()}\n`);
+      shown++;
+    }
+  }
+  if (!shown) console.log(`No notes for ${host}. Add one: chromux note ${host} --add "durable finding"`);
+}
+
+// After close/kill, if this session/profile hit failures on hosts that have no
+// site notes yet, point at `chromux note` once. The raw material (per-command
+// ok/error events) is already in the activity log; this closes the loop.
+function printFailureLearningReminder(profile, session = null) {
+  try {
+    const cutoff = Date.now() - 6 * 60 * 60 * 1000;
+    const relevant = readActivityEvents({ prune: false }).filter(e =>
+      e.profile === profile
+      && (!session || e.session === session)
+      && Date.parse(e.timestamp) >= cutoff);
+    const failures = relevant.filter(e => e.ok === false);
+    if (!failures.length) return;
+    const hosts = [...new Set(relevant.map(e => e.host).filter(Boolean))];
+    const noteless = hosts.filter(h =>
+      !siteKnowledgeHostChain(h).some(p => siteKnowledgePathsForHost(p).length));
+    if (!noteless.length) return;
+    const scope = session ? `session "${session}"` : `profile "${profile}"`;
+    console.error(`note: ${failures.length} failed command${failures.length === 1 ? '' : 's'} in recent ${scope} on ${noteless.join(', ')} — if you learned durable site behavior, save it: chromux note ${noteless[0]} --add "..."`);
+  } catch {}
+}
+
 async function cmdKill(profileName) {
   // Stop daemon first
   const st = readState(profileName);
@@ -2613,10 +2739,60 @@ async function cmdEval(args, sock) {
     probe = stripped;
   }
   if (!noIife && /^\s*(?:const|let|var|async|function)\s/.test(probe) && !/^\s*\(/.test(probe)) {
-    code = `(async () => { ${code} })()`;
+    // Wrapping in an IIFE makes a trailing standalone expression evaluate to
+    // undefined, so scripts like `var x = ...; JSON.stringify(x)` print
+    // nothing. Recover REPL behavior by returning the trailing expression.
+    const hasReturn = /\breturn\b/.test(code);
+    const auto = hasReturn ? null : autoReturnLastExpression(code);
+    if (auto) {
+      code = auto;
+    } else {
+      code = `(async () => { ${code} })()`;
+      if (!hasReturn) {
+        console.error('note: eval script was wrapped in an IIFE; use `return <value>` (or end with a standalone expression) to print a result.');
+      }
+    }
   }
   const httpTimeout = (timeoutMs ? timeoutMs : 30000) + 5000;
   return cliReq('POST', '/eval', { session, code, timeoutMs }, sock, httpTimeout);
+}
+
+// Best-effort REPL semantics for auto-wrapped eval scripts: if the script ends
+// with a standalone expression statement, return its value from the IIFE.
+// Returns the wrapped code, or null when the trailer is not clearly an
+// expression or the rewrite does not parse.
+const EVAL_STATEMENT_KEYWORDS = new Set([
+  'return', 'const', 'let', 'var', 'if', 'else', 'for', 'while', 'do',
+  'switch', 'case', 'try', 'catch', 'finally', 'function', 'class', 'throw',
+  'break', 'continue', 'import', 'export',
+]);
+function autoReturnLastExpression(code) {
+  const isStatementKeyword = (s) => {
+    const w = s.match(/^[A-Za-z_$][A-Za-z0-9_$]*/)?.[0];
+    return Boolean(w && EVAL_STATEMENT_KEYWORDS.has(w));
+  };
+  const lines = String(code).replace(/\s+$/, '').split('\n');
+  let i = lines.length - 1;
+  while (i >= 0 && (!lines[i].trim() || /^\s*\/\//.test(lines[i]))) i--;
+  if (i < 0) return null;
+  let head = lines.slice(0, i).join('\n');
+  let last = lines[i].trim().replace(/;+$/, '');
+  if (!last) return null;
+  // One-line scripts like `var x = ...; JSON.stringify(x)`: peel statements off
+  // the front so the trailer after the final `;` becomes the returned value.
+  if (isStatementKeyword(last) && last.includes(';')) {
+    const cut = last.lastIndexOf(';');
+    const trailer = last.slice(cut + 1).trim();
+    if (!trailer || isStatementKeyword(trailer)) return null;
+    head = head ? `${head}\n${last.slice(0, cut + 1)}` : last.slice(0, cut + 1);
+    last = trailer;
+  } else if (isStatementKeyword(last)) {
+    return null;
+  }
+  const candidate = `(async () => { ${head}\nreturn (${last}); })()`;
+  // A parse check guards against mangling multi-line statements or strings
+  // containing `;` — on any doubt we fall back to the plain IIFE wrap.
+  try { new Function(`return ${candidate}`); return candidate; } catch { return null; }
 }
 
 function readCodeArg(args, usage) {
@@ -2644,7 +2820,25 @@ function readCodeArg(args, usage) {
 }
 
 async function cmdRun(args, sock) {
-  const { session, code, timeoutMs } = readCodeArg(args, 'Usage: chromux run <session> <code|--file PATH|-> [--timeout MS]');
+  // --page-file: run a JS file directly in the page context. The file contents
+  // are JSON-encoded into a js() call, so no shell/heredoc/string escaping
+  // layer ever touches the page code. Write natural statements and `return`.
+  const pfIdx = args.indexOf('--page-file');
+  if (pfIdx >= 0) {
+    const p = args[pfIdx + 1];
+    if (!p) { console.error('--page-file requires a path'); process.exit(1); }
+    const pageCode = fs.readFileSync(p, 'utf8');
+    args.splice(pfIdx, 2);
+    let timeoutMs;
+    const tIdx = args.indexOf('--timeout');
+    if (tIdx >= 0) { timeoutMs = parseInt(args[tIdx + 1]); args.splice(tIdx, 2); }
+    const session = args[0];
+    if (!session) { console.error('Usage: chromux run <session> --page-file PATH [--timeout MS]'); process.exit(1); }
+    const code = `return await js(${JSON.stringify(pageCode)});`;
+    const httpTimeout = (timeoutMs ? timeoutMs : 30000) + 5000;
+    return cliReq('POST', '/run', { session, code, timeoutMs }, sock, httpTimeout);
+  }
+  const { session, code, timeoutMs } = readCodeArg(args, 'Usage: chromux run <session> <code|--file PATH|--page-file PATH|-> [--timeout MS]');
   const httpTimeout = (timeoutMs ? timeoutMs : 30000) + 5000;
   return cliReq('POST', '/run', { session, code, timeoutMs }, sock, httpTimeout);
 }
@@ -3090,8 +3284,11 @@ async function runCli(cmd, args) {
   if (cmd === 'ps') return runLoggedProfileCommand(cmd, args, getProfile(), () => cmdPs());
   if (cmd === 'kill') {
     if (!args[0]) { console.error('Usage: chromux kill <profile>'); process.exit(1); }
-    return runLoggedProfileCommand(cmd, args, args[0], () => cmdKill(args[0]));
+    const r = await runLoggedProfileCommand(cmd, args, args[0], () => cmdKill(args[0]));
+    printFailureLearningReminder(args[0]);
+    return r;
   }
+  if (cmd === 'note') return cmdNote(args);
   if (cmd === 'pause') {
     const profileName = args[0] || getProfile();
     return runLoggedProfileCommand(cmd, args, profileName, () => cmdPause(profileName));
@@ -3164,6 +3361,7 @@ async function runCli(cmd, args) {
 
     const r = await routes[cmd]();
     recordCliActivity({ cmd, args, profile, session, result: r, startedAt });
+    if (cmd === 'close') printFailureLearningReminder(profile, args[0]);
     console.log(typeof r === 'string' ? r : JSON.stringify(r, null, 2));
   } catch (e) {
     recordCliActivity({ cmd, args, profile, session, error: e, startedAt });
@@ -3632,6 +3830,18 @@ function readBody(req) {
     });
   });
 }
+// Convert the most common Playwright/Puppeteer muscle-memory mistakes inside
+// `run` scripts into an immediate pointer at the actual helper surface.
+const RUN_HELPER_HINT = "chromux run executes in the runner context with helpers cdp(method, params), js(pageCode), page(expr), sleep(ms), waitLoad(). Use js('...') to run code inside the page.";
+function decorateRunError(err) {
+  const msg = String(err?.message || '');
+  if (msg.includes(RUN_HELPER_HINT)) return;
+  if (/(?:page|browser|context)\.(?:evaluate|goto|click|type|waitForSelector|locator|\$\$?(?:eval)?)\b[\s\S]{0,40}is not a function/.test(msg)
+    || /\b(?:document|window|querySelector) is not defined/.test(msg)) {
+    err.message = `${msg}\nhint: ${RUN_HELPER_HINT}`;
+  }
+}
+
 function isolatePageExpression(expr) {
   return `(() => (\n${String(expr)}\n))()`;
 }
@@ -3667,6 +3877,7 @@ The core surface:
   chromux open <session> <url>       Create or navigate a tab
   chromux open --background <s> <u>  Explicitly create a background tab
   chromux run <session> -            Multi-step async JS with cdp/js/page helpers
+  chromux run <session> --page-file F  Run a JS file directly in the page (no shell escaping)
   chromux batch --file urls.txt      Crawl URLs through a worker-tab pool
   chromux cdp <session> <M> '{}'     Raw CDP method passthrough
 
@@ -3704,6 +3915,13 @@ Watch / debug:
   chromux watch <session> network    Capture failed requests (4xx/5xx/errors)
   chromux watch <session> network --all
   chromux watch <session> network --off
+
+Site knowledge:
+  chromux note                       List hosts with saved site notes
+  chromux note <host>                Show notes for a host (includes parent domains)
+  chromux note <host> --add "text"   Append a durable site note (surfaced on next open)
+  Notes live in ~/.chromux/skills/<host>/*.md and are attached to open results
+  for that host and its subdomains.
 
 Policy:
   New browser actions should be expressed with run or cdp before adding verbs.

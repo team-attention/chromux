@@ -180,8 +180,33 @@ response is not proof that the page reached the intended state.
 | `open <session> <url>` | Create or navigate a tab |
 | `open --background <session> <url>` | Explicitly create a new tab without activating it |
 | `run <session> <code\|--file PATH\|->` | Run multi-step async JS with `cdp`, `js`, `sleep`, and `waitLoad` helpers |
+| `run <session> --page-file PATH` | Run a JS file directly in the page context, bypassing all shell/string escaping |
 | `batch --file urls.txt --workers N --out results.jsonl` | Crawl URLs through a worker-tab pool |
 | `cdp <session> <Method> <params-json>` | Send one raw CDP method to a session |
+| `note [host] [--add "text"]` | List, show, or append durable site notes surfaced on `open` |
+
+In default mode, `open` responses include an `interactive` element count and a
+`next` field pointing at the snapshot command — inspect page structure first
+rather than guessing selectors:
+
+```json
+{ "session": "s", "url": "…", "title": "…", "interactive": 359,
+  "next": "chromux snapshot s --interactive" }
+```
+
+`run --page-file` is the escape-proof path for page scripts. The file contents
+are JSON-encoded end to end, so regexes, quotes, and newlines never meet shell
+quoting. Write natural statements and `return` a value:
+
+```bash
+cat > extract.js <<'EOF'
+const rows = [...document.querySelectorAll('a[href]')]
+  .map(a => ({ title: a.innerText.trim().split('\n')[0], url: a.href }))
+  .filter(r => r.title.length > 8 && /^https?:/.test(r.url));
+return rows.slice(0, 10);
+EOF
+chromux run s --page-file extract.js
+```
 
 `run` scripts execute in an async function context:
 
@@ -402,6 +427,26 @@ chromux open --foreground tab https://example.com
 | `CHROMUX_RENDERER_PROCESS_LIMIT` | `8` in compact mode | Renderer process cap passed to Chrome when compact renderer mode is enabled |
 | `CHROMUX_EXTRA_CHROME_ARGS` | empty | Extra Chrome launch args, split like shell words |
 | `CHROMUX_CLI_TIMEOUT_MS` | `90000` in crawl, `30000` in default | Default CLI request timeout for commands such as `open` |
+
+## Site Knowledge
+
+chromux surfaces durable, non-secret site notes from
+`~/.chromux/skills/<host>/*.md` in `open` responses. Host matching walks up
+parent domains, so notes saved under `naver.com` also surface on
+`search.naver.com` pages.
+
+The `note` command is the write side of that loop:
+
+```bash
+chromux note                                  # list hosts with notes
+chromux note naver.com                        # show notes (includes parent domains)
+chromux note naver.com --add "search results: snapshot --interactive shows result titles as @refs"
+```
+
+When a `close` or `kill` follows recent failed commands on a host that has no
+notes yet, chromux prints a one-line reminder pointing at `chromux note` — the
+activity log already holds the per-command errors that make such notes worth
+writing.
 
 ## Activity Log And Status App
 

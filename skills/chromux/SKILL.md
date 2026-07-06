@@ -42,7 +42,9 @@ browser work.
 ## Normal Workflow
 
 1. Generate a unique session ID, for example `exp-ab12`.
-2. Open the page: `<chromux> open exp-ab12 <url>`.
+2. Open the page: `<chromux> open exp-ab12 <url>`. The response includes an
+   `interactive` element count and a `next` field with the snapshot command —
+   follow it before guessing selectors.
 3. Inspect structure with `<chromux> snapshot exp-ab12`.
 4. Prefer `@ref` interactions from the snapshot:
    - `<chromux> click exp-ab12 @<N>`
@@ -166,6 +168,22 @@ Use `cdp` for a single raw protocol call:
 /path/to/chromux cdp exp-ab12 Runtime.evaluate '{"expression":"location.href","returnByValue":true}'
 ```
 
+For anything longer than a one-liner of page code, prefer `--page-file` over
+inline strings or heredocs. It sends the file contents to the page with no
+shell/string escaping layer, so regexes, quotes, and newlines survive intact:
+
+```bash
+/path/to/chromux run exp-ab12 --page-file /path/to/extract.js
+```
+
+The page file is plain statements plus `return`:
+
+```js
+const rows = [...document.querySelectorAll('a[href]')]
+  .map(a => ({ title: a.innerText.trim().split('\n')[0], url: a.href }));
+return rows.slice(0, 10);
+```
+
 `run` is intentionally small. It does not expose Node `import` or `require`.
 Reusable browser logic should be a copied `run` script, a checked-in helper
 example, or a future chromux helper, not an ad hoc hidden module load.
@@ -254,10 +272,21 @@ defaults to 90 days and can be changed in the app.
 ## Site Knowledge
 
 chromux may surface host-specific hints from `~/.chromux/skills/<host>/*.md` on
-navigation. If the `open` response includes hints, read them before inventing a
-new approach. If you learn durable site knowledge, or discover existing notes
-are stale, wrong, too task-specific, or unsafe, review/update public,
-non-secret, non-task-diary notes under the relevant host directory.
+navigation. Host matching includes parent domains, so `naver.com` notes also
+surface on `search.naver.com`. If the `open` response includes hints, read them
+before inventing a new approach.
+
+Use the `note` command to write knowledge back — do this whenever a session
+taught you durable site behavior, especially after failed attempts:
+
+```bash
+/path/to/chromux note <host> --add "stable selector / quirk / wait behavior"
+/path/to/chromux note <host>          # review existing notes first
+```
+
+If you learn durable site knowledge, or discover existing notes are stale,
+wrong, too task-specific, or unsafe, review/update public, non-secret,
+non-task-diary notes under the relevant host directory.
 
 Good site knowledge:
 - stable selectors or URL patterns
