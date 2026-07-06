@@ -1,0 +1,29 @@
+{
+  "delivery": {
+    "mode": "pr",
+    "branchPrefix": "prd",
+    "baseBranch": "main",
+    "staging": {
+      "include": [
+        ".hoyeon/config.json",
+        ".hoyeon/prd/cli-command-registry-refactor",
+        ".hoyeon/implement/cli-command-registry-refactor",
+        "chromux.mjs"
+      ],
+      "exclude": [
+        ".hoyeon/implement/.prd-implement-active.json",
+        ".hoyeon/implement/.prd-implement-sessions",
+        ".hoyeon/implement/cli-command-registry-refactor/artifacts"
+      ]
+    },
+    "ci": {
+      "watch": true,
+      "maxFixAttempts": 2
+    }
+  },
+  "worktree": {
+    "enabled": true,
+    "root": "../chromux.worktrees",
+    "setup": []
+  }
+}

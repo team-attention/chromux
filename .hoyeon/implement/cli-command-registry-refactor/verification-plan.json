@@ -1,0 +1,364 @@
+{
+  "schema": "hoyeon.prd-implement.verification-plan.v1",
+  "status": "ready",
+  "generatedAt": "2026-07-05T16:55:35.868Z",
+  "prdPath": ".hoyeon/prd/cli-command-registry-refactor/prd.md",
+  "prdSha256": "b90fd3bd716beab7cefc854bf4a60879ad3b31f4c9223aa0869ce61446487252",
+  "verificationContractHash": "33a5d5ff415dec31a4f63ed9edde8af16b47a31987f8352a4c735a1fae5183dc",
+  "statePath": ".hoyeon/implement/cli-command-registry-refactor/state.json",
+  "environment": {
+    "packageManager": "npm",
+    "packageScripts": [],
+    "browserTool": "chromux",
+    "serverStrategy": "no dev server script detected",
+    "serviceStrategy": "use repo-local dev/test commands; ask if services are required",
+    "dbStrategy": "no DB surface detected"
+  },
+  "checks": [
+    {
+      "id": "VP1",
+      "verificationId": "V1",
+      "level": "General",
+      "source": "verification_matrix",
+      "category": "command",
+      "tool": "verify-run",
+      "command": "node --check chromux.mjs && bash -n test.sh && node chromux.mjs help >/tmp/chromux-help.txt && grep -q \"wait-for-selector\" /tmp/chromux-help.txt && ! grep -q \"^  chromux eval \" /tmp/chromux-help.txt && ! grep -q \"^  chromux scroll \" /tmp/chromux-help.txt && ! grep -q \"^  chromux wait \" /tmp/chromux-help.txt && ! grep -q \"^  chromux console \" /tmp/chromux-help.txt && ! grep -q \"^  chromux network \" /tmp/chromux-help.txt && ! grep -q \"^  chromux scroll-until \" /tmp/chromux-help.txt",
+      "target": null,
+      "covers": {
+        "requirements": [
+          "R1",
+          "R2",
+          "R3",
+          "R4"
+        ],
+        "acceptanceCriteria": [
+          "AC1",
+          "AC2",
+          "AC3"
+        ],
+        "tasks": []
+      },
+      "artifactKinds": [
+        "command-log",
+        "console-log",
+        "network-log"
+      ],
+      "passCriteria": "command exits 0, help exposes `wait-for-selector`, and hidden compatibility aliases are not listed as primary help entries",
+      "requiredForDone": true,
+      "canBeBlocked": false,
+      "testMode": "build/static",
+      "testModeContract": {
+        "id": "TM1",
+        "mode": "build/static",
+        "normalizedMode": "build-static",
+        "requiredForDone": true,
+        "requiredForDoneRaw": "yes",
+        "canBeBlocked": false,
+        "covers": "syntax, shell syntax, help surface, package surface",
+        "humanDecision": "none"
+      },
+      "contract": {
+        "mode": "build/static",
+        "covers": "R1-R4, AC1-AC3",
+        "method": "`node --check chromux.mjs && bash -n test.sh && node chromux.mjs help >/tmp/chromux-help.txt && grep -q \"wait-for-selector\" /tmp/chromux-help.txt && ! grep -q \"^  chromux eval \" /tmp/chromux-help.txt && ! grep -q \"^  chromux scroll \" /tmp/chromux-help.txt && ! grep -q \"^  chromux wait \" /tmp/chromux-help.txt && ! grep -q \"^  chromux console \" /tmp/chromux-help.txt && ! grep -q \"^  chromux network \" /tmp/chromux-help.txt && ! grep -q \"^  chromux scroll-until \" /tmp/chromux-help.txt`",
+        "artifact": "command-log",
+        "passCriteria": "command exits 0, help exposes `wait-for-selector`, and hidden compatibility aliases are not listed as primary help entries",
+        "environment": "local shell",
+        "requiredForDone": true,
+        "requiredForDoneRaw": "yes",
+        "canBeBlocked": false,
+        "canBeBlockedRaw": "no",
+        "safeProbe": "local static/help only",
+        "liveProof": "command log",
+        "sideEffect": "writes `/tmp/chromux-help.txt`",
+        "sensitiveDataPolicy": "no secrets"
+      },
+      "contractHash": "0652327ba7ca11ea74ab7a016e4891863a330a4fb2d36be70cf09fafd37d2544",
+      "status": "planned",
+      "notes": []
+    },
+    {
+      "id": "VP2",
+      "verificationId": "V2",
+      "level": "General",
+      "source": "verification_matrix",
+      "category": "automated",
+      "tool": "verify-run",
+      "command": "CHROMUX_HOME=\"$(mktemp -d /tmp/chromux-selftest-XXXXXX)\" node chromux.mjs app --self-test >/tmp/chromux-selftest.txt && grep -q \"command metadata registry invariants\" /tmp/chromux-selftest.txt",
+      "target": null,
+      "covers": {
+        "requirements": [
+          "R1",
+          "R2",
+          "R3",
+          "R4"
+        ],
+        "acceptanceCriteria": [
+          "AC1",
+          "AC2",
+          "AC3",
+          "AC4"
+        ],
+        "tasks": []
+      },
+      "artifactKinds": [
+        "command-log"
+      ],
+      "passCriteria": "command exits 0 and self-test visibly proves command metadata registry invariants, including no per-call inline tab-command `Set` in `runCli`",
+      "requiredForDone": true,
+      "canBeBlocked": false,
+      "testMode": "automated behavior",
+      "testModeContract": {
+        "id": "TM2",
+        "mode": "automated behavior",
+        "normalizedMode": "automated-behavior",
+        "requiredForDone": true,
+        "requiredForDoneRaw": "yes",
+        "canBeBlocked": false,
+        "covers": "command metadata invariants and status app self-test",
+        "humanDecision": "none"
+      },
+      "contract": {
+        "mode": "automated behavior",
+        "covers": "R1-R4, AC1-AC4",
+        "method": "`CHROMUX_HOME=\"$(mktemp -d /tmp/chromux-selftest-XXXXXX)\" node chromux.mjs app --self-test >/tmp/chromux-selftest.txt && grep -q \"command metadata registry invariants\" /tmp/chromux-selftest.txt`",
+        "artifact": "command-log",
+        "passCriteria": "command exits 0 and self-test visibly proves command metadata registry invariants, including no per-call inline tab-command `Set` in `runCli`",
+        "environment": "local shell",
+        "requiredForDone": true,
+        "requiredForDoneRaw": "yes",
+        "canBeBlocked": false,
+        "canBeBlockedRaw": "no",
+        "safeProbe": "isolated `CHROMUX_HOME`",
+        "liveProof": "command log",
+        "sideEffect": "creates temporary local state and `/tmp/chromux-selftest.txt`",
+        "sensitiveDataPolicy": "no secrets"
+      },
+      "contractHash": "17090d7bfaf0307e471f8a190661791e85fe68267792cf657d989ea216013e7a",
+      "status": "planned",
+      "notes": []
+    },
+    {
+      "id": "VP3",
+      "verificationId": "V3",
+      "level": "General",
+      "source": "verification_matrix",
+      "category": "command",
+      "tool": "verify-run",
+      "command": "npm pack --dry-run",
+      "target": null,
+      "covers": {
+        "requirements": [
+          "R4"
+        ],
+        "acceptanceCriteria": [
+          "AC4"
+        ],
+        "tasks": []
+      },
+      "artifactKinds": [
+        "command-log"
+      ],
+      "passCriteria": "command exits 0 and package allowlist remains valid",
+      "requiredForDone": true,
+      "canBeBlocked": false,
+      "testMode": "build/static",
+      "testModeContract": {
+        "id": "TM1",
+        "mode": "build/static",
+        "normalizedMode": "build-static",
+        "requiredForDone": true,
+        "requiredForDoneRaw": "yes",
+        "canBeBlocked": false,
+        "covers": "syntax, shell syntax, help surface, package surface",
+        "humanDecision": "none"
+      },
+      "contract": {
+        "mode": "build/static",
+        "covers": "R4, AC4",
+        "method": "`npm pack --dry-run`",
+        "artifact": "command-log",
+        "passCriteria": "command exits 0 and package allowlist remains valid",
+        "environment": "local shell",
+        "requiredForDone": true,
+        "requiredForDoneRaw": "yes",
+        "canBeBlocked": false,
+        "canBeBlockedRaw": "no",
+        "safeProbe": "package dry-run only",
+        "liveProof": "command log",
+        "sideEffect": "creates no publish",
+        "sensitiveDataPolicy": "no secrets"
+      },
+      "contractHash": "97e051c2f52a30689d1449b520fb3d508861a53d7f90049b7e66bbaf2b672d44",
+      "status": "planned",
+      "notes": []
+    },
+    {
+      "id": "VP4",
+      "verificationId": "V4",
+      "level": "General",
+      "source": "verification_matrix",
+      "category": "command",
+      "tool": "verify-run",
+      "command": "bash ./test.sh",
+      "target": null,
+      "covers": {
+        "requirements": [
+          "R2",
+          "R3",
+          "R4"
+        ],
+        "acceptanceCriteria": [
+          "AC2",
+          "AC3",
+          "AC4"
+        ],
+        "tasks": []
+      },
+      "artifactKinds": [
+        "command-log",
+        "screenshot",
+        "console-log"
+      ],
+      "passCriteria": "command exits 0 across the browser test suite",
+      "requiredForDone": true,
+      "canBeBlocked": false,
+      "testMode": "browser/runtime",
+      "testModeContract": {
+        "id": "TM3",
+        "mode": "browser/runtime",
+        "normalizedMode": "browser-runtime",
+        "requiredForDone": true,
+        "requiredForDoneRaw": "yes",
+        "canBeBlocked": false,
+        "covers": "real Chrome CLI behavior and activity logging",
+        "humanDecision": "none"
+      },
+      "contract": {
+        "mode": "browser/runtime",
+        "covers": "R2-R4, AC2-AC4",
+        "method": "`bash ./test.sh`",
+        "artifact": "command-log",
+        "passCriteria": "command exits 0 across the browser test suite",
+        "environment": "local shell with Chrome",
+        "requiredForDone": true,
+        "requiredForDoneRaw": "yes",
+        "canBeBlocked": false,
+        "canBeBlockedRaw": "no",
+        "safeProbe": "isolated test profile",
+        "liveProof": "command log",
+        "sideEffect": "launches and kills local test Chrome profiles",
+        "sensitiveDataPolicy": "no secrets"
+      },
+      "contractHash": "dfeff03cff4306473bfb6381681a811c4afbca265bca84906779afa84d774133",
+      "status": "planned",
+      "notes": []
+    },
+    {
+      "id": "VP5",
+      "verificationId": "V5",
+      "level": "General",
+      "source": "verification_matrix",
+      "category": "command",
+      "tool": "verify-run",
+      "command": "bash -lc 'node ~/.codex/skills/prd-ship/scripts/prd_ship.js preflight --state .hoyeon/implement/cli-command-registry-refactor/state.json >/tmp/chromux-prd-ship-preflight.json && node ~/.codex/skills/prd-ship/scripts/prd_ship.js ship --state .hoyeon/implement/cli-command-registry-refactor/state.json --title \"Refactor CLI command registry\" >/tmp/chromux-prd-ship.json && gh pr diff prd/cli-command-registry-refactor --name-only >/tmp/chromux-pr-diff.txt && node ~/.codex/skills/prd-ship/scripts/prd_ship.js status --state .hoyeon/implement/cli-command-registry-refactor/state.json >/tmp/chromux-prd-ship-status.json'",
+      "target": null,
+      "covers": {
+        "requirements": [
+          "R5"
+        ],
+        "acceptanceCriteria": [
+          "AC5"
+        ],
+        "tasks": []
+      },
+      "artifactKinds": [
+        "command-log",
+        "api-log"
+      ],
+      "passCriteria": "preflight stage plan contains only allowed implementation paths, PR URL exists, PR diff excludes unrelated local artifacts, and required GitHub CI checks pass; if CI cannot pass, final status must be `Blocked`, not `Done`",
+      "requiredForDone": false,
+      "canBeBlocked": true,
+      "testMode": "delivery/CI",
+      "testModeContract": {
+        "id": "TM4",
+        "mode": "delivery/CI",
+        "normalizedMode": "delivery-ci",
+        "requiredForDone": false,
+        "requiredForDoneRaw": "no/blockable",
+        "canBeBlocked": true,
+        "covers": "post-receipt PR URL and required GitHub CI pass through `prd-ship`",
+        "humanDecision": "final merge remains human-owned"
+      },
+      "contract": {
+        "mode": "delivery/CI",
+        "covers": "R5, AC5",
+        "method": "`bash -lc 'node ~/.codex/skills/prd-ship/scripts/prd_ship.js preflight --state .hoyeon/implement/cli-command-registry-refactor/state.json >/tmp/chromux-prd-ship-preflight.json && node ~/.codex/skills/prd-ship/scripts/prd_ship.js ship --state .hoyeon/implement/cli-command-registry-refactor/state.json --title \"Refactor CLI command registry\" >/tmp/chromux-prd-ship.json && gh pr diff prd/cli-command-registry-refactor --name-only >/tmp/chromux-pr-diff.txt && node ~/.codex/skills/prd-ship/scripts/prd_ship.js status --state .hoyeon/implement/cli-command-registry-refactor/state.json >/tmp/chromux-prd-ship-status.json'`",
+        "artifact": "command-log",
+        "passCriteria": "preflight stage plan contains only allowed implementation paths, PR URL exists, PR diff excludes unrelated local artifacts, and required GitHub CI checks pass; if CI cannot pass, final status must be `Blocked`, not `Done`",
+        "environment": "GitHub CLI authenticated repo",
+        "requiredForDone": false,
+        "requiredForDoneRaw": "no",
+        "canBeBlocked": true,
+        "canBeBlockedRaw": "yes",
+        "safeProbe": "PR branch and CI only",
+        "liveProof": "PR URL, PR diff path list, staged path list, and CI status",
+        "sideEffect": "pushes branch and opens PR",
+        "sensitiveDataPolicy": "writes `/tmp/chromux-prd-ship*.json` and `/tmp/chromux-pr-diff.txt`; no secrets in PR body or logs"
+      },
+      "contractHash": "0a6eaa1d2f8861dccf39975a2a20e1bf763ca3a2f6cf95a7ccbd70283afb3730",
+      "status": "planned",
+      "notes": []
+    }
+  ],
+  "coverage": {
+    "AC1": {
+      "title": "A future maintainer can inspect one command metadata area in `chromux.mjs` to understand which commands are profile-l...",
+      "requirements": [],
+      "coveredBy": [
+        "VP1",
+        "VP2"
+      ],
+      "status": "covered"
+    },
+    "AC2": {
+      "title": "`runCli` no longer constructs an inline `Set` of tab commands for each invocation and uses shared command routing met...",
+      "requirements": [],
+      "coveredBy": [
+        "VP1",
+        "VP2",
+        "VP4"
+      ],
+      "status": "covered"
+    },
+    "AC3": {
+      "title": "`node chromux.mjs help` still includes visible commands such as `wait-for-selector` and does not expose hidden compat...",
+      "requirements": [],
+      "coveredBy": [
+        "VP1",
+        "VP2",
+        "VP4"
+      ],
+      "status": "covered"
+    },
+    "AC4": {
+      "title": "Local static checks, command metadata self-test or equivalent automated behavior check, full `./test.sh`, and `npm pa...",
+      "requirements": [],
+      "coveredBy": [
+        "VP2",
+        "VP3",
+        "VP4"
+      ],
+      "status": "covered"
+    },
+    "AC5": {
+      "title": "The completed implementation state contains PR delivery mode, an intended branch, and allowlist staging constraints s...",
+      "requirements": [],
+      "coveredBy": [
+        "VP5"
+      ],
+      "status": "covered"
+    }
+  },
+  "gaps": []
+}
