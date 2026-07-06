@@ -322,6 +322,7 @@ CHROMUX_PROFILE=chromux-smoke chromux open smoke https://example.com
 CHROMUX_PROFILE=chromux-smoke chromux wait-for-text smoke "Example Domain" 5000
 CHROMUX_PROFILE=chromux-smoke chromux run smoke "return await js('document.title')"
 CHROMUX_PROFILE=chromux-smoke chromux run smoke "return await page('({title:document.title,url:location.href})')"
+CHROMUX_PROFILE=chromux-smoke chromux run smoke --receipt /tmp/chromux-smoke-receipt.json "return {page: await page('({title:document.title,url:location.href})'), secretToken: 'redacted'}"
 CHROMUX_PROFILE=chromux-smoke chromux cdp smoke Runtime.evaluate '{"expression":"location.href","returnByValue":true}'
 CHROMUX_TASK=smoke CHROMUX_PROFILE=chromux-smoke chromux snapshot smoke
 CHROMUX_PROFILE=chromux-smoke chromux close smoke
@@ -331,7 +332,8 @@ chromux kill chromux-smoke
 Expected result: `wait-for-text` reports `Example Domain`, the `run` command
 prints `Example Domain`, the `cdp` command returns a `Runtime.evaluate` result
 containing `https://example.com/`, the `CHROMUX_TASK=smoke` snapshot creates a
-local activity event with that Task label, and the profile is killed at the end.
+local activity event with that Task label, `/tmp/chromux-smoke-receipt.json`
+exists without raw inline code or secrets, and the profile is killed at the end.
 
 ## Builtin Helper Material
 
@@ -343,6 +345,10 @@ For example:
 
 ```bash
 chromux run <session> --file snippets/_builtin/scroll-until.js
+chromux run <session> --file snippets/_builtin/page-extract.js
+chromux run <session> --file snippets/_builtin/form-flow.js
+chromux run <session> --file snippets/_builtin/network-errors.js
+chromux run <session> --file snippets/_builtin/page-assert.js
 ```
 
 Do not overwrite user or agent edited files under `~/.chromux/skills/` during
@@ -376,12 +382,16 @@ files and let the user decide whether to keep, commit, or discard them.
 
 ## Publishing
 
-GitHub Actions does not publish the npm package automatically. The repository CI
-workflow at `.github/workflows/ci.yml` runs on pull requests, pushes, and manual
-runs. It validates `node --check`, `chromux help`, skill files, built-in
+Repository CI at `.github/workflows/ci.yml` runs on pull requests, pushes, and
+manual runs. It validates `node --check`, `chromux help`, skill files, built-in
 snippets, `npm pack --dry-run`, the real headless Chrome `./test.sh` suite on
 Linux, and a native Windows PowerShell Chrome smoke covering launch, open,
 snapshot, list, ps, kill, and `chromux app --open`.
+
+The npm publish workflow at `.github/workflows/npm-publish.yml` runs on pushes
+to `main` and manual dispatch. It validates the package, checks whether the
+exact `package.json` version is already on npm, and publishes with provenance
+when the version is new and the repository secret is configured.
 
 The macOS app release workflow at
 `.github/workflows/release-macos-status-app.yml` runs on `v*` tags and manual
@@ -390,8 +400,8 @@ It builds `chromux.app`, uploads a workflow artifact, and attaches
 `chromux-macos-<version>.zip` plus its SHA-256 file to the GitHub Release for
 tag runs.
 
-If a manual npm release is needed later, run the CI checks first and publish only
-when the user explicitly asks for a package release.
+Do not publish manually from a local machine unless the user explicitly asks for
+a local/manual package release.
 
 To package the macOS app locally from a macOS checkout:
 
@@ -488,7 +498,19 @@ and `CHROMUX_MAX_RSS_MB_PER_PROFILE`.
 For URL-only queues, prefer the built-in worker pool:
 
 ```bash
-CHROMUX_MODE=crawl CHROMUX_PROFILE=work chromux batch --file urls.txt --workers 10 --out results.jsonl
+CHROMUX_MODE=crawl CHROMUX_PROFILE=work chromux batch --file urls.txt --workers 10 --retries 1 --host-backoff-ms 250 --out results.jsonl
+```
+
+`batch` output includes attempts, p50/p95 timings, retry count, host backoff
+metadata, and failure kinds such as `timeout`, `resource_guard`, `queue_full`,
+`session_unresponsive`, `navigation`, `http_or_page`, or `unknown`.
+
+When performance or scheduler behavior is under review, run the deterministic
+local benchmark:
+
+```bash
+CHROMUX_HOME="$(mktemp -d /tmp/chromux-bench-XXXXXX)" \
+  node benchmarks/chromux-benchmark.mjs --smoke --out /tmp/chromux-benchmark.json
 ```
 
 To stop a crawl wave without killing Chrome, pause the profile. New browser

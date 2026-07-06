@@ -1,0 +1,16 @@
+{
+  "delivery": {
+    "mode": "pr",
+    "branchPrefix": "prd",
+    "baseBranch": "main",
+    "ci": {
+      "watch": true,
+      "maxFixAttempts": 2
+    }
+  },
+  "worktree": {
+    "enabled": true,
+    "root": "../chromux.worktrees",
+    "setup": []
+  }
+}

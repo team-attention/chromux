@@ -76,10 +76,13 @@ Run `chromux help` for exact syntax. The day-to-day mental model is:
   shortcut commands — it collapses several agent round-trips into one.
 - `type` inserts literal text into the focused field. Use `press` for Enter,
   Tab, Escape, and Backspace.
-- `run` executes multi-step async JavaScript with `cdp`, `js`, `sleep`, and
-  `waitLoad` helpers. It also exposes `page(expr?)` for common page metadata.
+- `run` executes multi-step async JavaScript with `cdp`, `js`, `sleep`,
+  `waitLoad`, `page(expr?)`, `waitFor(...)`, and `assertPage(...)` helpers.
+  Use `run --receipt PATH` when a flow needs redacted local timing and replay
+  evidence.
 - `batch --file urls.txt --workers N --out results.jsonl` processes URL lines or
-  JSONL rows through a worker-tab pool in the current profile.
+  JSONL rows through a worker-tab pool in the current profile. Add `--retries N`
+  and `--host-backoff-ms MS` for bounded retry and domain backoff.
 - `cdp` sends one raw Chrome DevTools Protocol method.
 - `watch` reads console and network diagnostics.
 - `screenshot` saves visual evidence.
@@ -111,8 +114,13 @@ same tab instead of creating another Chrome renderer.
 For a URL batch, prefer the built-in queue:
 
 ```bash
-CHROMUX_MODE=crawl CHROMUX_PROFILE=work /path/to/chromux batch --file urls.txt --workers 10 --out results.jsonl
+CHROMUX_MODE=crawl CHROMUX_PROFILE=work /path/to/chromux batch --file urls.txt --workers 10 --retries 1 --host-backoff-ms 250 --out results.jsonl
 ```
+
+Each batch JSONL row includes attempts, worker/session identity, duration,
+final URL/title metadata, retryability, and `failureKind`.
+The summary includes p50/p95 timings, retry count, failure-kind totals, and host
+backoff state.
 
 If a parent orchestration decides to stop a wave, use:
 
@@ -203,6 +211,23 @@ tab. When `chromux run --timeout MS` is provided, that timeout is also used as
 the default CDP timeout for `js(...)`, `cdp(...)`, and `page(...)` helper calls
 unless the helper call passes its own timeout.
 
+Use the readiness helpers when a state change can be proven inside one browser
+operation:
+
+```bash
+/path/to/chromux run exp-ab12 --receipt /tmp/chromux-run-receipt.json - <<'JS'
+await waitFor('#email', { kind: 'selector', timeoutMs: 5000 });
+await js("document.querySelector('#email').value='agent@example.com'");
+const ready = await waitFor('Saved', { kind: 'text', timeoutMs: 5000 });
+return { ready, page: await page('({url:location.href,title:document.title})') };
+JS
+```
+
+Receipts store command timing, profile/session/mode, code source, result shape,
+failure kind, and redaction metadata.
+They do not store raw inline code, raw typed text, cookies, authorization
+headers, tokens, or secrets.
+
 ## Builtin Runner Snippets
 
 Before recreating common browser loops, check the bundled snippets under
@@ -214,11 +239,19 @@ Available snippets:
 - `snippets/_builtin/scroll-until.js` — scroll until a selector count reaches a
   target count. Use this for infinite feeds, load-more surfaces, and result
   collection loops before falling back to the deprecated `scroll-until` alias.
+- `snippets/_builtin/page-extract.js` — collect structured page metadata
+  without dumping full body text or HTML.
+- `snippets/_builtin/form-flow.js` — fill, submit, and prove readiness for a
+  simple form flow.
+- `snippets/_builtin/network-errors.js` — collect browser-observable broken
+  resource diagnostics.
+- `snippets/_builtin/page-assert.js` — prove selector, text, and DOM assertions.
 
 Run a snippet with an absolute path when possible:
 
 ```bash
 /path/to/chromux run exp-ab12 --file /path/to/chromux/snippets/_builtin/scroll-until.js
+/path/to/chromux run exp-ab12 --file /path/to/chromux/snippets/_builtin/network-errors.js
 ```
 
 If the installed skill directory contains a symlinked `snippets/` folder, the

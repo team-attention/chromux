@@ -33,7 +33,8 @@ uses the same `chromux` command surface.
   site hints, and whether the task is parallel-safe.
 - For crawling, use `CHROMUX_MODE=crawl` and a small worker-tab pool instead of
   one tab per URL. Default recommendation: 3 to 5 worker sessions per profile.
-- For plain URL batches, prefer `chromux batch --file urls.txt --workers N`
+- For plain URL batches, prefer
+  `chromux batch --file urls.txt --workers N --retries N --host-backoff-ms MS`
   instead of asking subagents to hand-roll `open`/`run` loops.
 - Treat `batch` as a browser execution primitive, not a domain-specific
   extractor. Use it for URL load verification and simple page metadata; use
@@ -46,6 +47,8 @@ uses the same `chromux` command surface.
   many separate `click`/`fill`/`snapshot` commands. Each separate command is a
   full agent round-trip; one `run` with `page(...)`/`js(...)` is far faster and
   is the main reason a single-call browser flow feels fast.
+- Use `chromux run --receipt PATH` for important QA or mutation-adjacent flows
+  so the final report has redacted timing, state, and failure-kind evidence.
 - Observe with `snapshot` before reaching for `screenshot`. Use
   `snapshot --interactive` when you only need actionable elements (buttons,
   links, inputs) — it returns a much smaller payload. Reserve `screenshot` for
@@ -121,12 +124,13 @@ fresh profile.
 For URL-only queues, use the built-in batch worker pool:
 
 ```bash
-CHROMUX_MODE=crawl CHROMUX_PROFILE=<profile> /path/to/chromux batch --file urls.txt --workers 10 --out results.jsonl
+CHROMUX_MODE=crawl CHROMUX_PROFILE=<profile> /path/to/chromux batch --file urls.txt --workers 10 --retries 1 --host-backoff-ms 250 --out results.jsonl
 ```
 
 `batch` accepts plain URL lines or JSONL rows with `url`, `source_url`, or
 `href`. Its output is per-URL load metadata (`ok`, final URL, title, text/html
-lengths, duration, and errors). It does not replace a site-specific parser.
+lengths, duration, attempts, retryability, failure kind, and errors). It does
+not replace a site-specific parser.
 
 ## 2. Recon Pass
 
@@ -265,9 +269,10 @@ Prefer this order:
    when you only need actionable elements and want a smaller payload
 3. `click`, `fill`, `type`, and `press` for visible UI work from fresh refs
 4. `wait-for-text` and `wait-for-selector` after state-changing actions
-5. `run` with `page(...)` or `js(...)` for DOM extraction, scrolling, and
-   repeated collection — also the right tool to bundle a multi-step action
-   sequence into one fast round-trip
+5. `run` with `page(...)`, `js(...)`, `waitFor(...)`, `assertPage(...)`, and
+   `--receipt PATH` for DOM extraction, readiness proof, scrolling, and
+   repeated collection. It is also the right tool to bundle a multi-step action
+   sequence into one fast round-trip.
 6. `cdp` for precise protocol operations
 7. `screenshot` for visual evidence a text snapshot cannot capture
 
@@ -286,6 +291,18 @@ logic and validation.
 
 For result lists, dedupe by the strongest stable key available: canonical URL,
 profile plus post id, or profile plus first stable text when no URL is exposed.
+
+When the task is about chromux performance, scheduler behavior, or browser
+automation reliability, run the deterministic local benchmark instead of relying
+on impressions:
+
+```bash
+CHROMUX_HOME="$(mktemp -d /tmp/chromux-bench-XXXXXX)" \
+  node benchmarks/chromux-benchmark.mjs --smoke --out /tmp/chromux-benchmark.json
+```
+
+The `chromux-benchmark.mjs` artifact reports cold launch, warm status,
+`open`, `run`, snapshot, interaction, and `batch` p50/p95 timing evidence.
 
 ## 6. Close And Domain Notes
 
@@ -338,6 +355,7 @@ Report:
 - whether recon passed and what blockers appeared
 - whether parallel subagents were used and why
 - collected results with source path/query/session
+- receipt, benchmark, or batch artifact paths when they were used
 - gaps, duplicates removed, and confidence
 - domain notes updated, including file path, or why no update was needed
 - cleanup status from `chromux ps`

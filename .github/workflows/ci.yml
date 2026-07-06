@@ -25,6 +25,8 @@ jobs:
       - name: Validate package surface
         run: |
           node --check chromux.mjs
+          node --check benchmarks/chromux-benchmark.mjs
+          node --check benchmarks/chromux-doc-check.mjs
           bash -n test.sh
           bash -n apps/macos-status-bar/build.sh
           bash -n apps/macos-status-bar/package-release.sh
@@ -33,7 +35,8 @@ jobs:
           test -f skills/chromux/SKILL.md
           test -f skills/chromux-work/SKILL.md
           test ! -f SKILL.md
-          node -e "const fs=require('fs'); const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor; new AsyncFunction('cdp','js','sleep','waitLoad', fs.readFileSync('snippets/_builtin/scroll-until.js','utf8'));"
+          node -e "const fs=require('fs'); const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor; for (const file of fs.readdirSync('snippets/_builtin').filter(f=>f.endsWith('.js'))) new AsyncFunction('cdp','js','sleep','waitLoad','page','waitFor','assertPage', fs.readFileSync('snippets/_builtin/'+file,'utf8'));"
+          node benchmarks/chromux-doc-check.mjs
           npm pack --dry-run
 
       - name: Check Chrome availability
@@ -73,8 +76,11 @@ jobs:
         shell: pwsh
         run: |
           node --check chromux.mjs
+          node --check benchmarks/chromux-benchmark.mjs
+          node --check benchmarks/chromux-doc-check.mjs
           node chromux.mjs help | Out-File -FilePath "$env:RUNNER_TEMP\chromux-help.txt" -Encoding utf8
           Select-String -Path "$env:RUNNER_TEMP\chromux-help.txt" -Pattern "wait-for-selector"
+          node benchmarks/chromux-doc-check.mjs
           $env:CHROMUX_HOME = Join-Path $env:RUNNER_TEMP "chromux-self-test"
           node chromux.mjs app --self-test
           npm pack --dry-run

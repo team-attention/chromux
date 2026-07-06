@@ -15,6 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import net from 'node:net';
+import crypto from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -222,9 +223,74 @@ function readJsonFile(filePath, fallback) {
   catch { return fallback; }
 }
 
+function sha256Text(value) {
+  return crypto.createHash('sha256').update(String(value)).digest('hex');
+}
+
 function writeJsonFile(filePath, value) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
   fs.writeFileSync(filePath, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 });
+}
+
+function pathWithinBase(candidate, base) {
+  const normalizedCandidate = path.resolve(candidate);
+  const normalizedBase = path.resolve(base);
+  const fold = value => process.platform === 'win32' ? value.toLowerCase() : value;
+  const c = fold(normalizedCandidate);
+  const b = fold(normalizedBase);
+  return c === b || c.startsWith(b + path.sep);
+}
+
+function nearestExistingParent(dirPath) {
+  let current = path.resolve(dirPath);
+  while (!fs.existsSync(current)) {
+    const next = path.dirname(current);
+    if (next === current) return current;
+    current = next;
+  }
+  return current;
+}
+
+function resolveSafeArtifactPath(filePath, label = 'artifact') {
+  if (!filePath) throw new Error(`${label} path is required`);
+  const resolved = path.resolve(filePath);
+  const targetDir = path.dirname(resolved);
+  const cwdPath = process.cwd();
+  const cwdReal = fs.realpathSync(process.cwd());
+  const allowedBases = [...new Set([
+    CHROMUX_HOME,
+    cwdPath,
+    cwdReal,
+    '/tmp',
+    '/private/tmp',
+    os.tmpdir(),
+    os.homedir(),
+  ].filter(Boolean).flatMap(base => {
+    const resolvedBase = path.resolve(base);
+    try { return [resolvedBase, fs.realpathSync(base)]; }
+    catch { return [resolvedBase]; }
+  }))];
+  if (!allowedBases.some(base => pathWithinBase(resolved, base))) {
+    throw new Error(`${label} path not allowed: ${resolved}`);
+  }
+  const existingParent = nearestExistingParent(targetDir);
+  const parentReal = fs.realpathSync(existingParent);
+  if (!allowedBases.some(base => pathWithinBase(parentReal, base))) {
+    throw new Error(`${label} path not allowed: ${resolved}`);
+  }
+  fs.mkdirSync(targetDir, { recursive: true, mode: 0o700 });
+  const realDir = fs.realpathSync(targetDir);
+  const realResolved = path.join(realDir, path.basename(resolved));
+  if (!allowedBases.some(base => pathWithinBase(realResolved, base))) {
+    throw new Error(`${label} path not allowed: ${resolved}`);
+  }
+  return resolved;
+}
+
+function writeSafeJsonArtifact(filePath, value, label = 'artifact') {
+  const resolved = resolveSafeArtifactPath(filePath, label);
+  writeJsonFile(resolved, value);
+  return resolved;
 }
 
 function normalizeRetentionDays(value) {
@@ -1372,7 +1438,7 @@ async function startDaemon(profileName, port, daemonPort) {
 
     // Wrap handler with timeout to prevent daemon hang
     const handlerPromise = routeWithGate(gate, () =>
-      route(port, req.method, url.pathname + url.search, body, sessions, isHeadless, settings)
+      route(port, req.method, url.pathname + url.search, body, sessions, isHeadless, settings, gate)
     , url.pathname, settings);
     const timeoutPromise = new Promise((_, reject) =>
       setTimeout(() => reject(new Error('Handler timeout')), HANDLER_TIMEOUT)
@@ -1563,15 +1629,20 @@ async function readPageInfo(port, targetId, cdp, settings) {
   }
 }
 
-async function route(port, method, routePath, body, sessions, isHeadless = false, settings = modeSettings('default')) {
+async function route(port, method, routePath, body, sessions, isHeadless = false, settings = modeSettings('default'), gate = null) {
 
   if (routePath === '/health')
     return {
       ok: true,
       sessions: sessions.size,
       mode: settings.mode,
-      gate: settings.maxConcurrentOps || null,
-      queued: settings.maxQueuedOps || null,
+      gate: gate ? {
+        max: gate.max || 0,
+        active: gate.active || 0,
+        queueDepth: gate.queue.length,
+        queueLimit: settings.maxQueuedOps || 0,
+      } : null,
+      queued: gate ? gate.queue.length : null,
       paused: isHardStopped(settings),
       resources: settings.profileName ? profileResourceSnapshot(settings.profileName) : null,
     };
@@ -1770,9 +1841,68 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
       const raw = await evalJs(`JSON.stringify(${pageExpr})`, t);
       return JSON.parse(raw);
     };
+    const currentPageState = async () => {
+      try {
+        return await page('({url:location.href,title:document.title})', Math.min(defaultJsTimeout || 3000, 5000));
+      } catch {
+        return { url: s.url || '', title: s.title || '' };
+      }
+    };
+    const waitFor = async (condition, options = {}) => {
+      const timeout = Number.isFinite(Number(options.timeoutMs)) && Number(options.timeoutMs) > 0
+        ? Number(options.timeoutMs)
+        : (requestedTimeout ?? 5000);
+      const pollMs = Number.isFinite(Number(options.pollMs)) && Number(options.pollMs) > 0
+        ? Number(options.pollMs)
+        : 100;
+      const kind = options.kind || (
+        options.text != null ? 'text'
+          : options.selector != null ? 'selector'
+            : options.expression != null ? 'expression'
+              : typeof condition === 'string' ? 'selector'
+                : 'expression'
+      );
+      const value = options.text ?? options.selector ?? options.expression ?? condition;
+      const deadline = Date.now() + timeout;
+      let lastError = null;
+      let lastValue = null;
+      while (Date.now() <= deadline) {
+        try {
+          if (kind === 'settled' || kind === 'quiet') {
+            await sleep(Math.min(timeout, Number(options.ms) || 300));
+            return { kind, timeoutMs: timeout };
+          }
+          const expression = kind === 'text'
+            ? `document.body ? document.body.innerText.includes(${JSON.stringify(String(value))}) : false`
+            : kind === 'selector'
+              ? `((sel) => {
+                  const el = document.querySelector(sel);
+                  if (!el) return false;
+                  const style = getComputedStyle(el);
+                  const rect = el.getBoundingClientRect();
+                  return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+                })(${JSON.stringify(String(value))})`
+              : String(value);
+          lastValue = await evalJs(expression, Math.min(timeout + 1000, 30000));
+          if (lastValue === true || (kind === 'expression' && options.truthy !== false && Boolean(lastValue))) {
+            const state = await currentPageState();
+            return { kind, value: kind === 'expression' ? '[expression]' : String(value), timeoutMs: timeout, ...state };
+          }
+        } catch (err) {
+          lastError = err.message;
+        }
+        await sleep(pollMs);
+      }
+      const state = await currentPageState();
+      throw new Error(`waitFor ${kind} failed after ${timeout}ms: ${kind === 'expression' ? '[expression]' : String(value)} url=${state.url || ''} title=${state.title || ''} last=${JSON.stringify(redactReceiptValue(lastValue, 'lastValue'))}${lastError ? ` error=${lastError}` : ''}`);
+    };
+    const assertPage = async (expression, options = {}) => {
+      const state = await waitFor(expression, { ...options, kind: 'expression', timeoutMs: options.timeoutMs || 1 });
+      return { asserted: true, ...state };
+    };
     const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
-    const fn = new AsyncFunction('cdp', 'js', 'sleep', 'waitLoad', 'page', code);
-    const runPromise = fn(cdp, evalJs, sleep, waitLoad, page);
+    const fn = new AsyncFunction('cdp', 'js', 'sleep', 'waitLoad', 'page', 'waitFor', 'assertPage', code);
+    const runPromise = fn(cdp, evalJs, sleep, waitLoad, page, waitFor, assertPage);
     try {
       const result = (typeof timeoutMs === 'number' && timeoutMs > 0)
         ? await withTimeout(runPromise, timeoutMs, 'run timeout')
@@ -2495,7 +2625,8 @@ async function cmdLaunch(profileName, explicitPort, launchMode = 'headless') {
 // CLI: ps — list running profiles
 // ============================================================
 
-async function cmdPs() {
+async function cmdPs(args = []) {
+  const json = args.includes('--json');
   fs.mkdirSync(PROFILES_DIR, { recursive: true });
   let profiles;
   try { profiles = fs.readdirSync(PROFILES_DIR); }
@@ -2530,7 +2661,39 @@ async function cmdPs() {
       } catch { daemon = 'stale'; }
     }
 
-    rows.push({ profile: name, port: runtime.port || '-', pid: runtime.pid, status: cdpOk ? 'running' : 'locked', tabs, daemon });
+    const paused = fs.existsSync(profileStopPath(name));
+    const resources = cdpOk ? profileResourceSnapshot(name) : null;
+    rows.push({
+      profile: name,
+      port: runtime.port || null,
+      pid: runtime.pid,
+      status: cdpOk ? 'running' : 'locked',
+      reason: runtime.reason || null,
+      tabs,
+      daemon,
+      paused,
+      launchMode: runtime.launchMode || null,
+      resources,
+    });
+  }
+
+  if (json) {
+    const totals = rows.reduce((acc, row) => {
+      acc.profiles += 1;
+      if (row.status === 'running') acc.running += 1;
+      if (row.status === 'locked') acc.locked += 1;
+      if (row.paused) acc.paused += 1;
+      if (row.daemon === 'stale') acc.staleDaemons += 1;
+      return acc;
+    }, { profiles: 0, running: 0, locked: 0, paused: 0, staleDaemons: 0 });
+    console.log(JSON.stringify({
+      ok: true,
+      generatedAt: new Date().toISOString(),
+      chromuxHome: CHROMUX_HOME,
+      totals,
+      profiles: rows,
+    }, null, 2));
+    return;
   }
 
   if (rows.length === 0) {
@@ -2541,7 +2704,7 @@ async function cmdPs() {
     for (const r of rows) {
       console.log(
         r.profile.padEnd(20) +
-        String(r.port).padEnd(8) +
+        String(r.port || '-').padEnd(8) +
         String(r.pid).padEnd(10) +
         r.status.padEnd(12) +
         r.daemon.padEnd(8) +
@@ -2795,6 +2958,98 @@ function autoReturnLastExpression(code) {
   try { new Function(`return ${candidate}`); return candidate; } catch { return null; }
 }
 
+function redactReceiptValue(value, key = '', depth = 0) {
+  const lowerKey = String(key || '').toLowerCase();
+  if (value == null || typeof value === 'number' || typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    if (/^(url|href)$/i.test(key)) {
+      return redactReceiptUrl(value);
+    }
+    if (/^(title|host|hostname|status|statusText|method|session|profile|mode|failureKind|reason)$/i.test(key)) {
+      return value;
+    }
+    return {
+      type: 'string',
+      length: value.length,
+      sha256: sha256Text(value).slice(0, 16),
+    };
+  }
+  if (Array.isArray(value)) {
+    if (depth >= 3) return { type: 'array', length: value.length };
+    return value.slice(0, 20).map(item => redactReceiptValue(item, key, depth + 1));
+  }
+  if (typeof value === 'object') {
+    if (depth >= 3) return { type: 'object', keys: Object.keys(value).slice(0, 20) };
+    const out = {};
+    for (const [childKey, childValue] of Object.entries(value)) {
+      const childLower = childKey.toLowerCase();
+      if (/(authorization|cookie|token|secret|password|passwd|credential|code|text|html|value|body|content)/.test(childLower)) {
+        out[childKey] = redactReceiptValue(String(childValue ?? ''), childKey, depth + 1);
+        continue;
+      }
+      out[childKey] = redactReceiptValue(childValue, childKey, depth + 1);
+    }
+    if (lowerKey && /(authorization|cookie|token|secret|password|credential)/.test(lowerKey)) {
+      return { redacted: true };
+    }
+    return out;
+  }
+  return { type: typeof value };
+}
+
+function redactReceiptUrl(value) {
+  const text = String(value);
+  try {
+    const parsed = new URL(text);
+    if (!parsed.search && !parsed.hash) return text;
+    if (parsed.search) {
+      const query = [];
+      for (const [key, paramValue] of parsed.searchParams.entries()) {
+        query.push(`${encodeURIComponent(key)}=[sha256:${sha256Text(paramValue).slice(0, 8)};len:${String(paramValue).length}]`);
+      }
+      parsed.search = query.join('&');
+    }
+    if (parsed.hash) {
+      parsed.hash = '#[redacted]';
+    }
+    return parsed.toString();
+  } catch {
+    return {
+      type: 'string',
+      length: text.length,
+      sha256: sha256Text(text).slice(0, 16),
+    };
+  }
+}
+
+function buildRunReceipt({ session, codeSource, timeoutMs, startedAt, endedAt, result, error }) {
+  return {
+    schema: 'chromux.run-receipt.v1',
+    ok: !error,
+    generatedAt: new Date().toISOString(),
+    profile: getProfile(),
+    mode: getMode(),
+    session,
+    timeoutMs: timeoutMs || null,
+    codeSource,
+    codeStored: false,
+    startedAt: new Date(startedAt).toISOString(),
+    endedAt: new Date(endedAt).toISOString(),
+    durationMs: endedAt - startedAt,
+    resultSummary: error ? null : redactReceiptValue(result, 'result'),
+    error: error ? {
+      message: error.message,
+      failureKind: classifyBatchFailure(error).failureKind,
+      retryable: classifyBatchFailure(error).retryable,
+    } : null,
+    redaction: {
+      inlineCode: 'not stored',
+      rawTypedText: 'not stored',
+      secrets: 'string values under sensitive keys are redacted',
+    },
+  };
+}
+
 function readCodeArg(args, usage) {
   let timeoutMs;
   const tIdx = args.indexOf('--timeout');
@@ -2802,50 +3057,88 @@ function readCodeArg(args, usage) {
     timeoutMs = parseInt(args[tIdx + 1]);
     args.splice(tIdx, 2);
   }
+  let receiptPath = null;
+  const receiptIdx = args.indexOf('--receipt');
+  if (receiptIdx >= 0) {
+    receiptPath = args[receiptIdx + 1];
+    if (!receiptPath) { console.error('--receipt requires a path'); process.exit(1); }
+    args.splice(receiptIdx, 2);
+  }
   const session = args[0];
   if (!session) { console.error(usage); process.exit(1); }
   let code;
+  let codeSource = { kind: 'inline' };
   const fIdx = args.indexOf('--file');
   if (fIdx >= 0) {
     const p = args[fIdx + 1];
     if (!p) { console.error('--file requires a path'); process.exit(1); }
     code = fs.readFileSync(p, 'utf8');
+    codeSource = { kind: 'file', path: path.resolve(p) };
   } else if (args[1] === '-') {
     code = fs.readFileSync(0, 'utf8');
+    codeSource = { kind: 'stdin' };
   } else {
     code = args[1];
   }
   if (code == null) { console.error('No code provided'); process.exit(1); }
-  return { session, code, timeoutMs };
+  return { session, code, timeoutMs, receiptPath, codeSource };
 }
 
 async function cmdRun(args, sock) {
-  // --page-file: run a JS file directly in the page context. The file contents
-  // are JSON-encoded into a js() call, so no shell/heredoc/string escaping
-  // layer ever touches the page code. Write natural statements and `return`.
-  const pfIdx = args.indexOf('--page-file');
-  if (pfIdx >= 0) {
+  let session;
+  let code;
+  let timeoutMs;
+  let receiptPath = null;
+  let codeSource;
+  if (args.includes('--page-file')) {
+    const receiptIdx = args.indexOf('--receipt');
+    if (receiptIdx >= 0) {
+      receiptPath = args[receiptIdx + 1];
+      if (!receiptPath) { console.error('--receipt requires a path'); process.exit(1); }
+      args.splice(receiptIdx, 2);
+    }
+    const pfIdx = args.indexOf('--page-file');
     const p = args[pfIdx + 1];
     if (!p) { console.error('--page-file requires a path'); process.exit(1); }
     const pageCode = fs.readFileSync(p, 'utf8');
     args.splice(pfIdx, 2);
-    let timeoutMs;
     const tIdx = args.indexOf('--timeout');
     if (tIdx >= 0) { timeoutMs = parseInt(args[tIdx + 1]); args.splice(tIdx, 2); }
-    const session = args[0];
-    if (!session) { console.error('Usage: chromux run <session> --page-file PATH [--timeout MS]'); process.exit(1); }
-    const code = `return await js(${JSON.stringify(pageCode)});`;
-    const httpTimeout = (timeoutMs ? timeoutMs : 30000) + 5000;
-    return cliReq('POST', '/run', { session, code, timeoutMs }, sock, httpTimeout);
+    session = args[0];
+    if (!session) { console.error('Usage: chromux run <session> --page-file PATH [--timeout MS] [--receipt PATH]'); process.exit(1); }
+    code = `return await js(${JSON.stringify(pageCode)});`;
+    codeSource = { kind: 'page-file', path: path.resolve(p) };
+  } else {
+    ({ session, code, timeoutMs, receiptPath, codeSource } = readCodeArg(args, 'Usage: chromux run <session> <code|--file PATH|--page-file PATH|-> [--timeout MS] [--receipt PATH]'));
   }
-  const { session, code, timeoutMs } = readCodeArg(args, 'Usage: chromux run <session> <code|--file PATH|--page-file PATH|-> [--timeout MS]');
   const httpTimeout = (timeoutMs ? timeoutMs : 30000) + 5000;
-  return cliReq('POST', '/run', { session, code, timeoutMs }, sock, httpTimeout);
+  const startedAt = Date.now();
+  try {
+    const result = await cliReq('POST', '/run', { session, code, timeoutMs }, sock, httpTimeout);
+    if (receiptPath) {
+      const receipt = buildRunReceipt({ session, codeSource, timeoutMs, startedAt, endedAt: Date.now(), result, error: null });
+      writeSafeJsonArtifact(receiptPath, receipt, 'run receipt');
+    }
+    return result;
+  } catch (error) {
+    if (receiptPath) {
+      const receipt = buildRunReceipt({ session, codeSource, timeoutMs, startedAt, endedAt: Date.now(), result: null, error });
+      writeSafeJsonArtifact(receiptPath, receipt, 'run receipt');
+    }
+    throw error;
+  }
 }
 
 function getBatchArg(args, flag, fallback = null) {
   const idx = args.indexOf(flag);
   return idx >= 0 ? args[idx + 1] : fallback;
+}
+
+function batchNumberArg(args, flag, fallback, { min = 0 } = {}) {
+  const raw = getBatchArg(args, flag, String(fallback));
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.floor(n));
 }
 
 function readBatchRecords(filePath, limit = 0) {
@@ -2869,20 +3162,92 @@ function readBatchRecords(filePath, limit = 0) {
   return out;
 }
 
+function batchHost(url) {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.protocol}//${parsed.host}`;
+  } catch {
+    return 'unknown';
+  }
+}
+
+async function waitForBatchHost(hostState, host) {
+  const state = hostState.get(host);
+  if (!state?.nextAvailableAt) return;
+  const waitMs = state.nextAvailableAt - Date.now();
+  if (waitMs > 0) await sleep(waitMs);
+}
+
+function noteBatchHostSuccess(hostState, host) {
+  if (!host) return;
+  const state = hostState.get(host) || {};
+  state.consecutiveFailures = 0;
+  state.nextAvailableAt = 0;
+  hostState.set(host, state);
+}
+
+function noteBatchHostFailure(hostState, host, hostBackoffMs, failureKind) {
+  if (!host || hostBackoffMs <= 0) return;
+  const state = hostState.get(host) || { consecutiveFailures: 0, failureKinds: {} };
+  state.consecutiveFailures = (state.consecutiveFailures || 0) + 1;
+  state.failureKinds[failureKind] = (state.failureKinds[failureKind] || 0) + 1;
+  const multiplier = Math.min(8, state.consecutiveFailures);
+  state.nextAvailableAt = Date.now() + hostBackoffMs * multiplier;
+  hostState.set(host, state);
+}
+
+function classifyBatchFailure(err) {
+  const message = String(err?.message || err || '');
+  const lower = message.toLowerCase();
+  let failureKind = 'unknown';
+  let retryable = false;
+  if (/timeout|timed out|handler timeout/.test(lower)) {
+    failureKind = 'timeout';
+    retryable = true;
+  } else if (/resource guard/.test(lower)) {
+    failureKind = 'resource_guard';
+    retryable = true;
+  } else if (/queue is full|operation queue/.test(lower)) {
+    failureKind = 'queue_full';
+    retryable = true;
+  } else if (/unresponsive|websocket closed|websocket error|cdp unreachable|daemon endpoint unavailable|socket hang up|econnreset/.test(lower)) {
+    failureKind = 'session_unresponsive';
+    retryable = true;
+  } else if (/net::|navigation|cannot reach|enotfound|econnrefused|err_name_not_resolved/.test(lower)) {
+    failureKind = 'navigation';
+    retryable = true;
+  } else if (/http|status|not found|forbidden|unauthorized|server error/.test(lower)) {
+    failureKind = 'http_or_page';
+    retryable = false;
+  }
+  return { failureKind, retryable, message };
+}
+
+function quantile(sorted, q) {
+  if (!sorted.length) return 0;
+  const idx = Math.min(sorted.length - 1, Math.max(0, Math.floor((sorted.length - 1) * q)));
+  return sorted[idx];
+}
+
 async function cmdBatch(args, sock) {
   const filePath = getBatchArg(args, '--file');
   const outPath = getBatchArg(args, '--out');
-  const workers = Math.max(1, Number(getBatchArg(args, '--workers', '4')) || 4);
-  const limit = Math.max(0, Number(getBatchArg(args, '--limit', '0')) || 0);
+  const workers = batchNumberArg(args, '--workers', 4, { min: 1 });
+  const limit = batchNumberArg(args, '--limit', 0, { min: 0 });
+  const retries = batchNumberArg(args, '--retries', 1, { min: 0 });
+  const hostBackoffMs = batchNumberArg(args, '--host-backoff-ms', 250, { min: 0 });
+  const retryBackoffMs = batchNumberArg(args, '--retry-backoff-ms', 250, { min: 0 });
   const prefix = getBatchArg(args, '--session-prefix', `batch-${Date.now().toString(36)}`);
   if (!filePath && !args.includes('-')) {
-    console.error('Usage: chromux batch --file urls.txt [--workers N] [--out results.jsonl] [--limit N] [--session-prefix P]');
+    console.error('Usage: chromux batch --file urls.txt [--workers N] [--retries N] [--host-backoff-ms MS] [--out results.jsonl] [--limit N] [--session-prefix P]');
     process.exit(1);
   }
   const records = readBatchRecords(filePath, limit);
   if (outPath) fs.writeFileSync(outPath, '');
   const queue = [...records];
   const results = [];
+  const hostState = new Map();
+  const startedAt = Date.now();
   const writeResult = (record) => {
     results.push(record);
     if (outPath) fs.appendFileSync(outPath, JSON.stringify(record) + '\n');
@@ -2893,44 +3258,91 @@ async function cmdBatch(args, sock) {
     while (queue.length > 0) {
       const item = queue.shift();
       const started = Date.now();
+      const host = batchHost(item.url);
       const result = {
         workerId,
         session,
         url: item.url,
+        host,
         input: item,
         ok: false,
+        attempts: 0,
+        retryable: false,
+        failureKind: null,
         durationMs: 0,
+        queuedRemainingAtStart: queue.length,
       };
-      try {
-        const opened = await cliReq('POST', '/open', { session, url: item.url, background: true }, sock, defaultCliTimeoutMs());
-        const pageInfo = await cliReq('POST', '/run', {
-          session,
-          code: `return await page('({url:location.href,title:document.title,textLength:(document.body?document.body.innerText.length:0),htmlLength:(document.documentElement?document.documentElement.outerHTML.length:0)})')`,
-          timeoutMs: 15_000,
-        }, sock, 20_000);
-        result.ok = Boolean(pageInfo?.title) && Number(pageInfo?.htmlLength || 0) > 500;
-        result.opened = opened;
-        result.page = pageInfo;
-      } catch (err) {
-        result.error = err.message;
-      } finally {
-        result.durationMs = Date.now() - started;
-        writeResult(result);
+      for (let attempt = 1; attempt <= retries + 1; attempt++) {
+        result.attempts = attempt;
+        await waitForBatchHost(hostState, host);
+        try {
+          const opened = await cliReq('POST', '/open', { session, url: item.url, background: true }, sock, defaultCliTimeoutMs());
+          const pageInfo = await cliReq('POST', '/run', {
+            session,
+            code: `return await page('({url:location.href,title:document.title,textLength:(document.body?document.body.innerText.length:0),htmlLength:(document.documentElement?document.documentElement.outerHTML.length:0)})')`,
+            timeoutMs: 15_000,
+          }, sock, 20_000);
+          result.ok = Boolean(pageInfo?.url) && Number(pageInfo?.htmlLength || 0) > 0;
+          result.opened = opened;
+          result.page = pageInfo;
+          if (!result.ok) {
+            const pageError = new Error(`Page result did not meet batch success contract: title=${pageInfo?.title || ''} htmlLength=${pageInfo?.htmlLength || 0}`);
+            const classified = classifyBatchFailure(pageError);
+            result.failureKind = classified.failureKind === 'unknown' ? 'http_or_page' : classified.failureKind;
+            result.retryable = false;
+            result.error = pageError.message;
+          } else {
+            noteBatchHostSuccess(hostState, host);
+            result.failureKind = null;
+            result.retryable = false;
+            delete result.error;
+          }
+        } catch (err) {
+          const classified = classifyBatchFailure(err);
+          result.error = classified.message;
+          result.failureKind = classified.failureKind;
+          result.retryable = classified.retryable;
+          noteBatchHostFailure(hostState, host, hostBackoffMs, classified.failureKind);
+          if (classified.retryable && attempt <= retries) {
+            await sleep(retryBackoffMs * attempt);
+            continue;
+          }
+        }
+        break;
       }
+      result.durationMs = Date.now() - started;
+      writeResult(result);
     }
     await cliReq('DELETE', `/session/${encodeURIComponent(session)}`, null, sock).catch(() => {});
   };
 
   await Promise.all(Array.from({ length: workers }, (_, i) => worker(i)));
   const durations = results.map(r => r.durationMs).sort((a, b) => a - b);
-  const p95 = durations.length ? durations[Math.min(durations.length - 1, Math.floor((durations.length - 1) * 0.95))] : 0;
+  const failureKinds = {};
+  for (const result of results) {
+    if (result.ok) continue;
+    const key = result.failureKind || 'unknown';
+    failureKinds[key] = (failureKinds[key] || 0) + 1;
+  }
   return {
     total: results.length,
     ok: results.filter(r => r.ok).length,
     failed: results.filter(r => !r.ok).length,
     workers,
+    retries,
+    retryCount: results.reduce((sum, r) => sum + Math.max(0, (r.attempts || 1) - 1), 0),
+    hostBackoffMs,
     out: outPath || null,
-    p95DurationMs: p95,
+    durationMs: Date.now() - startedAt,
+    p50DurationMs: quantile(durations, 0.50),
+    p95DurationMs: quantile(durations, 0.95),
+    failureKinds,
+    hosts: [...hostState.entries()].map(([host, state]) => ({
+      host,
+      consecutiveFailures: state.consecutiveFailures || 0,
+      failureKinds: state.failureKinds || {},
+      nextAvailableAt: state.nextAvailableAt || 0,
+    })),
   };
 }
 
@@ -3195,7 +3607,7 @@ function sanitizeActivityArgs(cmd, args) {
   if (cmd === 'run' || cmd === 'eval') {
     return copy.map((arg, i) => {
       if (i <= 0) return arg;
-      if (arg === '-' || arg === '--file' || copy[i - 1] === '--file' || arg === '--timeout' || copy[i - 1] === '--timeout') return arg;
+      if (arg === '-' || arg === '--file' || copy[i - 1] === '--file' || arg === '--timeout' || copy[i - 1] === '--timeout' || arg === '--receipt' || copy[i - 1] === '--receipt') return arg;
       if (arg === '--no-iife') return arg;
       return '[code]';
     });
@@ -3281,7 +3693,7 @@ async function runCli(cmd, args) {
       : 'headed';
     return runLoggedProfileCommand(cmd, args, name, () => cmdLaunch(name, port, launchMode));
   }
-  if (cmd === 'ps') return runLoggedProfileCommand(cmd, args, getProfile(), () => cmdPs());
+  if (cmd === 'ps') return runLoggedProfileCommand(cmd, args, getProfile(), () => cmdPs(args));
   if (cmd === 'kill') {
     if (!args[0]) { console.error('Usage: chromux kill <profile>'); process.exit(1); }
     const r = await runLoggedProfileCommand(cmd, args, args[0], () => cmdKill(args[0]));
@@ -3878,7 +4290,9 @@ The core surface:
   chromux open --background <s> <u>  Explicitly create a background tab
   chromux run <session> -            Multi-step async JS with cdp/js/page helpers
   chromux run <session> --page-file F  Run a JS file directly in the page (no shell escaping)
+  chromux run <session> --receipt p  Write a redacted local run receipt
   chromux batch --file urls.txt      Crawl URLs through a worker-tab pool
+  chromux batch --file urls.txt --retries N --host-backoff-ms MS
   chromux cdp <session> <M> '{}'     Raw CDP method passthrough
 
 Lifecycle:
@@ -3886,6 +4300,7 @@ Lifecycle:
   chromux launch <name> --headless   Launch in headless mode (no window)
   chromux launch <name> --port N     Launch with specific port
   chromux ps                         List running profiles
+  chromux ps --json                  Machine-readable profile diagnostics
   chromux app [--port N]             Local profile/activity companion app
   chromux app --open                 Serve the app and open it in a browser
   chromux pause [name]               Hard-stop new tab work for a profile
@@ -3922,6 +4337,12 @@ Site knowledge:
   chromux note <host> --add "text"   Append a durable site note (surfaced on next open)
   Notes live in ~/.chromux/skills/<host>/*.md and are attached to open results
   for that host and its subdomains.
+
+Runner snippets:
+  snippets/_builtin/page-extract.js      Structured page metadata extraction
+  snippets/_builtin/form-flow.js         Form fill, submit, and readiness proof
+  snippets/_builtin/network-errors.js    Browser-observable resource diagnostics
+  snippets/_builtin/page-assert.js       Selector, text, and DOM assertions
 
 Policy:
   New browser actions should be expressed with run or cdp before adding verbs.

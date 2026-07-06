@@ -92,12 +92,18 @@ For URL batches, use the same crawl mode with `batch`:
 
 ```bash
 CHROMUX_MODE=crawl CHROMUX_PROFILE=crawl-news \
-  chromux batch --file urls.txt --workers 10 --out results.jsonl
+  chromux batch --file urls.txt --workers 10 --retries 1 --host-backoff-ms 250 --out results.jsonl
 ```
 
 `batch` reads plain URL lines or JSONL rows with `url`, `source_url`, or `href`,
 reuses a worker-tab pool, writes one JSON result per URL, and closes worker
 sessions when done.
+Each row includes worker/session identity, attempts, duration, final URL/title,
+text/html lengths, and a failure kind such as `timeout`, `resource_guard`,
+`queue_full`, `session_unresponsive`, `navigation`, `http_or_page`, or
+`unknown`.
+The summary includes p50/p95 timings, retry count, failure-kind totals, host
+backoff settings, and touched host state.
 
 `crawl` mode keeps the public command surface the same, but changes the profile
 daemon policy:
@@ -144,6 +150,9 @@ chromux ps
 # work                9300    12345     running     3
 # personal            9301    12346     running     1
 
+# Machine-readable diagnosis for agents and dashboards
+chromux ps --json
+
 # Use a specific profile for tab commands
 chromux --profile work open my-tab https://...
 CHROMUX_PROFILE=personal chromux open other-tab https://...
@@ -179,9 +188,10 @@ response is not proof that the page reached the intended state.
 |---------|-------------|
 | `open <session> <url>` | Create or navigate a tab |
 | `open --background <session> <url>` | Explicitly create a new tab without activating it |
-| `run <session> <code\|--file PATH\|->` | Run multi-step async JS with `cdp`, `js`, `sleep`, and `waitLoad` helpers |
+| `run <session> <code\|--file PATH\|->` | Run multi-step async JS with `cdp`, `js`, `sleep`, `waitLoad`, `page`, `waitFor`, and `assertPage` helpers |
 | `run <session> --page-file PATH` | Run a JS file directly in the page context, bypassing all shell/string escaping |
-| `batch --file urls.txt --workers N --out results.jsonl` | Crawl URLs through a worker-tab pool |
+| `run <session> ... --receipt PATH` | Write a redacted local JSON receipt without storing raw inline code or typed text |
+| `batch --file urls.txt --workers N --retries N --host-backoff-ms MS --out results.jsonl` | Crawl URLs through a worker-tab pool with bounded retry and host backoff |
 | `cdp <session> <Method> <params-json>` | Send one raw CDP method to a session |
 | `note [host] [--add "text"]` | List, show, or append durable site notes surfaced on `open` |
 
@@ -233,6 +243,32 @@ tab. When `chromux run --timeout MS` is provided, that timeout is also used as
 the default CDP timeout for `js(...)`, `cdp(...)`, and `page(...)` helper calls
 unless the helper call passes its own timeout.
 
+Use `waitFor(...)` and `assertPage(...)` inside `run` when a flow needs
+observable readiness proof without extra CLI round trips:
+
+```bash
+chromux run s - <<'JS'
+await waitFor('#email', { kind: 'selector', timeoutMs: 5000 });
+await js("document.querySelector('#email').value='agent@example.com'");
+await assertPage('document.readyState === "complete" || document.readyState === "interactive"');
+return await page('({url:location.href,title:document.title})');
+JS
+```
+
+Use `--receipt` when a browser operation should leave replay/debug evidence:
+
+```bash
+chromux run s --receipt /tmp/chromux-run-receipt.json - <<'JS'
+const ready = await waitFor('Saved', { kind: 'text', timeoutMs: 5000 });
+return { ready, page: await page('({url:location.href,title:document.title})') };
+JS
+```
+
+Receipts store timing, profile/session/mode, code source, result shape, failure
+kind, and redaction metadata.
+They do not store raw inline code, raw typed text, cookies, authorization
+headers, tokens, or secrets.
+
 `cdp` is a thin passthrough:
 
 ```bash
@@ -246,6 +282,7 @@ chromux cdp s Runtime.evaluate '{"expression":"navigator.userAgent","returnByVal
 | `launch [name]` | Launch Chrome with isolated profile (default: "default") |
 | `launch <name> --port N` | Launch with specific port |
 | `ps` | List running profiles |
+| `ps --json` | List profiles, daemon state, paused state, and resource telemetry as JSON |
 | `app [--port N] [--open]` | Serve the local profile/activity companion app |
 | `pause [name]` | Hard-stop new browser work for a profile |
 | `resume [name]` | Allow browser work again for a paused profile |
@@ -297,6 +334,42 @@ warnings. They are intentionally hidden from the main help surface.
 `scroll-until` is now documented as runner material in
 `snippets/_builtin/scroll-until.js`; copy or adapt that file when a task needs the
 pattern.
+
+### Builtin Runner Snippets
+
+The checked-in snippets under `snippets/_builtin/` are reusable `chromux run`
+scripts, not public commands.
+They cover common fast paths:
+
+- `scroll-until.js`: infinite scroll and result growth loops.
+- `page-extract.js`: structured page metadata extraction without full body text
+  or HTML dumps.
+- `form-flow.js`: form fill, submit, and readiness proof.
+- `network-errors.js`: browser-observable broken resource diagnostics.
+- `page-assert.js`: selector, text, and DOM assertion proof.
+
+Run them with `--file`:
+
+```bash
+chromux run s --file snippets/_builtin/page-extract.js
+chromux run s --file snippets/_builtin/page-assert.js
+```
+
+### Local Benchmarks
+
+The deterministic benchmark harness starts a local fixture server and exercises
+real Chrome through the CLI:
+
+```bash
+CHROMUX_HOME="$(mktemp -d /tmp/chromux-bench-XXXXXX)" \
+  node benchmarks/chromux-benchmark.mjs --smoke --out /tmp/chromux-benchmark.json
+```
+
+It reports cold launch, warm `ps --json`, `open`, `run`, full snapshot,
+interactive snapshot, screenshot, click/fill/wait style interaction, and
+`batch` p50/p95 timings.
+Use it before and after automation changes when performance or scheduler
+behavior matters.
 
 ## Architecture
 
