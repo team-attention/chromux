@@ -1,0 +1,1323 @@
+{
+  "schema": "hoyeon.prd-implement.taskgraph.v2",
+  "generatedAt": "2026-07-06T00:43:47.450Z",
+  "prdPath": ".hoyeon/prd/cli-command-registry-refactor/prd.md",
+  "status": "complete",
+  "summary": {
+    "nodeCount": 25,
+    "edgeCount": 102,
+    "openNodeCount": 0,
+    "blockingGapCount": 0,
+    "executionNodeCount": 5,
+    "openExecutionNodeCount": 0
+  },
+  "nodes": [
+    {
+      "id": "VP0",
+      "kind": "verification_plan",
+      "title": "Generate and resolve verification plan",
+      "status": "ready",
+      "closed": true,
+      "blockingGapCount": 0,
+      "checkCount": 5,
+      "evidenceCount": 0,
+      "artifactCount": 0
+    },
+    {
+      "id": "EP0",
+      "kind": "execution_plan",
+      "title": "Generate execution plan from PRD tasks",
+      "status": "ready",
+      "closed": true,
+      "blockingGapCount": 0,
+      "nodeCount": 5,
+      "evidenceCount": 0,
+      "artifactCount": 0
+    },
+    {
+      "id": "T1",
+      "kind": "task_rollup",
+      "title": "Introduce shared CLI command metadata inside `chromux.mjs`. Covers R1, AC1.",
+      "status": "complete",
+      "closed": true,
+      "requirements": [
+        "R1"
+      ],
+      "acceptanceCriteria": [
+        "AC1"
+      ],
+      "evidence": [
+        {
+          "ts": "2026-07-05T17:38:08.244Z",
+          "text": "Execution roll-up: N1 complete; ACs AC1 met; required Verification V1, V2 passed."
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 1,
+      "artifactCount": 0
+    },
+    {
+      "id": "T2",
+      "kind": "task_rollup",
+      "title": "Refactor command validation and daemon-backed routing to use the shared metadata. Covers R2, AC2.",
+      "status": "complete",
+      "closed": true,
+      "requirements": [
+        "R2"
+      ],
+      "acceptanceCriteria": [
+        "AC2"
+      ],
+      "evidence": [
+        {
+          "ts": "2026-07-05T17:38:08.310Z",
+          "text": "Execution roll-up: N2 complete; ACs AC2 met; required Verification V1, V2, V4 passed."
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 1,
+      "artifactCount": 0
+    },
+    {
+      "id": "T3",
+      "kind": "task_rollup",
+      "title": "Preserve help output and hidden compatibility alias policy. Covers R3, AC3.",
+      "status": "complete",
+      "closed": true,
+      "requirements": [
+        "R3"
+      ],
+      "acceptanceCriteria": [
+        "AC3"
+      ],
+      "evidence": [
+        {
+          "ts": "2026-07-05T17:38:08.377Z",
+          "text": "Execution roll-up: N3 complete; ACs AC3 met; required Verification V1, V2, V4 passed."
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 1,
+      "artifactCount": 0
+    },
+    {
+      "id": "T4",
+      "kind": "task_rollup",
+      "title": "Add or update automated coverage for command metadata invariants if existing coverage is insufficient, then run local...",
+      "status": "complete",
+      "closed": true,
+      "requirements": [
+        "R4"
+      ],
+      "acceptanceCriteria": [
+        "AC4"
+      ],
+      "evidence": [
+        {
+          "ts": "2026-07-05T17:38:08.442Z",
+          "text": "Execution roll-up: N4 complete; ACs AC4 met; required Verification V1, V2, V3, V4 passed."
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 1,
+      "artifactCount": 0
+    },
+    {
+      "id": "T5",
+      "kind": "task_rollup",
+      "title": "Prepare PR delivery handoff and ship through PR delivery after receipt without staging unrelated local artifacts. Cov...",
+      "status": "complete",
+      "closed": true,
+      "requirements": [
+        "R5"
+      ],
+      "acceptanceCriteria": [
+        "AC5"
+      ],
+      "evidence": [
+        {
+          "ts": "2026-07-05T17:38:08.585Z",
+          "text": "Execution roll-up: N5 complete; ACs AC5 met; required Verification none passed."
+        },
+        {
+          "ts": "2026-07-05T17:44:55.492Z",
+          "text": "T5 delivery handoff includes state/config allowlist constraints; post-receipt V5 remains responsible for PR creation, diff cleanliness proof, and required CI status."
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 2,
+      "artifactCount": 0
+    },
+    {
+      "id": "N1",
+      "kind": "execution_node",
+      "title": "Introduce shared CLI command metadata inside `chromux.mjs`. Covers R1, AC1.",
+      "status": "complete",
+      "closed": true,
+      "sourceTask": "T1",
+      "dependsOn": [],
+      "writeScope": [
+        "chromux.mjs"
+      ],
+      "parallelSafe": true,
+      "risk": "medium",
+      "owner": null,
+      "covers": {
+        "requirements": [
+          "R1"
+        ],
+        "acceptanceCriteria": [
+          "AC1"
+        ],
+        "verification": [
+          "V1",
+          "V2"
+        ]
+      },
+      "evidence": [
+        {
+          "ts": "2026-07-05T17:38:07.927Z",
+          "text": "Shared command metadata registry added in chromux.mjs; V1 and V2 passed with logs under .hoyeon/implement/cli-command-registry-refactor/artifacts/logs."
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 1,
+      "artifactCount": 0
+    },
+    {
+      "id": "N2",
+      "kind": "execution_node",
+      "title": "Refactor command validation and daemon-backed routing to use the shared metadata. Covers R2, AC2.",
+      "status": "complete",
+      "closed": true,
+      "sourceTask": "T2",
+      "dependsOn": [],
+      "writeScope": [
+        "chromux.mjs",
+        ".hoyeon"
+      ],
+      "parallelSafe": true,
+      "risk": "medium",
+      "owner": null,
+      "covers": {
+        "requirements": [
+          "R2"
+        ],
+        "acceptanceCriteria": [
+          "AC2"
+        ],
+        "verification": [
+          "V1",
+          "V2",
+          "V4"
+        ]
+      },
+      "evidence": [
+        {
+          "ts": "2026-07-05T17:38:07.989Z",
+          "text": "runCli daemon-backed routing now dispatches through DAEMON_COMMAND_ROUTES instead of per-call tab command sets; V1, V2, and V4 passed."
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 1,
+      "artifactCount": 0
+    },
+    {
+      "id": "N3",
+      "kind": "execution_node",
+      "title": "Preserve help output and hidden compatibility alias policy. Covers R3, AC3.",
+      "status": "complete",
+      "closed": true,
+      "sourceTask": "T3",
+      "dependsOn": [],
+      "writeScope": [
+        "chromux.mjs",
+        ".hoyeon"
+      ],
+      "parallelSafe": true,
+      "risk": "medium",
+      "owner": null,
+      "covers": {
+        "requirements": [
+          "R3"
+        ],
+        "acceptanceCriteria": [
+          "AC3"
+        ],
+        "verification": [
+          "V1",
+          "V2",
+          "V4"
+        ]
+      },
+      "evidence": [
+        {
+          "ts": "2026-07-05T17:38:08.051Z",
+          "text": "Primary help still exposes wait-for-selector and hides compatibility aliases while daemon routes keep aliases callable; V1, V2, and V4 passed."
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 1,
+      "artifactCount": 0
+    },
+    {
+      "id": "N4",
+      "kind": "execution_node",
+      "title": "Add or update automated coverage for command metadata invariants if existing coverage is insufficient, then run local...",
+      "status": "complete",
+      "closed": true,
+      "sourceTask": "T4",
+      "dependsOn": [],
+      "writeScope": [
+        "chromux.mjs",
+        ".hoyeon"
+      ],
+      "parallelSafe": true,
+      "risk": "medium",
+      "owner": null,
+      "covers": {
+        "requirements": [
+          "R4"
+        ],
+        "acceptanceCriteria": [
+          "AC4"
+        ],
+        "verification": [
+          "V1",
+          "V2",
+          "V3",
+          "V4"
+        ]
+      },
+      "evidence": [
+        {
+          "ts": "2026-07-05T17:38:08.114Z",
+          "text": "Status app self-test now checks command metadata registry invariants and full local verification V1-V4 passed."
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 1,
+      "artifactCount": 0
+    },
+    {
+      "id": "N5",
+      "kind": "execution_node",
+      "title": "Prepare PR delivery handoff and ship through PR delivery after receipt without staging unrelated local artifacts. Cov...",
+      "status": "complete",
+      "closed": true,
+      "sourceTask": "T5",
+      "dependsOn": [
+        "N4"
+      ],
+      "writeScope": [
+        "chromux.mjs",
+        ".hoyeon"
+      ],
+      "parallelSafe": true,
+      "risk": "medium",
+      "owner": null,
+      "covers": {
+        "requirements": [
+          "R5"
+        ],
+        "acceptanceCriteria": [
+          "AC5"
+        ],
+        "verification": [
+          "V5"
+        ]
+      },
+      "evidence": [
+        {
+          "ts": "2026-07-05T17:38:08.178Z",
+          "text": "PR delivery handoff is ready in implementation state with delivery.mode=pr, branch=prd/cli-command-registry-refactor, and allowlist staging handled by prd_ship; actual PR/CI execution remains the post-receipt V5 gate."
+        },
+        {
+          "ts": "2026-07-05T17:44:55.162Z",
+          "text": "PR delivery handoff state now contains explicit allowlist staging include paths (.hoyeon/config.json, .hoyeon/prd/cli-command-registry-refactor, .hoyeon/implement/cli-command-registry-refactor, chromux.mjs) and exclude paths (.hoyeon/implement/.prd-implement-active.json, .hoyeon/implement/.prd-implement-sessions, .hoyeon/implement/cli-command-registry-refactor/artifacts)."
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 2,
+      "artifactCount": 0
+    },
+    {
+      "id": "AC1",
+      "kind": "acceptance_criterion",
+      "title": "A future maintainer can inspect one command metadata area in `chromux.mjs` to understand which commands are profile-l...",
+      "status": "met",
+      "closed": true,
+      "requirements": [],
+      "evidence": [
+        {
+          "ts": "2026-07-05T17:38:08.243Z",
+          "text": "chromux.mjs contains a single shared command metadata registry for profile, daemon-backed, and hidden compatibility commands."
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 1,
+      "artifactCount": 0
+    },
+    {
+      "id": "AC2",
+      "kind": "acceptance_criterion",
+      "title": "`runCli` no longer constructs an inline `Set` of tab commands for each invocation and uses shared command routing met...",
+      "status": "met",
+      "closed": true,
+      "requirements": [],
+      "evidence": [
+        {
+          "ts": "2026-07-05T17:38:08.309Z",
+          "text": "Daemon command validation and dispatch use DAEMON_COMMAND_ROUTES and the invariant self-test rejects per-call tab command set construction."
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 1,
+      "artifactCount": 0
+    },
+    {
+      "id": "AC3",
+      "kind": "acceptance_criterion",
+      "title": "`node chromux.mjs help` still includes visible commands such as `wait-for-selector` and does not expose hidden compat...",
+      "status": "met",
+      "closed": true,
+      "requirements": [],
+      "evidence": [
+        {
+          "ts": "2026-07-05T17:38:08.376Z",
+          "text": "Help output smoke check confirms wait-for-selector remains visible and eval/cdp/run/batch remain hidden from primary help."
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 1,
+      "artifactCount": 0
+    },
+    {
+      "id": "AC4",
+      "kind": "acceptance_criterion",
+      "title": "Local static checks, command metadata self-test or equivalent automated behavior check, full `./test.sh`, and `npm pa...",
+      "status": "met",
+      "closed": true,
+      "requirements": [],
+      "evidence": [
+        {
+          "ts": "2026-07-05T17:38:08.442Z",
+          "text": "V1 through V4 passed, including syntax checks, help policy checks, npm pack dry run, status app self-test, and bash ./test.sh."
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 1,
+      "artifactCount": 0
+    },
+    {
+      "id": "AC5",
+      "kind": "acceptance_criterion",
+      "title": "The completed implementation state contains PR delivery mode, an intended branch, and allowlist staging constraints s...",
+      "status": "met",
+      "closed": true,
+      "requirements": [],
+      "evidence": [
+        {
+          "ts": "2026-07-05T17:38:08.514Z",
+          "text": "Implementation state contains PR delivery mode, branch prd/cli-command-registry-refactor, config path .hoyeon/config.json, and prd_ship allowlist staging constraints for post-receipt PR/CI delivery."
+        },
+        {
+          "ts": "2026-07-05T17:44:55.358Z",
+          "text": "state.json and .hoyeon/config.json contain delivery.mode=pr, branch prd/cli-command-registry-refactor, explicit staging include allowlist, and active/session/artifacts exclude constraints for prd-ship."
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 2,
+      "artifactCount": 0
+    },
+    {
+      "id": "V1",
+      "kind": "verification",
+      "title": "`node --check chromux.mjs && bash -n test.sh && node chromux.mjs help >/tmp/chromux-help.txt && grep -q \"wait-for-sel...",
+      "status": "pass",
+      "closed": true,
+      "level": "General",
+      "category": "command",
+      "tool": "verify-run",
+      "requiredForDone": true,
+      "covers": {
+        "requirements": [
+          "R1",
+          "R2",
+          "R3",
+          "R4"
+        ],
+        "acceptanceCriteria": [
+          "AC1",
+          "AC2",
+          "AC3"
+        ],
+        "tasks": []
+      },
+      "evidence": [
+        {
+          "ts": "2026-07-05T16:57:25.453Z",
+          "text": "Artifact recorded: command-log .hoyeon/implement/cli-command-registry-refactor/artifacts/logs/V1-2026-07-05T16-57-25-445Z.log (30b9788e8b62) - verify-run passed: bash -lc 'node --check chromux.mjs && bash -n test.sh && node chromux.mjs help >/tmp/chromux-help.txt && grep -q \"wait-for-selector\" /tmp/chromux-help.txt && ! grep -q \"^  chromux eval \" /tmp/chromux-help.txt && ! grep -q \"^  chromux scroll \" /tmp/chromux-help.txt && ! grep -q \"^  chromux wait \" /tmp/chromux-help.txt && ! grep -q \"^  chromux console \" /tmp/chromux-help.txt && ! grep -q \"^  chromux network \" /tmp/chromux-help.txt && ! grep -q \"^  chromux scroll-until \" /tmp/chromux-help.txt'"
+        },
+        {
+          "ts": "2026-07-05T16:57:25.454Z",
+          "text": "Command passed with exit code 0: bash -lc 'node --check chromux.mjs && bash -n test.sh && node chromux.mjs help >/tmp/chromux-help.txt && grep -q \"wait-for-selector\" /tmp/chromux-help.txt && ! grep -q \"^  chromux eval \" /tmp/chromux-help.txt && ! grep -q \"^  chromux scroll \" /tmp/chromux-help.txt && ! grep -q \"^  chromux wait \" /tmp/chromux-help.txt && ! grep -q \"^  chromux console \" /tmp/chromux-help.txt && ! grep -q \"^  chromux network \" /tmp/chromux-help.txt && ! grep -q \"^  chromux scroll-until \" /tmp/chromux-help.txt'. Log: .hoyeon/implement/cli-command-registry-refactor/artifacts/logs/V1-2026-07-05T16-57-25-445Z.log"
+        }
+      ],
+      "artifacts": [
+        {
+          "artifactId": "V1-command-log-2026-07-05T16-57-25-453Z",
+          "kind": "command-log",
+          "path": ".hoyeon/implement/cli-command-registry-refactor/artifacts/logs/V1-2026-07-05T16-57-25-445Z.log",
+          "description": "verify-run passed: bash -lc 'node --check chromux.mjs && bash -n test.sh && node chromux.mjs help >/tmp/chromux-help.txt && grep -q \"wait-for-selector\" /tmp/chromux-help.txt && ! grep -q \"^  chromux eval \" /tmp/chromux-help.txt && ! grep -q \"^  chromux scroll \" /tmp/chromux-help.txt && ! grep -q \"^  chromux wait \" /tmp/chromux-help.txt && ! grep -q \"^  chromux console \" /tmp/chromux-help.txt && ! grep -q \"^  chromux network \" /tmp/chromux-help.txt && ! grep -q \"^  chromux scroll-until \" /tmp/chromux-help.txt'",
+          "createdAt": "2026-07-05T16:57:25.453Z",
+          "bytes": 795,
+          "sha256": "30b9788e8b62037caad3c996f816d00153deb8446110e9207ea84c3d5b60aaf2",
+          "mimeHint": "text/plain",
+          "command": "bash -lc 'node --check chromux.mjs && bash -n test.sh && node chromux.mjs help >/tmp/chromux-help.txt && grep -q \"wait-for-selector\" /tmp/chromux-help.txt && ! grep -q \"^  chromux eval \" /tmp/chromux-help.txt && ! grep -q \"^  chromux scroll \" /tmp/chromux-help.txt && ! grep -q \"^  chromux wait \" /tmp/chromux-help.txt && ! grep -q \"^  chromux console \" /tmp/chromux-help.txt && ! grep -q \"^  chromux network \" /tmp/chromux-help.txt && ! grep -q \"^  chromux scroll-until \" /tmp/chromux-help.txt'",
+          "contractCommand": "node --check chromux.mjs && bash -n test.sh && node chromux.mjs help >/tmp/chromux-help.txt && grep -q \"wait-for-selector\" /tmp/chromux-help.txt && ! grep -q \"^  chromux eval \" /tmp/chromux-help.txt && ! grep -q \"^  chromux scroll \" /tmp/chromux-help.txt && ! grep -q \"^  chromux wait \" /tmp/chromux-help.txt && ! grep -q \"^  chromux console \" /tmp/chromux-help.txt && ! grep -q \"^  chromux network \" /tmp/chromux-help.txt && ! grep -q \"^  chromux scroll-until \" /tmp/chromux-help.txt",
+          "deviationId": "D3",
+          "exitCode": 0,
+          "startedAt": "2026-07-05T16:57:24.509Z",
+          "finishedAt": "2026-07-05T16:57:25.445Z"
+        }
+      ],
+      "evidenceCount": 2,
+      "artifactCount": 1
+    },
+    {
+      "id": "V2",
+      "kind": "verification",
+      "title": "`CHROMUX_HOME=\"$(mktemp -d /tmp/chromux-selftest-XXXXXX)\" node chromux.mjs app --self-test >/tmp/chromux-selftest.txt...",
+      "status": "pass",
+      "closed": true,
+      "level": "General",
+      "category": "automated",
+      "tool": "verify-run",
+      "requiredForDone": true,
+      "covers": {
+        "requirements": [
+          "R1",
+          "R2",
+          "R3",
+          "R4"
+        ],
+        "acceptanceCriteria": [
+          "AC1",
+          "AC2",
+          "AC3",
+          "AC4"
+        ],
+        "tasks": []
+      },
+      "evidence": [
+        {
+          "ts": "2026-07-05T16:56:42.772Z",
+          "text": "Artifact recorded: command-log .hoyeon/implement/cli-command-registry-refactor/artifacts/logs/V2-2026-07-05T16-56-42-763Z.log (e38794933741) - verify-run passed: bash -lc 'CHROMUX_HOME=\"$(mktemp -d /tmp/chromux-selftest-XXXXXX)\" node chromux.mjs app --self-test >/tmp/chromux-selftest.txt && grep -q \"command metadata registry invariants\" /tmp/chromux-selftest.txt'"
+        },
+        {
+          "ts": "2026-07-05T16:56:42.773Z",
+          "text": "Command passed with exit code 0: bash -lc 'CHROMUX_HOME=\"$(mktemp -d /tmp/chromux-selftest-XXXXXX)\" node chromux.mjs app --self-test >/tmp/chromux-selftest.txt && grep -q \"command metadata registry invariants\" /tmp/chromux-selftest.txt'. Log: .hoyeon/implement/cli-command-registry-refactor/artifacts/logs/V2-2026-07-05T16-56-42-763Z.log"
+        }
+      ],
+      "artifacts": [
+        {
+          "artifactId": "V2-command-log-2026-07-05T16-56-42-772Z",
+          "kind": "command-log",
+          "path": ".hoyeon/implement/cli-command-registry-refactor/artifacts/logs/V2-2026-07-05T16-56-42-763Z.log",
+          "description": "verify-run passed: bash -lc 'CHROMUX_HOME=\"$(mktemp -d /tmp/chromux-selftest-XXXXXX)\" node chromux.mjs app --self-test >/tmp/chromux-selftest.txt && grep -q \"command metadata registry invariants\" /tmp/chromux-selftest.txt'",
+          "createdAt": "2026-07-05T16:56:42.772Z",
+          "bytes": 503,
+          "sha256": "e387949337414ad0b8270834e7d2df3438f3f160c572f70e3e65969bef1cdc74",
+          "mimeHint": "text/plain",
+          "command": "bash -lc 'CHROMUX_HOME=\"$(mktemp -d /tmp/chromux-selftest-XXXXXX)\" node chromux.mjs app --self-test >/tmp/chromux-selftest.txt && grep -q \"command metadata registry invariants\" /tmp/chromux-selftest.txt'",
+          "contractCommand": "CHROMUX_HOME=\"$(mktemp -d /tmp/chromux-selftest-XXXXXX)\" node chromux.mjs app --self-test >/tmp/chromux-selftest.txt && grep -q \"command metadata registry invariants\" /tmp/chromux-selftest.txt",
+          "deviationId": "D2",
+          "exitCode": 0,
+          "startedAt": "2026-07-05T16:56:39.745Z",
+          "finishedAt": "2026-07-05T16:56:42.763Z"
+        }
+      ],
+      "evidenceCount": 2,
+      "artifactCount": 1
+    },
+    {
+      "id": "V3",
+      "kind": "verification",
+      "title": "`npm pack --dry-run`",
+      "status": "pass",
+      "closed": true,
+      "level": "General",
+      "category": "command",
+      "tool": "verify-run",
+      "requiredForDone": true,
+      "covers": {
+        "requirements": [
+          "R4"
+        ],
+        "acceptanceCriteria": [
+          "AC4"
+        ],
+        "tasks": []
+      },
+      "evidence": [
+        {
+          "ts": "2026-07-05T16:57:27.412Z",
+          "text": "Artifact recorded: command-log .hoyeon/implement/cli-command-registry-refactor/artifacts/logs/V3-2026-07-05T16-57-27-404Z.log (bdc4f9a41b0a) - verify-run passed: npm pack --dry-run"
+        },
+        {
+          "ts": "2026-07-05T16:57:27.413Z",
+          "text": "Command passed with exit code 0: npm pack --dry-run. Log: .hoyeon/implement/cli-command-registry-refactor/artifacts/logs/V3-2026-07-05T16-57-27-404Z.log"
+        }
+      ],
+      "artifacts": [
+        {
+          "artifactId": "V3-command-log-2026-07-05T16-57-27-412Z",
+          "kind": "command-log",
+          "path": ".hoyeon/implement/cli-command-registry-refactor/artifacts/logs/V3-2026-07-05T16-57-27-404Z.log",
+          "description": "verify-run passed: npm pack --dry-run",
+          "createdAt": "2026-07-05T16:57:27.412Z",
+          "bytes": 1446,
+          "sha256": "bdc4f9a41b0a2f0f1ab4625e03344cc2e4fbd0fb69383953f5824305157a292d",
+          "mimeHint": "text/plain",
+          "command": "npm pack --dry-run",
+          "contractCommand": "npm pack --dry-run",
+          "deviationId": null,
+          "exitCode": 0,
+          "startedAt": "2026-07-05T16:57:25.797Z",
+          "finishedAt": "2026-07-05T16:57:27.404Z"
+        }
+      ],
+      "evidenceCount": 2,
+      "artifactCount": 1
+    },
+    {
+      "id": "V4",
+      "kind": "verification",
+      "title": "`bash ./test.sh`",
+      "status": "pass",
+      "closed": true,
+      "level": "General",
+      "category": "command",
+      "tool": "verify-run",
+      "requiredForDone": true,
+      "covers": {
+        "requirements": [
+          "R2",
+          "R3",
+          "R4"
+        ],
+        "acceptanceCriteria": [
+          "AC2",
+          "AC3",
+          "AC4"
+        ],
+        "tasks": []
+      },
+      "evidence": [
+        {
+          "ts": "2026-07-05T17:34:44.961Z",
+          "text": "Artifact recorded: command-log .hoyeon/implement/cli-command-registry-refactor/artifacts/logs/V4-2026-07-05T17-34-44-959Z.log (aa65ef1faefc) - verify-run passed: bash ./test.sh"
+        },
+        {
+          "ts": "2026-07-05T17:34:44.961Z",
+          "text": "Command passed with exit code 0: bash ./test.sh. Log: .hoyeon/implement/cli-command-registry-refactor/artifacts/logs/V4-2026-07-05T17-34-44-959Z.log"
+        }
+      ],
+      "artifacts": [
+        {
+          "artifactId": "V4-command-log-2026-07-05T17-34-44-961Z",
+          "kind": "command-log",
+          "path": ".hoyeon/implement/cli-command-registry-refactor/artifacts/logs/V4-2026-07-05T17-34-44-959Z.log",
+          "description": "verify-run passed: bash ./test.sh",
+          "createdAt": "2026-07-05T17:34:44.961Z",
+          "bytes": 5138,
+          "sha256": "aa65ef1faefc13a6e8e462755288fcbaba4c4e79cd2e8a9a31a1d13378ad4ed7",
+          "mimeHint": "text/plain",
+          "command": "bash ./test.sh",
+          "contractCommand": "bash ./test.sh",
+          "deviationId": null,
+          "exitCode": 0,
+          "startedAt": "2026-07-05T16:57:34.322Z",
+          "finishedAt": "2026-07-05T17:34:44.959Z"
+        }
+      ],
+      "evidenceCount": 2,
+      "artifactCount": 1
+    },
+    {
+      "id": "V5",
+      "kind": "verification",
+      "title": "`bash -lc 'node ~/.codex/skills/prd-ship/scripts/prd_ship.js preflight --state .hoyeon/implement/cli-command-registry...",
+      "status": "blocked",
+      "closed": true,
+      "level": "General",
+      "category": "command",
+      "tool": "verify-run",
+      "requiredForDone": false,
+      "covers": {
+        "requirements": [
+          "R5"
+        ],
+        "acceptanceCriteria": [
+          "AC5"
+        ],
+        "tasks": []
+      },
+      "evidence": [
+        {
+          "ts": "2026-07-05T17:38:08.584Z",
+          "text": "Post-receipt delivery gate: prd-ship creates the PR and watches CI only after finalize emits the implementation receipt, so V5 is intentionally deferred from implementation finalization."
+        },
+        {
+          "ts": "2026-07-05T17:44:55.623Z",
+          "text": "Post-receipt delivery gate remains blocked until finalize emits receipt; staging constraints are now explicit in state/config, and prd-ship preflight will prove the staged path set after receipt."
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 2,
+      "artifactCount": 0
+    },
+    {
+      "id": "REQ_FIDELITY_REVIEW",
+      "kind": "requirements_fidelity_review",
+      "title": "Requirements fidelity review",
+      "status": "pass",
+      "closed": true,
+      "evidenceCount": 1,
+      "artifactCount": 1
+    },
+    {
+      "id": "REVIEW",
+      "kind": "final_review",
+      "title": "Adversarial final review",
+      "status": "pass",
+      "closed": true,
+      "evidenceCount": 1,
+      "artifactCount": 1
+    },
+    {
+      "id": "FINALIZE",
+      "kind": "receipt",
+      "title": "Final receipt",
+      "status": "complete",
+      "closed": true,
+      "evidenceCount": 1,
+      "artifactCount": 1
+    }
+  ],
+  "edges": [
+    {
+      "from": "VP0",
+      "to": "EP0",
+      "type": "unblocks",
+      "reason": "execution planning starts after verification planning"
+    },
+    {
+      "from": "EP0",
+      "to": "N1",
+      "type": "unblocks",
+      "reason": "execution node comes from the execution plan"
+    },
+    {
+      "from": "T1",
+      "to": "N1",
+      "type": "decomposes_to",
+      "reason": "PRD task is executed through this implementation node"
+    },
+    {
+      "from": "N1",
+      "to": "AC1",
+      "type": "satisfies",
+      "reason": "execution node covers this acceptance criterion"
+    },
+    {
+      "from": "N1",
+      "to": "V1",
+      "type": "verified_by",
+      "reason": "execution node is proven by this verification item"
+    },
+    {
+      "from": "N1",
+      "to": "V2",
+      "type": "verified_by",
+      "reason": "execution node is proven by this verification item"
+    },
+    {
+      "from": "EP0",
+      "to": "N2",
+      "type": "unblocks",
+      "reason": "execution node comes from the execution plan"
+    },
+    {
+      "from": "T2",
+      "to": "N2",
+      "type": "decomposes_to",
+      "reason": "PRD task is executed through this implementation node"
+    },
+    {
+      "from": "N2",
+      "to": "AC2",
+      "type": "satisfies",
+      "reason": "execution node covers this acceptance criterion"
+    },
+    {
+      "from": "N2",
+      "to": "V1",
+      "type": "verified_by",
+      "reason": "execution node is proven by this verification item"
+    },
+    {
+      "from": "N2",
+      "to": "V2",
+      "type": "verified_by",
+      "reason": "execution node is proven by this verification item"
+    },
+    {
+      "from": "N2",
+      "to": "V4",
+      "type": "verified_by",
+      "reason": "execution node is proven by this verification item"
+    },
+    {
+      "from": "EP0",
+      "to": "N3",
+      "type": "unblocks",
+      "reason": "execution node comes from the execution plan"
+    },
+    {
+      "from": "T3",
+      "to": "N3",
+      "type": "decomposes_to",
+      "reason": "PRD task is executed through this implementation node"
+    },
+    {
+      "from": "N3",
+      "to": "AC3",
+      "type": "satisfies",
+      "reason": "execution node covers this acceptance criterion"
+    },
+    {
+      "from": "N3",
+      "to": "V1",
+      "type": "verified_by",
+      "reason": "execution node is proven by this verification item"
+    },
+    {
+      "from": "N3",
+      "to": "V2",
+      "type": "verified_by",
+      "reason": "execution node is proven by this verification item"
+    },
+    {
+      "from": "N3",
+      "to": "V4",
+      "type": "verified_by",
+      "reason": "execution node is proven by this verification item"
+    },
+    {
+      "from": "EP0",
+      "to": "N4",
+      "type": "unblocks",
+      "reason": "execution node comes from the execution plan"
+    },
+    {
+      "from": "T4",
+      "to": "N4",
+      "type": "decomposes_to",
+      "reason": "PRD task is executed through this implementation node"
+    },
+    {
+      "from": "N4",
+      "to": "AC4",
+      "type": "satisfies",
+      "reason": "execution node covers this acceptance criterion"
+    },
+    {
+      "from": "N4",
+      "to": "V1",
+      "type": "verified_by",
+      "reason": "execution node is proven by this verification item"
+    },
+    {
+      "from": "N4",
+      "to": "V2",
+      "type": "verified_by",
+      "reason": "execution node is proven by this verification item"
+    },
+    {
+      "from": "N4",
+      "to": "V3",
+      "type": "verified_by",
+      "reason": "execution node is proven by this verification item"
+    },
+    {
+      "from": "N4",
+      "to": "V4",
+      "type": "verified_by",
+      "reason": "execution node is proven by this verification item"
+    },
+    {
+      "from": "EP0",
+      "to": "N5",
+      "type": "unblocks",
+      "reason": "execution node comes from the execution plan"
+    },
+    {
+      "from": "T5",
+      "to": "N5",
+      "type": "decomposes_to",
+      "reason": "PRD task is executed through this implementation node"
+    },
+    {
+      "from": "N4",
+      "to": "N5",
+      "type": "depends_on",
+      "reason": "execution dependency"
+    },
+    {
+      "from": "N5",
+      "to": "AC5",
+      "type": "satisfies",
+      "reason": "execution node covers this acceptance criterion"
+    },
+    {
+      "from": "N5",
+      "to": "V5",
+      "type": "verified_by",
+      "reason": "execution node is proven by this verification item"
+    },
+    {
+      "from": "VP0",
+      "to": "V1",
+      "type": "plans",
+      "reason": "verification check comes from the verification plan"
+    },
+    {
+      "from": "AC1",
+      "to": "V1",
+      "type": "verified_by",
+      "reason": "verification covers this acceptance criterion"
+    },
+    {
+      "from": "AC2",
+      "to": "V1",
+      "type": "verified_by",
+      "reason": "verification covers this acceptance criterion"
+    },
+    {
+      "from": "AC3",
+      "to": "V1",
+      "type": "verified_by",
+      "reason": "verification covers this acceptance criterion"
+    },
+    {
+      "from": "T1",
+      "to": "V1",
+      "type": "verified_by",
+      "reason": "verification covers R1"
+    },
+    {
+      "from": "T2",
+      "to": "V1",
+      "type": "verified_by",
+      "reason": "verification covers R2"
+    },
+    {
+      "from": "T3",
+      "to": "V1",
+      "type": "verified_by",
+      "reason": "verification covers R3"
+    },
+    {
+      "from": "T4",
+      "to": "V1",
+      "type": "verified_by",
+      "reason": "verification covers R4"
+    },
+    {
+      "from": "VP0",
+      "to": "V2",
+      "type": "plans",
+      "reason": "verification check comes from the verification plan"
+    },
+    {
+      "from": "AC1",
+      "to": "V2",
+      "type": "verified_by",
+      "reason": "verification covers this acceptance criterion"
+    },
+    {
+      "from": "AC2",
+      "to": "V2",
+      "type": "verified_by",
+      "reason": "verification covers this acceptance criterion"
+    },
+    {
+      "from": "AC3",
+      "to": "V2",
+      "type": "verified_by",
+      "reason": "verification covers this acceptance criterion"
+    },
+    {
+      "from": "AC4",
+      "to": "V2",
+      "type": "verified_by",
+      "reason": "verification covers this acceptance criterion"
+    },
+    {
+      "from": "T1",
+      "to": "V2",
+      "type": "verified_by",
+      "reason": "verification covers R1"
+    },
+    {
+      "from": "T2",
+      "to": "V2",
+      "type": "verified_by",
+      "reason": "verification covers R2"
+    },
+    {
+      "from": "T3",
+      "to": "V2",
+      "type": "verified_by",
+      "reason": "verification covers R3"
+    },
+    {
+      "from": "T4",
+      "to": "V2",
+      "type": "verified_by",
+      "reason": "verification covers R4"
+    },
+    {
+      "from": "VP0",
+      "to": "V3",
+      "type": "plans",
+      "reason": "verification check comes from the verification plan"
+    },
+    {
+      "from": "AC4",
+      "to": "V3",
+      "type": "verified_by",
+      "reason": "verification covers this acceptance criterion"
+    },
+    {
+      "from": "T4",
+      "to": "V3",
+      "type": "verified_by",
+      "reason": "verification covers R4"
+    },
+    {
+      "from": "VP0",
+      "to": "V4",
+      "type": "plans",
+      "reason": "verification check comes from the verification plan"
+    },
+    {
+      "from": "AC2",
+      "to": "V4",
+      "type": "verified_by",
+      "reason": "verification covers this acceptance criterion"
+    },
+    {
+      "from": "AC3",
+      "to": "V4",
+      "type": "verified_by",
+      "reason": "verification covers this acceptance criterion"
+    },
+    {
+      "from": "AC4",
+      "to": "V4",
+      "type": "verified_by",
+      "reason": "verification covers this acceptance criterion"
+    },
+    {
+      "from": "T2",
+      "to": "V4",
+      "type": "verified_by",
+      "reason": "verification covers R2"
+    },
+    {
+      "from": "T3",
+      "to": "V4",
+      "type": "verified_by",
+      "reason": "verification covers R3"
+    },
+    {
+      "from": "T4",
+      "to": "V4",
+      "type": "verified_by",
+      "reason": "verification covers R4"
+    },
+    {
+      "from": "VP0",
+      "to": "V5",
+      "type": "plans",
+      "reason": "verification check comes from the verification plan"
+    },
+    {
+      "from": "AC5",
+      "to": "V5",
+      "type": "verified_by",
+      "reason": "verification covers this acceptance criterion"
+    },
+    {
+      "from": "T5",
+      "to": "V5",
+      "type": "verified_by",
+      "reason": "verification covers R5"
+    },
+    {
+      "from": "T1",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "T1",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "T2",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "T2",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "T3",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "T3",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "T4",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "T4",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "T5",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "T5",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "N1",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "N1",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "N2",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "N2",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "N3",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "N3",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "N4",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "N4",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "N5",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "N5",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "AC1",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "AC1",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "AC2",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "AC2",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "AC3",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "AC3",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "AC4",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "AC4",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "AC5",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "AC5",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "V1",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "V1",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "V2",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "V2",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "V3",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "V3",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "V4",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "V4",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "V5",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "V5",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "REQ_FIDELITY_REVIEW",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit the requirements fidelity verdict"
+    },
+    {
+      "from": "REVIEW",
+      "to": "FINALIZE",
+      "type": "gates",
+      "reason": "receipt can be written only after passing final review"
+    }
+  ]
+}

@@ -1,0 +1,405 @@
+{
+  "schema": "hoyeon.prd-implement.execution-plan.v1",
+  "status": "ready",
+  "generatedAt": "2026-07-05T16:55:36.240Z",
+  "prdPath": ".hoyeon/prd/cli-command-registry-refactor/prd.md",
+  "statePath": ".hoyeon/implement/cli-command-registry-refactor/state.json",
+  "nodes": [
+    {
+      "id": "N1",
+      "kind": "implementation",
+      "sourceTask": "T1",
+      "title": "Introduce shared CLI command metadata inside `chromux.mjs`. Covers R1, AC1.",
+      "dependsOn": [],
+      "writeScope": [
+        "chromux.mjs"
+      ],
+      "covers": {
+        "requirements": [
+          "R1"
+        ],
+        "acceptanceCriteria": [
+          "AC1"
+        ],
+        "verification": [
+          "V1",
+          "V2"
+        ]
+      },
+      "parallelSafe": true,
+      "risk": "medium",
+      "owner": null,
+      "status": "complete",
+      "evidence": [
+        {
+          "ts": "2026-07-05T17:38:07.927Z",
+          "text": "Shared command metadata registry added in chromux.mjs; V1 and V2 passed with logs under .hoyeon/implement/cli-command-registry-refactor/artifacts/logs."
+        }
+      ],
+      "artifacts": []
+    },
+    {
+      "id": "N2",
+      "kind": "implementation",
+      "sourceTask": "T2",
+      "title": "Refactor command validation and daemon-backed routing to use the shared metadata. Covers R2, AC2.",
+      "dependsOn": [],
+      "writeScope": [
+        "chromux.mjs",
+        ".hoyeon"
+      ],
+      "covers": {
+        "requirements": [
+          "R2"
+        ],
+        "acceptanceCriteria": [
+          "AC2"
+        ],
+        "verification": [
+          "V1",
+          "V2",
+          "V4"
+        ]
+      },
+      "parallelSafe": true,
+      "risk": "medium",
+      "owner": null,
+      "status": "complete",
+      "evidence": [
+        {
+          "ts": "2026-07-05T17:38:07.989Z",
+          "text": "runCli daemon-backed routing now dispatches through DAEMON_COMMAND_ROUTES instead of per-call tab command sets; V1, V2, and V4 passed."
+        }
+      ],
+      "artifacts": []
+    },
+    {
+      "id": "N3",
+      "kind": "implementation",
+      "sourceTask": "T3",
+      "title": "Preserve help output and hidden compatibility alias policy. Covers R3, AC3.",
+      "dependsOn": [],
+      "writeScope": [
+        "chromux.mjs",
+        ".hoyeon"
+      ],
+      "covers": {
+        "requirements": [
+          "R3"
+        ],
+        "acceptanceCriteria": [
+          "AC3"
+        ],
+        "verification": [
+          "V1",
+          "V2",
+          "V4"
+        ]
+      },
+      "parallelSafe": true,
+      "risk": "medium",
+      "owner": null,
+      "status": "complete",
+      "evidence": [
+        {
+          "ts": "2026-07-05T17:38:08.051Z",
+          "text": "Primary help still exposes wait-for-selector and hides compatibility aliases while daemon routes keep aliases callable; V1, V2, and V4 passed."
+        }
+      ],
+      "artifacts": []
+    },
+    {
+      "id": "N4",
+      "kind": "implementation",
+      "sourceTask": "T4",
+      "title": "Add or update automated coverage for command metadata invariants if existing coverage is insufficient, then run local...",
+      "dependsOn": [],
+      "writeScope": [
+        "chromux.mjs",
+        ".hoyeon"
+      ],
+      "covers": {
+        "requirements": [
+          "R4"
+        ],
+        "acceptanceCriteria": [
+          "AC4"
+        ],
+        "verification": [
+          "V1",
+          "V2",
+          "V3",
+          "V4"
+        ]
+      },
+      "parallelSafe": true,
+      "risk": "medium",
+      "owner": null,
+      "status": "complete",
+      "evidence": [
+        {
+          "ts": "2026-07-05T17:38:08.114Z",
+          "text": "Status app self-test now checks command metadata registry invariants and full local verification V1-V4 passed."
+        }
+      ],
+      "artifacts": []
+    },
+    {
+      "id": "N5",
+      "kind": "implementation",
+      "sourceTask": "T5",
+      "title": "Prepare PR delivery handoff and ship through PR delivery after receipt without staging unrelated local artifacts. Cov...",
+      "dependsOn": [
+        "N4"
+      ],
+      "writeScope": [
+        "chromux.mjs",
+        ".hoyeon"
+      ],
+      "covers": {
+        "requirements": [
+          "R5"
+        ],
+        "acceptanceCriteria": [
+          "AC5"
+        ],
+        "verification": [
+          "V5"
+        ]
+      },
+      "parallelSafe": true,
+      "risk": "medium",
+      "owner": null,
+      "status": "complete",
+      "evidence": [
+        {
+          "ts": "2026-07-05T17:38:08.178Z",
+          "text": "PR delivery handoff is ready in implementation state with delivery.mode=pr, branch=prd/cli-command-registry-refactor, and allowlist staging handled by prd_ship; actual PR/CI execution remains the post-receipt V5 gate."
+        },
+        {
+          "ts": "2026-07-05T17:44:55.162Z",
+          "text": "PR delivery handoff state now contains explicit allowlist staging include paths (.hoyeon/config.json, .hoyeon/prd/cli-command-registry-refactor, .hoyeon/implement/cli-command-registry-refactor, chromux.mjs) and exclude paths (.hoyeon/implement/.prd-implement-active.json, .hoyeon/implement/.prd-implement-sessions, .hoyeon/implement/cli-command-registry-refactor/artifacts)."
+        }
+      ],
+      "artifacts": []
+    }
+  ],
+  "rollups": {
+    "tasks": {
+      "T1": {
+        "nodes": [
+          "N1"
+        ],
+        "acceptanceCriteria": [
+          "AC1"
+        ],
+        "verification": [
+          "V1",
+          "V2"
+        ]
+      },
+      "T2": {
+        "nodes": [
+          "N2"
+        ],
+        "acceptanceCriteria": [
+          "AC2"
+        ],
+        "verification": [
+          "V1",
+          "V2",
+          "V4"
+        ]
+      },
+      "T3": {
+        "nodes": [
+          "N3"
+        ],
+        "acceptanceCriteria": [
+          "AC3"
+        ],
+        "verification": [
+          "V1",
+          "V2",
+          "V4"
+        ]
+      },
+      "T4": {
+        "nodes": [
+          "N4"
+        ],
+        "acceptanceCriteria": [
+          "AC4"
+        ],
+        "verification": [
+          "V1",
+          "V2",
+          "V3",
+          "V4"
+        ]
+      },
+      "T5": {
+        "nodes": [
+          "N5"
+        ],
+        "acceptanceCriteria": [
+          "AC5"
+        ],
+        "verification": [
+          "V5"
+        ]
+      }
+    }
+  },
+  "traceMatrix": [
+    {
+      "taskId": "T1",
+      "nodeIds": [
+        "N1"
+      ],
+      "requirements": [
+        "R1"
+      ],
+      "acceptanceCriteria": [
+        "AC1"
+      ],
+      "verification": [
+        "V1",
+        "V2"
+      ],
+      "requiredVerification": [
+        "V1",
+        "V2"
+      ],
+      "optionalVerification": [],
+      "nodeStatuses": [
+        {
+          "id": "N1",
+          "status": "complete"
+        }
+      ]
+    },
+    {
+      "taskId": "T2",
+      "nodeIds": [
+        "N2"
+      ],
+      "requirements": [
+        "R2"
+      ],
+      "acceptanceCriteria": [
+        "AC2"
+      ],
+      "verification": [
+        "V1",
+        "V2",
+        "V4"
+      ],
+      "requiredVerification": [
+        "V1",
+        "V2",
+        "V4"
+      ],
+      "optionalVerification": [],
+      "nodeStatuses": [
+        {
+          "id": "N2",
+          "status": "complete"
+        }
+      ]
+    },
+    {
+      "taskId": "T3",
+      "nodeIds": [
+        "N3"
+      ],
+      "requirements": [
+        "R3"
+      ],
+      "acceptanceCriteria": [
+        "AC3"
+      ],
+      "verification": [
+        "V1",
+        "V2",
+        "V4"
+      ],
+      "requiredVerification": [
+        "V1",
+        "V2",
+        "V4"
+      ],
+      "optionalVerification": [],
+      "nodeStatuses": [
+        {
+          "id": "N3",
+          "status": "complete"
+        }
+      ]
+    },
+    {
+      "taskId": "T4",
+      "nodeIds": [
+        "N4"
+      ],
+      "requirements": [
+        "R4"
+      ],
+      "acceptanceCriteria": [
+        "AC4"
+      ],
+      "verification": [
+        "V1",
+        "V2",
+        "V3",
+        "V4"
+      ],
+      "requiredVerification": [
+        "V1",
+        "V2",
+        "V3",
+        "V4"
+      ],
+      "optionalVerification": [],
+      "nodeStatuses": [
+        {
+          "id": "N4",
+          "status": "complete"
+        }
+      ]
+    },
+    {
+      "taskId": "T5",
+      "nodeIds": [
+        "N5"
+      ],
+      "requirements": [
+        "R5"
+      ],
+      "acceptanceCriteria": [
+        "AC5"
+      ],
+      "verification": [
+        "V5"
+      ],
+      "requiredVerification": [],
+      "optionalVerification": [
+        "V5"
+      ],
+      "nodeStatuses": [
+        {
+          "id": "N5",
+          "status": "complete"
+        }
+      ]
+    }
+  ],
+  "gaps": [
+    {
+      "severity": "warning",
+      "code": "weak_graph_repeated_write_scope",
+      "item": "execution-plan",
+      "message": "Most execution nodes share the same write scope (chromux.mjs\n.hoyeon); narrow scopes before relying on parallel guidance"
+    }
+  ]
+}

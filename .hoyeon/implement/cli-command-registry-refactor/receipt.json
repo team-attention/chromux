@@ -1,0 +1,239 @@
+{
+  "schema": "hoyeon.prd-implement.receipt.v1",
+  "status": "complete",
+  "summary": "CLI command registry refactor implementation receipt complete: R1-R4 and AC1-AC4 verified by V1-V4; R5/AC5 delivery handoff includes explicit PR staging constraints; post-receipt prd-ship must create PR and prove CI.",
+  "verifiedAt": "2026-07-06T00:43:47.414Z",
+  "counts": {
+    "executionOpen": 0,
+    "tasksOpen": 0,
+    "acOpen": 0,
+    "verificationOpen": 0,
+    "totalOpen": 0,
+    "blocked": {
+      "execution": 0,
+      "tasks": 0,
+      "acceptanceCriteria": 0,
+      "verification": 1,
+      "requiredVerification": 0
+    },
+    "requiredVerificationNotPassed": 0
+  },
+  "delivery": {
+    "schema": "hoyeon.delivery.v1",
+    "mode": "pr",
+    "branch": "prd/cli-command-registry-refactor",
+    "baseBranch": "main",
+    "prTemplate": null,
+    "ci": {
+      "watch": true,
+      "maxFixAttempts": 2
+    },
+    "staging": {
+      "include": [
+        ".hoyeon/config.json",
+        ".hoyeon/prd/cli-command-registry-refactor",
+        ".hoyeon/implement/cli-command-registry-refactor",
+        "chromux.mjs"
+      ],
+      "exclude": [
+        ".hoyeon/implement/.prd-implement-active.json",
+        ".hoyeon/implement/.prd-implement-sessions",
+        ".hoyeon/implement/cli-command-registry-refactor/artifacts"
+      ]
+    },
+    "worktree": {
+      "enabled": true,
+      "path": "/Users/hoyeonlee/team-attention/chromux.worktrees/chromux.worktrees/prd-cli-command-registry-refactor",
+      "root": "/Users/hoyeonlee/team-attention/chromux.worktrees/chromux.worktrees",
+      "link": [],
+      "copy": [],
+      "setup": [],
+      "current": false,
+      "skipped": true,
+      "preparation": null
+    },
+    "configPath": ".hoyeon/config.json",
+    "initializedAt": "2026-07-05T16:55:35.857Z"
+  },
+  "worktreeSnapshot": {
+    "capturedAt": "2026-07-06T00:43:47.447Z",
+    "statusHash": "a09ba951",
+    "entryCount": 6,
+    "entries": [
+      {
+        "status": "??",
+        "path": ".hoyeon/config.json",
+        "originalPath": null,
+        "sha256": "955ed7cd81e81c8c0ff7a6b6fc5e9517e4692dd9610a76a7f694922725d57fca",
+        "bytes": 675
+      },
+      {
+        "status": "??",
+        "path": ".hoyeon/prd/cli-command-registry-refactor/context-notes.md",
+        "originalPath": null,
+        "sha256": "f8aa83a3d3b871f64c074d72ad79b30c06b048c7451550dadb2813fca3a90218",
+        "bytes": 1213
+      },
+      {
+        "status": "??",
+        "path": ".hoyeon/prd/cli-command-registry-refactor/intent-scope-audit.md",
+        "originalPath": null,
+        "sha256": "e526ed3bd719a72baea9803cdc965ed5487f76eeb2b01777312c0781aedf9ac7",
+        "bytes": 1567
+      },
+      {
+        "status": "??",
+        "path": ".hoyeon/prd/cli-command-registry-refactor/prd.md",
+        "originalPath": null,
+        "sha256": "b90fd3bd716beab7cefc854bf4a60879ad3b31f4c9223aa0869ce61446487252",
+        "bytes": 12464
+      },
+      {
+        "status": "??",
+        "path": ".hoyeon/prd/cli-command-registry-refactor/verification-contract-audit.md",
+        "originalPath": null,
+        "sha256": "ef500476937b4ad499a79d03fc8d90a80464c89d91f44449e5f464fb23d1c00a",
+        "bytes": 1611
+      },
+      {
+        "status": " M",
+        "path": "chromux.mjs",
+        "originalPath": null,
+        "sha256": "f3f975844aea0cf9853874ec8408e1c92a7cc668a7d6ee90285be17e1c99ec01",
+        "bytes": 143272
+      }
+    ]
+  },
+  "executionPlan": {
+    "status": "ready",
+    "nodeCount": 5,
+    "openNodeCount": 0,
+    "blockingGapCount": 0,
+    "warningCount": 1,
+    "generatedAt": "2026-07-05T16:55:36.240Z"
+  },
+  "taskGraph": {
+    "status": "complete",
+    "nodeCount": 25,
+    "edgeCount": 102,
+    "openNodeCount": 0,
+    "blockingGapCount": 0,
+    "generatedAt": "2026-07-06T00:43:47.450Z"
+  },
+  "artifactCount": 4,
+  "requirementsFidelityReview": {
+    "status": "pass",
+    "summary": "Requirements fidelity review passed after AC5 fix: state.json and .hoyeon/config.json now contain explicit PR delivery staging include/exclude constraints; V5 remains the post-receipt prd-ship gate.",
+    "reportPath": ".hoyeon/implement/cli-command-registry-refactor/review/requirements-fidelity-review.md",
+    "reportBytes": 4822,
+    "reportSha256": "4b56fc72464e2c38900b38740abc41c21c6e5c25618e9ae4a6b2d20ad43263db",
+    "worktreeSnapshot": {
+      "capturedAt": "2026-07-05T17:45:42.856Z",
+      "statusHash": "a09ba951",
+      "entryCount": 6,
+      "entries": [
+        {
+          "status": "??",
+          "path": ".hoyeon/config.json",
+          "originalPath": null,
+          "sha256": "955ed7cd81e81c8c0ff7a6b6fc5e9517e4692dd9610a76a7f694922725d57fca",
+          "bytes": 675
+        },
+        {
+          "status": "??",
+          "path": ".hoyeon/prd/cli-command-registry-refactor/context-notes.md",
+          "originalPath": null,
+          "sha256": "f8aa83a3d3b871f64c074d72ad79b30c06b048c7451550dadb2813fca3a90218",
+          "bytes": 1213
+        },
+        {
+          "status": "??",
+          "path": ".hoyeon/prd/cli-command-registry-refactor/intent-scope-audit.md",
+          "originalPath": null,
+          "sha256": "e526ed3bd719a72baea9803cdc965ed5487f76eeb2b01777312c0781aedf9ac7",
+          "bytes": 1567
+        },
+        {
+          "status": "??",
+          "path": ".hoyeon/prd/cli-command-registry-refactor/prd.md",
+          "originalPath": null,
+          "sha256": "b90fd3bd716beab7cefc854bf4a60879ad3b31f4c9223aa0869ce61446487252",
+          "bytes": 12464
+        },
+        {
+          "status": "??",
+          "path": ".hoyeon/prd/cli-command-registry-refactor/verification-contract-audit.md",
+          "originalPath": null,
+          "sha256": "ef500476937b4ad499a79d03fc8d90a80464c89d91f44449e5f464fb23d1c00a",
+          "bytes": 1611
+        },
+        {
+          "status": " M",
+          "path": "chromux.mjs",
+          "originalPath": null,
+          "sha256": "f3f975844aea0cf9853874ec8408e1c92a7cc668a7d6ee90285be17e1c99ec01",
+          "bytes": 143272
+        }
+      ]
+    },
+    "recordedAt": "2026-07-05T17:45:42.856Z"
+  },
+  "finalReview": {
+    "status": "pass",
+    "summary": "Final adversarial review passed: AC5 staging constraints are explicit in state/config, V1-V4 artifacts are valid, V5 remains the post-receipt prd-ship gate.",
+    "reportPath": ".hoyeon/implement/cli-command-registry-refactor/review/final-review.md",
+    "reportBytes": 3962,
+    "reportSha256": "036c5bf3a13dd2c8e06a711ac3290decf92ffc9bae455bebe3a9d0050395c1f1",
+    "worktreeSnapshot": {
+      "capturedAt": "2026-07-06T00:43:39.736Z",
+      "statusHash": "a09ba951",
+      "entryCount": 6,
+      "entries": [
+        {
+          "status": "??",
+          "path": ".hoyeon/config.json",
+          "originalPath": null,
+          "sha256": "955ed7cd81e81c8c0ff7a6b6fc5e9517e4692dd9610a76a7f694922725d57fca",
+          "bytes": 675
+        },
+        {
+          "status": "??",
+          "path": ".hoyeon/prd/cli-command-registry-refactor/context-notes.md",
+          "originalPath": null,
+          "sha256": "f8aa83a3d3b871f64c074d72ad79b30c06b048c7451550dadb2813fca3a90218",
+          "bytes": 1213
+        },
+        {
+          "status": "??",
+          "path": ".hoyeon/prd/cli-command-registry-refactor/intent-scope-audit.md",
+          "originalPath": null,
+          "sha256": "e526ed3bd719a72baea9803cdc965ed5487f76eeb2b01777312c0781aedf9ac7",
+          "bytes": 1567
+        },
+        {
+          "status": "??",
+          "path": ".hoyeon/prd/cli-command-registry-refactor/prd.md",
+          "originalPath": null,
+          "sha256": "b90fd3bd716beab7cefc854bf4a60879ad3b31f4c9223aa0869ce61446487252",
+          "bytes": 12464
+        },
+        {
+          "status": "??",
+          "path": ".hoyeon/prd/cli-command-registry-refactor/verification-contract-audit.md",
+          "originalPath": null,
+          "sha256": "ef500476937b4ad499a79d03fc8d90a80464c89d91f44449e5f464fb23d1c00a",
+          "bytes": 1611
+        },
+        {
+          "status": " M",
+          "path": "chromux.mjs",
+          "originalPath": null,
+          "sha256": "f3f975844aea0cf9853874ec8408e1c92a7cc668a7d6ee90285be17e1c99ec01",
+          "bytes": 143272
+        }
+      ]
+    },
+    "recordedAt": "2026-07-06T00:43:39.736Z"
+  },
+  "evidenceHash": "fca03615"
+}

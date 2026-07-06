@@ -2988,9 +2988,53 @@ async function waitForEndpointGone(endpoint, timeoutMs = 3000) {
 // CLI router
 // ============================================================
 
+const PROFILE_COMMANDS = new Set(['launch', 'ps', 'kill', 'pause', 'resume', 'app']);
+const SESSIONLESS_ACTIVITY_COMMANDS = new Set([...PROFILE_COMMANDS].filter(cmd => cmd !== 'app').concat(['batch']));
+const HIDDEN_COMPATIBILITY_COMMANDS = new Set(['eval', 'scroll', 'wait', 'console', 'network', 'scroll-until']);
+
+const DAEMON_COMMAND_ROUTES = {
+  show: async (args, sock) => {
+    if (!args[0]) { console.error('Usage: chromux show <session>'); process.exit(1); }
+    const info = await cliReq('GET', `/show/${args[0]}`, null, sock);
+    const url = info.devtoolsFrontendUrl;
+    if (!url) { console.error('No DevTools URL available'); process.exit(1); }
+    openExternal(url);
+    return info;
+  },
+  open: (args, sock) => {
+    const openArgs = parseOpenArgs(args);
+    return cliReq('POST', '/open', openArgs, sock, defaultCliTimeoutMs());
+  },
+  snapshot: (args, sock) => {
+    const filter = getArgValue(args, '--filter') || (args.includes('--interactive') ? 'interactive' : null);
+    const q = filter ? `?filter=${encodeURIComponent(filter)}` : '';
+    return cliReq('GET', `/snapshot/${args[0]}${q}`, null, sock);
+  },
+  cdp: (args, sock) => cmdCdp(args, sock),
+  run: (args, sock) => cmdRun(args, sock),
+  batch: (args, sock) => cmdBatch(args, sock),
+  click: (args, sock) => cmdClick(args, sock),
+  fill: (args, sock) => cliReq('POST', '/fill', { session: args[0], selector: args[1], text: args[2] }, sock),
+  type: (args, sock) => cliReq('POST', '/type', { session: args[0], text: args[1] }, sock),
+  press: (args, sock) => cmdPress(args, sock),
+  'wait-for-text': (args, sock) => cmdWaitFor(args, sock, 'text'),
+  'wait-for-selector': (args, sock) => cmdWaitFor(args, sock, 'selector'),
+  eval: (args, sock) => cmdEval(args, sock),
+  'scroll-until': (args, sock) => cmdScrollUntil(args, sock),
+  screenshot: (args, sock) => cliReq('POST', '/screenshot', { session: args[0], path: args[1] }, sock),
+  scroll: (args, sock) => cliReq('POST', '/scroll', { session: args[0], direction: args[1] || 'down' }, sock),
+  wait: (args, sock) => cliReq('POST', '/wait', { session: args[0], ms: parseInt(args[1]) || 1000 }, sock),
+  watch: (args, sock) => cmdWatch(args, sock),
+  console: (args, sock) => cliReq('POST', '/console', { session: args[0], off: args.includes('--off') }, sock),
+  network: (args, sock) => cliReq('POST', '/network', { session: args[0], off: args.includes('--off'), all: args.includes('--all') }, sock),
+  close: (args, sock) => cliReq('DELETE', `/session/${args[0]}`, null, sock),
+  list: (args, sock) => cliReq('GET', '/list', null, sock),
+  stop: (args, sock) => cliReq('POST', '/stop', {}, sock),
+};
+
 function inferActivitySession(cmd, args) {
   if (cmd === 'open') return parseOpenArgs([...args]).session || null;
-  if (cmd === 'batch' || cmd === 'ps' || cmd === 'launch' || cmd === 'kill' || cmd === 'pause' || cmd === 'resume') return null;
+  if (SESSIONLESS_ACTIVITY_COMMANDS.has(cmd)) return null;
   return args[0] || null;
 }
 
@@ -3104,13 +3148,8 @@ async function runCli(cmd, args) {
 
   // Tab commands (need daemon)
   const profile = getProfile();
-  const tabCommands = new Set([
-    'show', 'open', 'snapshot', 'cdp', 'run', 'batch', 'click', 'fill', 'type',
-    'press', 'wait-for-text', 'wait-for-selector', 'eval', 'scroll-until',
-    'screenshot', 'scroll', 'wait', 'watch', 'console', 'network', 'close',
-    'list', 'stop',
-  ]);
-  if (!tabCommands.has(cmd)) { console.error(`Unknown: ${cmd}. Run: chromux help`); process.exit(1); }
+  const route = DAEMON_COMMAND_ROUTES[cmd];
+  if (!route) { console.error(`Unknown: ${cmd}. Run: chromux help`); process.exit(1); }
 
   const startedAt = Date.now();
   const session = inferActivitySession(cmd, args);
@@ -3118,51 +3157,7 @@ async function runCli(cmd, args) {
   try {
     sock = await ensureDaemon(profile);
 
-    // Special: show — open DevTools in user's browser
-    if (cmd === 'show') {
-      if (!args[0]) { console.error('Usage: chromux show <session>'); process.exit(1); }
-      const info = await cliReq('GET', `/show/${args[0]}`, null, sock);
-      const url = info.devtoolsFrontendUrl;
-      if (!url) { console.error('No DevTools URL available'); process.exit(1); }
-      openExternal(url);
-      recordCliActivity({ cmd, args, profile, session, result: info, startedAt });
-      console.log(JSON.stringify(info, null, 2));
-      return;
-    }
-
-    const routes = {
-      open:       () => {
-        const openArgs = parseOpenArgs(args);
-        return cliReq('POST', '/open', openArgs, sock, defaultCliTimeoutMs());
-      },
-      snapshot:   () => {
-        const filter = getArgValue(args, '--filter') || (args.includes('--interactive') ? 'interactive' : null);
-        const q = filter ? `?filter=${encodeURIComponent(filter)}` : '';
-        return cliReq('GET', `/snapshot/${args[0]}${q}`, null, sock);
-      },
-      cdp:        () => cmdCdp(args, sock),
-      run:        () => cmdRun(args, sock),
-      batch:      () => cmdBatch(args, sock),
-      click:      () => cmdClick(args, sock),
-      fill:       () => cliReq('POST', '/fill', { session: args[0], selector: args[1], text: args[2] }, sock),
-      type:       () => cliReq('POST', '/type', { session: args[0], text: args[1] }, sock),
-      press:      () => cmdPress(args, sock),
-      'wait-for-text': () => cmdWaitFor(args, sock, 'text'),
-      'wait-for-selector': () => cmdWaitFor(args, sock, 'selector'),
-      eval:       () => cmdEval(args, sock),
-      'scroll-until': () => cmdScrollUntil(args, sock),
-      screenshot: () => cliReq('POST', '/screenshot', { session: args[0], path: args[1] }, sock),
-      scroll:     () => cliReq('POST', '/scroll', { session: args[0], direction: args[1] || 'down' }, sock),
-      wait:       () => cliReq('POST', '/wait', { session: args[0], ms: parseInt(args[1]) || 1000 }, sock),
-      watch:      () => cmdWatch(args, sock),
-      console:    () => cliReq('POST', '/console', { session: args[0], off: args.includes('--off') }, sock),
-      network:    () => cliReq('POST', '/network', { session: args[0], off: args.includes('--off'), all: args.includes('--all') }, sock),
-      close:      () => cliReq('DELETE', `/session/${args[0]}`, null, sock),
-      list:       () => cliReq('GET', '/list', null, sock),
-      stop:       () => cliReq('POST', '/stop', {}, sock),
-    };
-
-    const r = await routes[cmd]();
+    const r = await route(args, sock);
     recordCliActivity({ cmd, args, profile, session, result: r, startedAt });
     console.log(typeof r === 'string' ? r : JSON.stringify(r, null, 2));
   } catch (e) {
@@ -3501,6 +3496,14 @@ async function runStatusAppSelfTest() {
   assertSelfTest(deleteResult.deleted === 1 && !fs.existsSync(profileDir('beta')), 'bulk profile deletion removes selected profile files', checks);
   const aggregates = loadActivityAggregates();
   assertSelfTest(aggregates.byCommand.open?.count >= 1, 'command aggregates survive redaction and deletion', checks);
+  const daemonCommands = new Set(Object.keys(DAEMON_COMMAND_ROUTES));
+  assertSelfTest(PROFILE_COMMANDS.has('launch') && PROFILE_COMMANDS.has('app'), 'command metadata registry invariants include profile commands', checks);
+  assertSelfTest(daemonCommands.has('open') && daemonCommands.has('wait-for-selector') && daemonCommands.has('scroll-until'), 'command metadata registry invariants include daemon and compatibility commands', checks);
+  assertSelfTest([...HIDDEN_COMPATIBILITY_COMMANDS].every(command => daemonCommands.has(command)), 'command metadata registry invariants keep compatibility aliases routed', checks);
+  const helpLines = HELP.split('\n');
+  const hasPrimaryHelpLine = command => helpLines.some(line => line === `  chromux ${command}` || line.startsWith(`  chromux ${command} `));
+  assertSelfTest([...HIDDEN_COMPATIBILITY_COMMANDS].every(command => !hasPrimaryHelpLine(command)), 'command metadata registry invariants keep compatibility aliases hidden from primary help', checks);
+  assertSelfTest(!/new Set\s*\(/.test(runCli.toString()) && !/tabCommands/.test(runCli.toString()), 'command metadata registry invariants keep runCli from constructing per-call tab command sets', checks);
   return { ok: true, checks };
 }
 
