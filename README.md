@@ -74,9 +74,15 @@ observation rides along with `open` on small pages, one-shot parametrized
 snippets replace multi-turn form choreography, and `--grep`/`--diff` keep
 large-page reads targeted. playwright-cli remains faster on some individual
 external tasks; agent-browser has the best raw command latency but degrades
-hardest under bot detection. The v1 run (chromux 0.14.1) had playwright-cli
-winning overall; the improvements that flipped v2, and the tuning-loop
-disclosure, are documented in
+hardest under bot detection. On two unmodified [MiniWoB++](https://github.com/Farama-Foundation/miniwob-plusplus)
+tasks (email-inbox, book-flight — added as untuned third-party ground truth)
+all three tools pass every rep but **playwright-cli is fastest**: MiniWoB's
+label-free clickable-`div` micro-UIs defeat accessibility-tree observation,
+which is a real chromux gap now on the roadmap. The v1 run (chromux 0.14.1)
+had playwright-cli winning overall; the improvements that flipped v2, the
+tuning-loop disclosure, the MiniWoB++ tables, and a Sonnet 5 cross-model
+check (same picture: chromux leads outside MiniWoB, the Google bot-check
+split persists and widens) are documented in
 [docs/benchmark-2026-07.md](docs/benchmark-2026-07.md).
 
 Design principles, sharpened against the 2026 agent-browser landscape (see

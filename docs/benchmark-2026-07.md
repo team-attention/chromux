@@ -60,15 +60,29 @@ without login and are graded against live ground truth or stable facts.
 | sequential-steps | local | 3 sequential click-wait-verify cycles, report the 3 revealed values | exact match of all 3 values |
 | inventory-aggregate | local | aggregate across a 5-page inventory: top-priced SKU + count of items above a price threshold | exact match of SKU, price, and count (added in the v2 run) |
 | signup-challenge | local | submit a signup form, answer the server-generated verification question shown only after submit, report the account code | server must record a successful verification AND the reported code must match (added in the v2 run) |
+| miniwob-email-inbox | miniwob | unmodified MiniWoB++ `email-inbox` task (find an email, star/delete/reply/forward per instruction) | the task page's own reward function must report success, relayed to the harness by an injected hook (see below) |
+| miniwob-book-flight | miniwob | unmodified MiniWoB++ `book-flight` task (autocomplete airports, date picker, book the flight matching the criterion) | same reward-based grading |
 | hn-top-story | external | report title+points of the current #1 Hacker News story | reported title must appear in the official HN API top stories fetched at run time |
 | wikipedia-hop | external | from the Eiffel Tower article, navigate to Gustave Eiffel's page, report name + birth year | name contains "Eiffel", birth year 1832 |
 | google-search | external | search Google for "playwright github", report first organic result URL | URL contains github.com/microsoft/playwright (bot-detection failures count as failures — that is part of the signal) |
 | youtube-search | external | search YouTube, report title+channel of the top result for a fixed query | channel/title must identify the expected canonical video |
 
+The two `miniwob` tasks come from an established third-party benchmark,
+[MiniWoB++](https://github.com/Farama-Foundation/miniwob-plusplus) (MIT), to
+ground the suite in tasks this repo's authors did not design. The task pages
+are fetched at run start (checkout commit recorded in the report) and served
+unmodified except for one injected hook that raises the 10s episode timer to
+5 minutes (agents act through a CLI, not a policy network), fixes the RNG
+seed for reproducible instances, and POSTs each episode's raw reward to the
+local server so the harness can machine-grade success tool-neutrally.
+Success = the benchmark's own reward function reporting a positive raw
+reward.
+
 Repetitions: 3 per local task, 2 per external task, sequential (no
 concurrent sessions). The initial (v1) run used the first 4 local + 4
-external tasks (20 sessions per tool, 60 total); the v2 run uses all 10
-tasks (26 sessions per tool, 78 total).
+external tasks (20 sessions per tool, 60 total); the v2 run uses the 10
+fixture/external tasks (26 sessions per tool, 78 total); the MiniWoB++ pair
+was run separately at 3 reps (18 sessions).
 
 ### Reproduction
 
@@ -207,6 +221,82 @@ Honest reading of the v2 numbers:
   with a frontier model. The differences that persist are cost per task,
   degradation under bot-detection, and behavior on large pages.
 
+## External benchmark tasks: MiniWoB++ (Opus, 3 reps each)
+
+Same day, same harness, model `claude-opus-4-8`, 18 sessions, 18/18 passed,
+$8.13. MiniWoB++ checkout `a49a136a1782`.
+
+| task | chromux | agent-browser | playwright-cli |
+|---|---|---|---|
+| miniwob-email-inbox | 100% · 154.0s · 16t · 362K | 100% · 64.0s · 12t · 312K | **100% · 49.9s · 10t · 211K** |
+| miniwob-book-flight | 100% · 110.4s · 15t · 328K | 100% · 109.4s · 22t · 570K | **100% · 75.3s · 15t · 329K** |
+
+Honest reading — **playwright-cli wins both MiniWoB++ tasks; chromux does
+not carry its fixture-suite dominance here**, and the mechanism is
+instructive:
+
+- MiniWoB++ pages are dense 160px micro-UIs built from `div`s with bare
+  click handlers — no roles, no labels, no anchors. chromux's accessibility
+  snapshot (and therefore `--grep`, inline `open` elements, and `@ref`
+  actions) sees almost none of it: agents fall back to blind
+  `querySelector` exploration, which erases exactly the observation
+  advantage that wins the other tables. playwright-cli's DOM-shaped snapshot
+  degrades less on this page style.
+- Every tool passed every rep — with a frontier model, all three CLIs grind
+  through even hostile page structures; the difference is cost (2-5x the
+  tokens of the fixture tasks for everyone).
+- This is a real product gap, not a benchmark artifact: SPAs with
+  clickable-`div` UIs exist outside benchmarks. Detecting click-handler /
+  pointer-cursor elements in the snapshot is now a roadmap item
+  (competitive-analysis G-2 follow-up).
+- Fairness note: these tasks were added *after* the 0.16.0 improvements and
+  were never used for tuning; the numbers are first-attempt results for all
+  three tools, published as measured.
+
+## Cross-model check: Sonnet 5 (reduced reps)
+
+Same day, same harness, model `claude-sonnet-5`, all 12 tasks, reduced
+repetitions (2 per local/MiniWoB task, 1 per external task; 20 sessions per
+tool, 60 total, $14.38). One run, published as measured.
+
+| task | chromux | agent-browser | playwright-cli |
+|---|---|---|---|
+| form-order | **100% · 16.2s · 5t · 126K** | 100% · 22.1s · 6t · 192K | 100% · 23.5s · 7t · 191K |
+| feed-extract | 100% · 30.8s · 7t · 201K | 100% · 30.8s · 7t · 211K | **100% · 20.8s · 5t · 148K** |
+| nav-tour | 100% · 28.7s · 8t · 229K | 100% · 25.2s · 7t · 225K | 100% · 33.9s · 10t · 296K |
+| sequential-steps | **100% · 28.6s · 10t · 268K** | 100% · 44.8s · 10t · 330K | 100% · 31.5s · 10t · 296K |
+| inventory-aggregate | **100% · 25.1s · 5t · 145K** | 100% · 41.3s · 10t · 338K | 100% · 45.1s · 10t · 292K |
+| signup-challenge | **100% · 21.2s · 7t · 198K** | 100% · 22.1s · 6t · 193K | 100% · 27.1s · 8t · 222K |
+| miniwob-email-inbox | 100% · 104.2s · 33t · 1045K | 100% · 89.1s · 23t · 862K | **100% · 53.4s · 17t · 537K** |
+| miniwob-book-flight | 100% · 93.3s · 27t · 907K | 100% · 75.4s · 22t · 757K | **100% · 58.3s · 20t · 650K** |
+| hn-top-story | 100% · 23.4s · 6t · 168K | **100% · 15.4s · 4t · 107K** | 100% · 21.0s · 5t · 162K |
+| wikipedia-hop | 100% · 50.7s · 10t · 289K | 100% · 48.6s · 6t · 192K | **100% · 23.6s · 6t · 177K** |
+| google-search | **100% · 17.8s · 5t · 140K** | 0% · 134.5s · 17t · 632K | 100% · 95.7s · 21t · 761K |
+| youtube-search | 100% · 27.2s · 7t · 196K | **100% · 21.3s · 5t · 164K** | 100% · 43.5s · 8t · 253K |
+| **overall (12 tasks)** | 100% · 13.6min · 7.03M · $4.64 | 95% · 15.4min · 7.31M · $5.21 | **100% · 12.9min · 6.62M · $4.52** |
+| **overall excl. MiniWoB** | **100% · 7.0min · 3.13M · $2.64** | 94% · 9.9min · 4.07M · $3.42 | 100% · 9.1min · 4.25M · $3.19 |
+
+Reading:
+
+- **The Opus conclusions replicate directionally on a smaller model.**
+  chromux and playwright-cli stay at 100% success; agent-browser again fails
+  Google to reCAPTCHA (632K tokens burned before giving up) — the bot-check
+  split is a browser-identity property, not a model property.
+- **Real-Chrome under bot checks matters more for a weaker model**: on
+  Google, chromux 17.8s / 140K vs playwright-cli 95.7s / 21 turns / 761K —
+  Sonnet spent 5x the time fighting consent/anti-bot friction that chromux's
+  real Chrome never surfaced.
+- **The MiniWoB gap also widens with a weaker model** (chromux 1045K vs
+  playwright-cli 537K on email-inbox): when observation gives poor purchase
+  on div-soup UIs, a weaker model needs many more blind probes. This flips
+  the 12-task aggregate to playwright-cli (12.9min vs 13.6min); excluding
+  the two MiniWoB tasks, chromux leads the Sonnet aggregate cleanly
+  (7.0min / 3.13M vs 9.1min / 4.25M). Both aggregates are published; the
+  clickable-`div` snapshot gap is the roadmap item that would close this.
+- Reduced reps (2/1) mean per-task medians are noisier than the Opus
+  tables; treat this section as a directional cross-model check, not a
+  precision ranking.
+
 ## Deterministic payload / latency results
 
 Same fixture pages for all tools (article, form with status line, 200-story
@@ -267,9 +357,10 @@ Reading:
 
 ## Limitations
 
-- Single machine (macOS, Apple Silicon), single model, one benchmark window;
-  external-site tasks depend on live site behavior and bot-detection policy
-  at run time.
+- Single machine (macOS, Apple Silicon), one benchmark window; two models
+  (`claude-opus-4-8` headline tables at full reps, `claude-sonnet-5` as a
+  reduced-rep directional check); external-site tasks depend on live site
+  behavior and bot-detection policy at run time.
 - Token estimates in the deterministic harness use chars/4; the
   agent-in-the-loop numbers use real API token counts.
 - The agent decides its own command usage from the vendor skill text; results

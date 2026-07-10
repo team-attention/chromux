@@ -31,6 +31,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { startFixtureServer, closeFixtureServer, nonBrowserAccess, orderCode, navCode, stepValue, feedStats, inventoryStats, signupCode } from './fixtures.mjs';
+import { cloneMiniwob, startMiniwobServer, miniwobSucceeded } from './miniwob.mjs';
 
 const MODULE_DIR = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const CHROMUX = path.join(MODULE_DIR, 'chromux.mjs');
@@ -269,6 +270,26 @@ function buildTasks() {
       },
     },
     {
+      id: 'miniwob-email-inbox',
+      kind: 'miniwob',
+      path: '/miniwob/email-inbox.html',
+      mission: base => `Open ${base}/miniwob/email-inbox.html — an unmodified task from the MiniWoB++ browser-agent benchmark. Click START, then follow the instruction shown in the yellow box at the top exactly (it names an email and an action such as star, delete, reply, or forward). The page grades you automatically and reports a reward. Work until the reward is positive; if an episode fails, a new one starts with a new instruction — read it and try again.\nANSWER JSON shape: {"instruction": "<the instruction you completed>"}`,
+      grade({ fixture }) {
+        if (!miniwobSucceeded(fixture.state, '/miniwob/email-inbox.html')) return { ok: false, reason: 'MiniWoB server recorded no positive-reward episode' };
+        return { ok: true };
+      },
+    },
+    {
+      id: 'miniwob-book-flight',
+      kind: 'miniwob',
+      path: '/miniwob/book-flight.html',
+      mission: base => `Open ${base}/miniwob/book-flight.html — an unmodified task from the MiniWoB++ browser-agent benchmark. Click START, then follow the instruction in the yellow box: fill the flight search form (From/To are autocomplete widgets — type, then pick the matching suggestion), set the departure date, search, and book the flight matching the instruction's criterion (e.g. cheapest or shortest). The page grades you automatically and reports a reward. Work until the reward is positive; if an episode fails, a new one starts with a new instruction — read it and try again.\nANSWER JSON shape: {"instruction": "<the instruction you completed>"}`,
+      grade({ fixture }) {
+        if (!miniwobSucceeded(fixture.state, '/miniwob/book-flight.html')) return { ok: false, reason: 'MiniWoB server recorded no positive-reward episode' };
+        return { ok: true };
+      },
+    },
+    {
       id: 'hn-top-story',
       kind: 'external',
       mission: () => `Open https://news.ycombinator.com and report the title and points of the story currently ranked #1.\nANSWER JSON shape: {"title": "<exact story title>", "points": <number>}`,
@@ -348,10 +369,11 @@ function parseAnswer(resultText) {
   return null;
 }
 
-async function runAgentSession({ tool, task, rep, model, maxTurns, timeoutMs, shimDir, skillText, workDir }) {
+async function runAgentSession({ tool, task, rep, model, maxTurns, timeoutMs, shimDir, skillText, workDir, miniwobRoot }) {
   const context = {};
   let fixture = null;
   if (task.kind === 'local') fixture = await startFixtureServer();
+  if (task.kind === 'miniwob') fixture = await startMiniwobServer(miniwobRoot);
   if (task.before) await task.before(context);
 
   const prompt = missionPrompt(tool, task.mission(fixture ? fixture.baseUrl : null));
@@ -431,7 +453,7 @@ async function runAgentSession({ tool, task, rep, model, maxTurns, timeoutMs, sh
       }
     }
     if (!record.ok) {
-      if (fixture) record.fixtureOrders = fixture.state.orders;
+      if (fixture) record.fixtureOrders = fixture.state.orders || fixture.state.results;
       record.resultTail = String(parsed?.result ?? '').slice(-1500) || null;
     }
     // Diagnostic only (never affects grading): chromux keeps a local activity
@@ -542,6 +564,21 @@ async function main() {
   if (smoke && !onlyTasks) tasks = tasks.filter(t => t.id === 'form-order');
 
   const init = { npmInstallMs: install.durationMs, tools: {} };
+  // MiniWoB++ tasks serve pages from a benchmark checkout fetched at run
+  // start (never vendored). If the clone fails, only those tasks are skipped.
+  let miniwobRoot = null;
+  if (tasks.some(t => t.kind === 'miniwob')) {
+    console.error('[setup] fetching MiniWoB++ task pages ...');
+    const cloned = await cloneMiniwob(path.join(runRoot, 'miniwob'));
+    if (cloned.ok) {
+      miniwobRoot = path.join(runRoot, 'miniwob', 'miniwob', 'html');
+      init.miniwob = { commit: cloned.commit };
+    } else {
+      init.miniwob = { skipped: cloned.error };
+      tasks = tasks.filter(t => t.kind !== 'miniwob');
+      console.error(`[setup] MiniWoB++ unavailable, skipping those tasks: ${cloned.error}`);
+    }
+  }
   const skills = {};
   const active = [];
   for (const tool of tools) {
@@ -578,7 +615,7 @@ async function main() {
 
   const plan = [];
   for (const task of tasks) {
-    const reps = task.kind === 'local' ? repsLocal : repsExternal;
+    const reps = task.kind === 'external' ? repsExternal : repsLocal;
     for (let rep = 1; rep <= reps; rep += 1) {
       for (const tool of active) plan.push({ tool, task, rep });
     }
@@ -599,6 +636,7 @@ async function main() {
         shimDir: item.tool.shimDir,
         skillText: skills[item.tool.name],
         workDir: item.tool.workDir,
+        miniwobRoot,
       });
       results.push(record);
       console.error(`         ${record.ok ? 'PASS' : `FAIL (${record.failureKind})`} in ${(record.durationMs / 1000).toFixed(1)}s, turns=${record.numTurns}, tokens=${record.tokens?.total?.toLocaleString('en-US') ?? '?'}${record.ok ? '' : ` — ${record.reason?.slice(0, 160)}`}`);

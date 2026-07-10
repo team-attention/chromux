@@ -55,6 +55,7 @@ assertContains(checks, 'README press keys', docs.readme, 'PageDown');
 assertContains(checks, 'README agent cross-tool benchmark', docs.readme, 'agent-compare-benchmark.mjs');
 assertContains(checks, 'README deterministic cross-tool benchmark', docs.readme, 'compare-benchmark.mjs');
 assertContains(checks, 'README benchmark doc link', docs.readme, 'docs/benchmark-2026-07.md');
+assertContains(checks, 'README miniwob tasks', docs.readme, 'MiniWoB++');
 assertContains(checks, 'install troubleshooting batch', docs.install, '--host-backoff-ms');
 assertContains(checks, 'chromux skill receipt', docs.chromuxSkill, '--receipt');
 assertContains(checks, 'chromux skill snippets', docs.chromuxSkill, 'network-errors.js');
