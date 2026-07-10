@@ -78,7 +78,7 @@ async function main() {
     const pages = [
       { name: 'article', url: `${base}/`, mutate: `return await js('const b=document.createElement("button");b.textContent="Comment";document.querySelector("main").appendChild(b);return 1')` },
       { name: 'form', url: `${base}/form`, mutate: `return await js('document.getElementById("status").textContent="Saved";return 1')` },
-      { name: 'feed-200', url: `${base}/feed`, mutate: `return await js('const a=document.createElement("article");a.innerHTML="<h2><a href=\\'/story/new\\'>Breaking story</a></h2>";document.querySelector("main").prepend(a);return 1')` },
+      { name: 'feed-200', url: `${base}/feed`, findText: 'headline number 153', mutate: `return await js('const a=document.createElement("article");a.innerHTML="<h2><a href=\\'/story/new\\'>Breaking story</a></h2>";document.querySelector("main").prepend(a);return 1')` },
     ];
 
     for (const page of pages) {
@@ -92,6 +92,10 @@ async function main() {
       rows.push(await measure('snapshot --interactive', page.name, ['snapshot', session, '--interactive'], { session }));
       rows.push(await measure('snapshot --diff after one action', page.name,
         ['snapshot', session, '--diff'], { session, mutate: page.mutate }));
+      if (page.findText) {
+        rows.push(await measure('snapshot --grep (find one item)', page.name,
+          ['snapshot', session, '--grep', page.findText], { session }));
+      }
       rows.push(await measure('structured extract (run page meta)', page.name,
         ['run', session, `return await page('({url:location.href,title:document.title,headings:[...document.querySelectorAll("h1,h2")].length,links:[...document.querySelectorAll("a[href]")].length})')`], { session }));
 

@@ -368,6 +368,54 @@ else
   PASS=$((PASS+1))
 fi
 
+# --- Test 5c.1c: fill on native select, snapshot --grep, run --arg ---
+echo ""
+echo "--- Test 5c.1c: select fill, snapshot --grep, run --arg ---"
+SELECT_HTML='<title>SelectPage</title><form><input id="email" aria-label="Email"><select id="country" aria-label="Country"><option value="KR">South Korea</option><option value="US">United States</option></select><button id="go" type="button" aria-label="Go">Go</button></form><p id="out">status (pending)</p><script>window.changeCount=0;document.getElementById("country").addEventListener("change",()=>{window.changeCount+=1});</script>'
+SELECT_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$SELECT_HTML")"
+SELECT_OPEN=$(CHROMUX_PROFILE=$PROFILE node "$CT" open tab-select "$SELECT_URL" 2>/dev/null)
+check "open inlines small-page interactive elements" '"elements"' "$SELECT_OPEN"
+check "open inline elements carry refs" '@1' "$SELECT_OPEN"
+CHROMUX_PROFILE=$PROFILE node "$CT" fill tab-select "#country" "US" 2>/dev/null > /dev/null
+SELECT_STATE=$(CHROMUX_PROFILE=$PROFILE node "$CT" eval tab-select "JSON.stringify({value:document.getElementById('country').value,changes:window.changeCount})" 2>/dev/null)
+check "fill selects option by value" '"value":"US"' "$SELECT_STATE"
+check "fill on select dispatches change" '"changes":1' "$SELECT_STATE"
+CHROMUX_PROFILE=$PROFILE node "$CT" fill tab-select "#country" "South Korea" 2>/dev/null > /dev/null
+SELECT_LABEL=$(CHROMUX_PROFILE=$PROFILE node "$CT" eval tab-select "document.getElementById('country').value" 2>/dev/null)
+check "fill selects option by label" "KR" "$SELECT_LABEL"
+if CHROMUX_PROFILE=$PROFILE node "$CT" fill tab-select "#country" "Mars" >/tmp/chromux-select-out-$$.txt 2>&1; then
+  echo "  ✗ fill with unknown option unexpectedly succeeded"
+  FAIL=$((FAIL+1))
+else
+  SELECT_ERR=$(cat /tmp/chromux-select-out-$$.txt)
+  check "fill with unknown option lists choices" "No option matching" "$SELECT_ERR"
+fi
+rm -f /tmp/chromux-select-out-$$.txt
+GREP_OUT=$(CHROMUX_PROFILE=$PROFILE node "$CT" snapshot tab-select --grep "country" 2>/dev/null)
+check "snapshot --grep keeps matching line" "Country" "$GREP_OUT"
+check "snapshot --grep keeps ancestor context" "form" "$GREP_OUT"
+check "snapshot --grep reports match count" "lines matched" "$GREP_OUT"
+if echo "$GREP_OUT" | grep -q '"Email"'; then
+  echo "  ✗ snapshot --grep leaked non-matching line"
+  FAIL=$((FAIL+1))
+else
+  echo "  ✓ snapshot --grep drops non-matching lines"
+  PASS=$((PASS+1))
+fi
+GREP_NONE=$(CHROMUX_PROFILE=$PROFILE node "$CT" snapshot tab-select --grep "zzz-not-there" 2>/dev/null)
+check "snapshot --grep reports zero matches" "0 of" "$GREP_NONE"
+GREP_LIT=$(CHROMUX_PROFILE=$PROFILE node "$CT" snapshot tab-select --grep "status (pending)" 2>/dev/null)
+check "snapshot --grep retries valid regex literally" "matched literally" "$GREP_LIT"
+check "snapshot --grep literal retry finds the line" "status (pending)" "$GREP_LIT"
+RUN_ARGS_OUT=$(CHROMUX_PROFILE=$PROFILE node "$CT" run tab-select 'return { s: args.label, n: args.count, o: args.fields }' --arg label=hello --arg count=7 --arg fields='{"#email":"a@b.c"}' 2>/dev/null)
+check "run --arg passes string value" '"s": "hello"' "$RUN_ARGS_OUT"
+check "run --arg parses JSON number" '"n": 7' "$RUN_ARGS_OUT"
+check "run --arg parses JSON object" '"#email": "a@b.c"' "$RUN_ARGS_OUT"
+FORM_FLOW_OUT=$(CHROMUX_PROFILE=$PROFILE node "$CT" run tab-select --file "$(dirname "$0")/snippets/_builtin/form-flow.js" --arg fields='{"#email":"agent@example.com","#country":"US"}' --arg submit='#go' 2>/dev/null)
+check "form-flow fills multiple fields" '"submitted": true' "$FORM_FLOW_OUT"
+check "form-flow handles native select" '"value": "US"' "$FORM_FLOW_OUT"
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-select 2>/dev/null > /dev/null
+
 # --- Test 5c.2: click target validation ---
 echo ""
 echo "--- Test 5c.2: Click target validation ---"

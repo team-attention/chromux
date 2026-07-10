@@ -30,7 +30,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { startFixtureServer, closeFixtureServer, nonBrowserAccess, orderCode, navCode, stepValue, feedStats } from './fixtures.mjs';
+import { startFixtureServer, closeFixtureServer, nonBrowserAccess, orderCode, navCode, stepValue, feedStats, inventoryStats, signupCode } from './fixtures.mjs';
 
 const MODULE_DIR = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const CHROMUX = path.join(MODULE_DIR, 'chromux.mjs');
@@ -245,6 +245,30 @@ function buildTasks() {
       },
     },
     {
+      id: 'inventory-aggregate',
+      kind: 'local',
+      mission: base => `Open ${base}/inventory?page=1 — a product inventory split across 5 pages (use the page links to visit all of them). Across ALL pages, determine (1) the SKU with the highest price and that price, and (2) how many items are priced strictly above $50.\nANSWER JSON shape: {"topSku": "<SKU-XXX>", "topPrice": <number>, "above50": <number>}`,
+      grade({ answer }) {
+        const expected = inventoryStats();
+        if (String(answer?.topSku ?? '').toUpperCase() !== expected.topSku) return { ok: false, reason: `topSku ${answer?.topSku} != ${expected.topSku}` };
+        if (Math.abs(Number(answer?.topPrice) - expected.topPrice) > 0.001) return { ok: false, reason: `topPrice ${answer?.topPrice} != ${expected.topPrice}` };
+        if (Number(answer?.above50) !== expected.above50) return { ok: false, reason: `above50 ${answer?.above50} != ${expected.above50}` };
+        return { ok: true };
+      },
+    },
+    {
+      id: 'signup-challenge',
+      kind: 'local',
+      mission: base => `Open ${base}/signup and create an account with name "Agent Smith" and email "agent@example.com". After submitting, the page will show a server-generated verification question; answer it to finish. Report the account confirmation code shown after successful verification.\nANSWER JSON shape: {"code": "<confirmation code, looks like ACT-XXXXXXXX>"}`,
+      grade({ answer, fixture }) {
+        const expected = signupCode('agent@example.com');
+        const verified = fixture.state.signups.some(s => s.phase === 'verified' && s.code === expected);
+        if (!verified) return { ok: false, reason: 'server did not record a successful verification for the expected account' };
+        if (String(answer?.code ?? '').toUpperCase() !== expected) return { ok: false, reason: `reported code ${answer?.code} != ${expected}` };
+        return { ok: true };
+      },
+    },
+    {
       id: 'hn-top-story',
       kind: 'external',
       mission: () => `Open https://news.ycombinator.com and report the title and points of the story currently ranked #1.\nANSWER JSON shape: {"title": "<exact story title>", "points": <number>}`,
@@ -350,6 +374,7 @@ async function runAgentSession({ tool, task, rep, model, maxTurns, timeoutMs, sh
     '--disallowedTools', 'WebFetch', 'WebSearch', 'Task',
     '--append-system-prompt', systemAppend(tool, skillText),
   ];
+  const sessionStartedAt = Date.now();
   const session = await run('claude', args, { cwd: workDir, env, timeoutMs });
 
   let parsed = null;
@@ -408,6 +433,19 @@ async function runAgentSession({ tool, task, rep, model, maxTurns, timeoutMs, sh
     if (!record.ok) {
       if (fixture) record.fixtureOrders = fixture.state.orders;
       record.resultTail = String(parsed?.result ?? '').slice(-1500) || null;
+    }
+    // Diagnostic only (never affects grading): chromux keeps a local activity
+    // log, so record which CLI commands the agent issued during this session.
+    const activityFile = tool.env().CHROMUX_HOME
+      ? path.join(tool.env().CHROMUX_HOME, 'activity', 'events.jsonl') : null;
+    if (activityFile && fs.existsSync(activityFile)) {
+      try {
+        record.commands = fs.readFileSync(activityFile, 'utf8').trim().split('\n')
+          .map(line => JSON.parse(line))
+          .filter(event => Date.parse(event.timestamp) >= sessionStartedAt)
+          .map(event => `${event.command} ${(event.args || []).join(' ')}`.trim()
+            + (event.error ? ` !! ${String(event.error).slice(0, 120)}` : ''));
+      } catch {}
     }
   } finally {
     if (fixture) await closeFixtureServer(fixture.server);

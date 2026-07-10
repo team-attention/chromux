@@ -1,9 +1,9 @@
 // Builtin helper for `chromux run`.
 // Usage:
-//   Edit the assertions below or copy this file to a local variant.
-const selector = globalThis.selector || 'body';
-const text = globalThis.text || '';
-const expression = globalThis.expression || 'document.readyState === "complete" || document.readyState === "interactive"';
+//   chromux run <s> --file snippets/_builtin/page-assert.js --arg selector='#done' --arg text='Saved'
+const selector = args.selector || globalThis.selector || 'body';
+const text = args.text || globalThis.text || '';
+const expression = args.expression || globalThis.expression || 'document.readyState === "complete" || document.readyState === "interactive"';
 
 const checks = [];
 checks.push(await waitFor(selector, { kind: 'selector', timeoutMs: 5000 }));

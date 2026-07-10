@@ -1541,6 +1541,50 @@ function renderSnapshotDiff(previousText, currentText) {
   return `${current.title}\n${current.url}\n${summary}\n\n${diffLines.join('\n')}\n`;
 }
 
+// Filter a snapshot down to lines matching a pattern, keeping each match's
+// ancestor lines so the tree context (which form, which section) survives.
+// The pattern is tried as a case-insensitive regex first; if that matches
+// nothing (or fails to compile) it is retried as a literal substring, so
+// text like "Price (USD)" or "$50" still greps verbatim.
+function renderSnapshotGrep(text, pattern) {
+  if (typeof text !== 'string') return text;
+  const { title, url, body } = parseSnapshotText(text);
+  const MAX_MATCHES = 100;
+  const indentOf = (line) => (line.match(/^ */) || [''])[0].length;
+  const collect = (re) => {
+    const keep = new Set();
+    let matches = 0;
+    for (let i = 0; i < body.length; i++) {
+      if (!re.test(body[i])) continue;
+      matches++;
+      if (matches > MAX_MATCHES) continue;
+      keep.add(i);
+      let depth = indentOf(body[i]);
+      for (let j = i - 1; j >= 0 && depth > 0; j--) {
+        const d = indentOf(body[j]);
+        if (d < depth) { keep.add(j); depth = d; }
+      }
+    }
+    return { keep, matches };
+  };
+  const literalRe = new RegExp(String(pattern).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+  let re = literalRe;
+  try { re = new RegExp(pattern, 'i'); } catch {}
+  let mode = 'regex';
+  let { keep, matches } = collect(re);
+  if (!matches && re.source !== literalRe.source) {
+    ({ keep, matches } = collect(literalRe));
+    if (matches) mode = 'literal';
+  }
+  if (!matches) {
+    return `${title}\n${url}\n# grep ${JSON.stringify(pattern)}: 0 of ${body.length} lines matched (regex and literal); broaden the pattern or take a plain snapshot\n`;
+  }
+  const capNote = matches > MAX_MATCHES ? `; first ${MAX_MATCHES} shown` : '';
+  const modeNote = mode === 'literal' ? '; matched literally' : '';
+  const lines = [...keep].sort((a, b) => a - b).map((i) => body[i]);
+  return `${title}\n${url}\n# grep ${JSON.stringify(pattern)}: ${matches} of ${body.length} lines matched (ancestor lines kept for context${modeNote}${capNote})\n\n${lines.join('\n')}\n`;
+}
+
 // ============================================================
 // Daemon server (per-profile)
 // ============================================================
@@ -1942,6 +1986,22 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
         if (typeof n === 'number') {
           result.interactive = n;
           result.next = `chromux snapshot ${session} --interactive`;
+          // Small pages: ship the interactive snapshot inline so the first
+          // observation rides along with navigation instead of costing the
+          // agent another round-trip. Bounded so big pages stay summarized.
+          if (n > 0 && n <= 20) {
+            const sr = await s.cdp.send('Runtime.evaluate', {
+              expression: `(${SNAPSHOT_JS})(${JSON.stringify('interactive')})`,
+              returnByValue: true,
+            }, 2000);
+            const text = sr?.result?.value;
+            if (typeof text === 'string' && text.length <= 2000) {
+              if (!s.snapshotBaselines) s.snapshotBaselines = {};
+              s.snapshotBaselines.interactive = text;
+              result.elements = text.split('\n').slice(2).join('\n').trim();
+              result.next = `act on @refs, then verify: chromux snapshot ${session} --interactive --diff`;
+            }
+          }
         }
       } catch {}
     }
@@ -1968,17 +2028,20 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     const session = decodeURIComponent(u.pathname.split('/')[2]);
     const filter = u.searchParams.get('filter');
     const wantDiff = u.searchParams.get('diff') === '1';
+    const grep = u.searchParams.get('grep');
     const s = getSession(sessions, session);
     touchSession(s);
     const expression = `(${SNAPSHOT_JS})(${JSON.stringify(filter)})`;
     const r = await s.cdp.send('Runtime.evaluate', { expression, returnByValue: true });
     const text = r.result.value;
     if (typeof text !== 'string') return text;
-    // Every snapshot (plain or --diff) becomes the next baseline per filter.
+    // Every snapshot (plain, --diff, or --grep) becomes the next baseline per
+    // filter; grep/diff only change what is rendered, not what is stored.
     const baselineKey = filter || 'full';
     if (!s.snapshotBaselines) s.snapshotBaselines = {};
     const previous = s.snapshotBaselines[baselineKey];
     s.snapshotBaselines[baselineKey] = text;
+    if (grep != null && grep !== '') return renderSnapshotGrep(text, grep);
     return wantDiff ? renderSnapshotDiff(previous, text) : text;
   }
 
@@ -1998,7 +2061,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
   }
 
   if (routePath === '/run' && method === 'POST') {
-    const { session, code, timeoutMs } = body;
+    const { session, code, timeoutMs, args: runArgs } = body;
     if (!session || code == null) throw httpErr(400, 'session and code required');
     const s = getSession(sessions, session);
     touchSession(s);
@@ -2114,8 +2177,8 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
       return { asserted: true, ...state };
     };
     const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
-    const fn = new AsyncFunction('cdp', 'js', 'sleep', 'waitLoad', 'page', 'waitFor', 'assertPage', code);
-    const runPromise = fn(cdp, evalJs, sleep, waitLoad, page, waitFor, assertPage);
+    const fn = new AsyncFunction('cdp', 'js', 'sleep', 'waitLoad', 'page', 'waitFor', 'assertPage', 'args', code);
+    const runPromise = fn(cdp, evalJs, sleep, waitLoad, page, waitFor, assertPage, (runArgs && typeof runArgs === 'object') ? runArgs : {});
     try {
       const result = (typeof timeoutMs === 'number' && timeoutMs > 0)
         ? await withTimeout(runPromise, timeoutMs, 'run timeout')
@@ -2224,6 +2287,22 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
         if (!el) throw new Error('Element not found: ' + sel);
         if (!('value' in el)) throw new Error('Element is not fillable: ' + sel);
         el.focus();
+        if (el instanceof HTMLSelectElement) {
+          const opts = Array.from(el.options);
+          const match = opts.find(o => o.value === txt)
+            || opts.find(o => o.textContent.trim() === txt)
+            || opts.find(o => o.textContent.trim().toLowerCase() === txt.toLowerCase());
+          if (!match) {
+            const known = opts.slice(0, 20).map(o => o.value + ' (' + o.textContent.trim() + ')').join(', ');
+            throw new Error('No option matching "' + txt + '" in ' + sel + '. Options: ' + known);
+          }
+          const selectSetter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set;
+          if (selectSetter) selectSetter.call(el, match.value);
+          else el.value = match.value;
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+          return { value: el.value, selectedLabel: match.textContent.trim() };
+        }
         const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
         const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set
           || Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value')?.set;
@@ -3358,6 +3437,15 @@ function buildRunReceipt({ session, codeSource, timeoutMs, startedAt, endedAt, r
   };
 }
 
+// Resolve a `--file` path, falling back to the chromux install directory so
+// bundled snippets (e.g. snippets/_builtin/form-flow.js) work from any cwd.
+function resolveRunFilePath(p) {
+  if (fs.existsSync(p)) return path.resolve(p);
+  const bundled = path.join(MODULE_DIR, p);
+  if (!path.isAbsolute(p) && fs.existsSync(bundled)) return bundled;
+  return path.resolve(p);
+}
+
 function readCodeArg(args, usage) {
   const timeoutMs = takeTimeoutFlag(args);
   const receiptPath = takeFlagValue(args, '--receipt', { required: 'a path' });
@@ -3369,8 +3457,9 @@ function readCodeArg(args, usage) {
   if (fIdx >= 0) {
     const p = args[fIdx + 1];
     if (!p) { console.error('--file requires a path'); process.exit(1); }
-    code = fs.readFileSync(p, 'utf8');
-    codeSource = { kind: 'file', path: path.resolve(p) };
+    const resolved = resolveRunFilePath(p);
+    code = fs.readFileSync(resolved, 'utf8');
+    codeSource = { kind: 'file', path: resolved };
   } else if (args[1] === '-') {
     code = fs.readFileSync(0, 'utf8');
     codeSource = { kind: 'stdin' };
@@ -3381,12 +3470,34 @@ function readCodeArg(args, usage) {
   return { session, code, timeoutMs, receiptPath, codeSource };
 }
 
+// Collect repeated `--arg key=value` flags into the object exposed to run
+// code as `args`. Values that parse as JSON (objects, arrays, numbers,
+// booleans, null) are passed structured; everything else stays a string.
+function takeRunArgFlags(args) {
+  const out = {};
+  let i;
+  while ((i = args.indexOf('--arg')) !== -1) {
+    const kv = args[i + 1];
+    const eq = kv ? kv.indexOf('=') : -1;
+    if (eq <= 0) { console.error('--arg requires key=value (repeatable)'); process.exit(1); }
+    args.splice(i, 2);
+    const raw = kv.slice(eq + 1);
+    let value = raw;
+    if (/^(\{|\[|"|-?\d|true$|false$|null$)/.test(raw)) {
+      try { value = JSON.parse(raw); } catch { value = raw; }
+    }
+    out[kv.slice(0, eq)] = value;
+  }
+  return out;
+}
+
 async function cmdRun(args, sock) {
   let session;
   let code;
   let timeoutMs;
   let receiptPath = null;
   let codeSource;
+  const runArgs = takeRunArgFlags(args);
   const schemaPath = takeFlagValue(args, '--schema', { required: 'a JSON schema path' });
   const scriptLabel = takeFlagValue(args, '--script', { required: 'a <host>/<name> script label' });
   if (scriptLabel) {
@@ -3423,7 +3534,7 @@ async function cmdRun(args, sock) {
   };
   let result;
   try {
-    result = await cliReq('POST', '/run', { session, code, timeoutMs }, sock, httpTimeout);
+    result = await cliReq('POST', '/run', { session, code, timeoutMs, args: runArgs }, sock, httpTimeout);
   } catch (error) {
     writeReceipt(null, error);
     decorateScriptReplayError(error, codeSource);
@@ -4152,9 +4263,11 @@ async function runCli(cmd, args) {
       },
       snapshot:   () => {
         const filter = getArgValue(args, '--filter') || (args.includes('--interactive') ? 'interactive' : null);
+        const grep = getArgValue(args, '--grep');
         const params = new URLSearchParams();
         if (filter) params.set('filter', filter);
         if (args.includes('--diff')) params.set('diff', '1');
+        if (grep) params.set('grep', grep);
         const q = params.size ? `?${params}` : '';
         return cliReq('GET', `/snapshot/${args[0]}${q}`, null, sock);
       },
@@ -4695,11 +4808,15 @@ function withTimeout(promise, ms, message) {
 const HELP = `chromux — tmux for Chrome tabs
 
 The core surface:
-  chromux open <session> <url>       Create or navigate a tab
+  chromux open <session> <url>       Create or navigate a tab (responses report the
+                                     interactive-element count; small pages inline the
+                                     elements with @refs so no snapshot round-trip is needed)
   chromux open --background <s> <u>  Explicitly create a background tab
   chromux run <session> -            Multi-step async JS with cdp/js/page/waitFor/assertPage helpers
                                      (waitFor accepts [fallback, candidates] for selector/text waits)
   chromux run <session> --page-file F  Run a JS file directly in the page (no shell escaping)
+  chromux run <s> --file F --arg k=v Parametrize run code: values arrive as \`args.k\`
+                                     (JSON values parse, e.g. --arg fields='{"#email":"a@b.c"}')
   chromux run <session> --script <host>/<name>  Replay a saved action script (no model calls)
   chromux run <session> ... --schema s.json     Validate the run result against a JSON schema
   chromux run <session> --receipt p  Write a redacted local run receipt
@@ -4726,10 +4843,11 @@ Convenience shortcuts:
   chromux snapshot <session>         Accessibility tree with @ref (refs stay stable per document)
   chromux snapshot <s> --interactive Only interactive elements (smaller payload)
   chromux snapshot <s> --diff        Only lines added/removed since the previous snapshot
+  chromux snapshot <s> --grep "pat"  Only lines matching a pattern (+ ancestors for context)
   chromux click <session> @<ref>     Click by ref number
   chromux click <session> "selector" Click by CSS selector
   chromux click <session> --xy X Y   Click by viewport coordinates
-  chromux fill <session> @<ref> "t"  Fill input field
+  chromux fill <session> @<ref> "t"  Fill input field (native <select>: matches option value/label)
   chromux type <session> "text"      Insert text into focused field
   chromux press <session> Enter      Press Enter, Tab, Escape, Backspace, Delete,
                                      arrows, Home, End, PageUp, or PageDown
@@ -4764,7 +4882,8 @@ Saved action scripts (observe once, replay deterministically):
 
 Runner snippets:
   snippets/_builtin/page-extract.js      Structured page metadata extraction
-  snippets/_builtin/form-flow.js         Form fill, submit, and readiness proof
+  snippets/_builtin/form-flow.js         Whole form fill + submit + readiness in one call
+                                         (--arg fields='{"#sel":"value"}' --arg submit='#go')
   snippets/_builtin/network-errors.js    Browser-observable resource diagnostics
   snippets/_builtin/page-assert.js       Selector, text, and DOM assertions
 

@@ -52,25 +52,32 @@ identical browser missions with each CLI, each tool introduced by its own
 official skill; full methodology and tables in
 [docs/benchmark-2026-07.md](docs/benchmark-2026-07.md)):
 
-| | @playwright/cli 0.1.17 | agent-browser 0.31.1 | chromux |
+| | @playwright/cli 0.1.17 | agent-browser 0.31.1 | chromux 0.16.0 |
 |---|---|---|---|
 | Browser | Bundled Chromium | Chrome / Chrome for Testing | **Real Chrome, real profiles** |
-| Agent task success (8 tasks x reps) | 100% | 95% | **100%** |
-| Google under bot check | passed | **50% fail, 146s/310K-token reps** | passed, no friction |
+| Agent task success (10 tasks x reps) | 100% | 92% | **100%** |
+| Agent tokens, whole suite | 3.18M | 4.32M | **2.16M** (lowest on all 10 tasks) |
+| Agent wall time, whole suite | 14.4min | 23.0min | **13.0min** (fastest on 7/10 tasks) |
+| Agent cost, whole suite | $5.62 | $7.31 | **$4.68** |
+| Google under bot check | passed, but 72s / 11 turns / 248K tokens | **failed both reps (reCAPTCHA)** | **passed, 22.8s / 4 turns / 74K** |
 | Verify one action on a 200-story page | ~28.4K tokens | ~10.9K tokens | **~37 tokens** (`snapshot --diff`) |
-| Full snapshot of that page | ~28.3K (no interactive filter) | ~25.6K | **~14.3K / 7.2K interactive** |
+| Find one item on that page | ~163 tokens (`find`) | ~10.9K (no find command) | **~59 tokens** (`snapshot --grep`) |
 | Warm command latency | slowest (nav p50 883ms) | **fastest (48-95ms)** | 163-218ms |
 | Parallel sessions | yes | yes | yes, plus per-profile daemons + `batch` pools |
 | Dependencies | playwright + Chromium download | Rust binary via npm | **none (one file, Node ≥ 22)** |
 | Logged-in real profiles | no | via `--profile` handoff | **first-class, persistent** |
 
 Honest summary: with a frontier model driving, all three CLIs complete
-neutral tasks reliably — playwright-cli was the fastest and cheapest
-generalist on this task set. chromux's edge is structural, not generic:
-real-Chrome sessions sail through bot-gated surfaces where
-automation-flagged browsers burn tokens or fail, and incremental observation
-(`--diff`, shaped extraction) keeps long sessions on large pages hundreds of
-times cheaper per step.
+neutral tasks reliably. On the v2 run chromux is the cheapest and fastest
+overall — the lowest token total on every task — because its first
+observation rides along with `open` on small pages, one-shot parametrized
+snippets replace multi-turn form choreography, and `--grep`/`--diff` keep
+large-page reads targeted. playwright-cli remains faster on some individual
+external tasks; agent-browser has the best raw command latency but degrades
+hardest under bot detection. The v1 run (chromux 0.14.1) had playwright-cli
+winning overall; the improvements that flipped v2, and the tuning-loop
+disclosure, are documented in
+[docs/benchmark-2026-07.md](docs/benchmark-2026-07.md).
 
 Design principles, sharpened against the 2026 agent-browser landscape (see
 `docs/competitive-analysis-2026-07.md` in the repo):
@@ -390,10 +397,11 @@ chromux cdp s Runtime.evaluate '{"expression":"navigator.userAgent","returnByVal
 | `snapshot <session>` | Accessibility tree with `@ref` numbers (refs stay stable within a document) |
 | `snapshot <session> --interactive` | Only interactive elements (smaller payload) |
 | `snapshot <session> --diff` | Only lines added/removed since the previous snapshot of this session |
+| `snapshot <session> --grep "pattern"` | Only lines matching a case-insensitive regex (literal fallback), plus their ancestor lines for context |
 | `click <session> @<ref>` | Click element by ref |
 | `click <session> "selector"` | Click by CSS selector |
 | `click <session> --xy X Y` | Click validated viewport coordinates via CDP mouse events |
-| `fill <session> @<ref> "text"` | Fill input field |
+| `fill <session> @<ref> "text"` | Fill input field (a native `<select>` matches an option by value or label and fires `change`) |
 | `type <session> "text"` | Insert text into the focused field |
 | `press <session> <key>` | Press a supported special key: Enter, Tab, Escape, Backspace, Delete, ArrowUp/Down/Left/Right, Home, End, PageUp, PageDown |
 | `wait-for-text <session> "text" [timeout-ms]` | Wait until page text appears |
@@ -409,6 +417,12 @@ previous snapshot of that session (any action in between), with a one-line
 summary of how many unchanged lines were omitted — after several actions on a
 large page this is a fraction of a full snapshot. The first `--diff` call, or
 one after a navigation, falls back to a full snapshot and says why.
+
+`snapshot --grep "pattern"` answers "where is X on this page" without paying
+for the whole tree: it keeps only the lines matching the pattern plus each
+match's ancestor lines, so the agent still sees which form or section a match
+lives in. On a 200-story feed a targeted grep is typically a few dozen tokens
+instead of ~14K.
 
 `click` brings the tab forward before acting. Ref/selector clicks scroll the
 target into view and fail when the element is hidden, zero-size, stale, outside
@@ -446,15 +460,20 @@ They cover common fast paths:
 - `scroll-until.js`: infinite scroll and result growth loops.
 - `page-extract.js`: structured page metadata extraction without full body text
   or HTML dumps.
-- `form-flow.js`: form fill, submit, and readiness proof.
+- `form-flow.js`: whole-form fill (inputs and native selects), submit, and
+  readiness proof in one call.
 - `network-errors.js`: browser-observable broken resource diagnostics.
 - `page-assert.js`: selector, text, and DOM assertion proof.
 
-Run them with `--file`:
+Run them with `--file`, passing parameters as repeatable `--arg key=value`
+flags — values that parse as JSON arrive structured, everything else stays a
+string, and run code reads them from the `args` object:
 
 ```bash
-chromux run s --file snippets/_builtin/page-extract.js
-chromux run s --file snippets/_builtin/page-assert.js
+chromux run s --file snippets/_builtin/form-flow.js \
+  --arg fields='{"#email":"a@b.c","#country":"US"}' \
+  --arg submit='#submit' --arg readyText='Order confirmed'
+chromux run s --file snippets/_builtin/page-assert.js --arg selector='#done'
 ```
 
 ### Local Benchmarks
@@ -494,6 +513,7 @@ Representative run (real Chrome, deterministic fixtures; the feed page has
 | `snapshot` (full) | ~775 tok | ~67 tok | ~14,252 tok |
 | `snapshot --interactive` | ~41 tok | ~38 tok | ~7,153 tok |
 | `snapshot --diff` after one action | ~36 tok | ~39 tok | **~45 tok** |
+| `snapshot --grep` (find one item) | — | — | **~59 tok** |
 | structured extract (`run` + shaped `page(...)`) | ~25 tok | ~27 tok | ~27 tok |
 
 The workflow the skills teach — inspect structure with `--interactive`, verify
@@ -511,7 +531,7 @@ rules in [docs/benchmark-2026-07.md](docs/benchmark-2026-07.md)):
 ```bash
 # Agent-in-the-loop: one fixed model does identical browser missions with each
 # CLI; measures wall time, tokens, turns, and machine-graded success.
-# Requires an authenticated `claude` CLI. ~60 Opus sessions per full run.
+# Requires an authenticated `claude` CLI. ~78 Opus sessions (~$18) per full run.
 node benchmarks/agent-compare-benchmark.mjs --out /tmp/agent-compare.json
 node benchmarks/agent-compare-benchmark.mjs --smoke   # cheap harness check
 

@@ -103,6 +103,7 @@ function buildTools(toolsDir, runRoot) {
       mutate(session) { return this.exec(['run', session, `return await js(${JSON.stringify(MUTATE_JS)})`]); },
       postActionDiffOrResnap(session) { return this.exec(['snapshot', session, '--diff']); },
       postActionTargeted(session) { return this.exec(['run', session, `return await page(${JSON.stringify(`document.getElementById('status')?.textContent ?? 'n/a'`)})`]); },
+      findByText(session, text) { return this.exec(['snapshot', session, '--grep', text]); },
       extract(session) { return this.exec(['run', session, `return await page(${JSON.stringify(EXTRACT_JS)})`]); },
       currentUrl(session) { return this.exec(['run', session, `return await page('location.href')`]); },
       close(session) { return this.exec(['close', session]); },
@@ -123,6 +124,9 @@ function buildTools(toolsDir, runRoot) {
       mutate(session) { return this.exec(['eval', MUTATE_JS], session); },
       postActionDiffOrResnap(session) { return this.exec(['snapshot', '-i'], session); },
       postActionTargeted(session) { return this.exec(['get', 'text', '#status'], session); },
+      // agent-browser has no text-search command; its documented way to locate
+      // an element by text is reading the (interactive) snapshot.
+      findByText(session) { return this.exec(['snapshot', '-i'], session); },
       extract(session) { return this.exec(['eval', EXTRACT_JS], session); },
       currentUrl(session) { return this.exec(['get', 'url'], session); },
       close(session) { return this.exec(['close'], session); },
@@ -142,6 +146,7 @@ function buildTools(toolsDir, runRoot) {
       mutate(session) { return this.exec(['eval', `() => { ${MUTATE_JS}; }`], session); },
       postActionDiffOrResnap(session) { return this.exec(['snapshot'], session); },
       postActionTargeted(session) { return this.exec(['eval', `() => document.getElementById('status')?.textContent ?? 'n/a'`], session); },
+      findByText(session, text) { return this.exec(['find', text], session); },
       extract(session) { return this.exec(['eval', `() => (${EXTRACT_JS})`], session); },
       currentUrl(session) { return this.exec(['eval', '() => location.href'], session); },
       close(session) { return this.exec(['close'], session); },
@@ -171,6 +176,11 @@ async function measurePayloads(tool, baseUrl, pages) {
     if (page === 'form') {
       const targeted = await tool.postActionTargeted(session);
       rows.push({ page, label: 'post-action verification (targeted read)', bytes: Buffer.byteLength(targeted.stdout), estTokens: estimateTokens(targeted.stdout) });
+    }
+    if (page === 'feed' && tool.findByText) {
+      const found = await tool.findByText(session, 'headline number 153');
+      if (!found.ok) throw new Error(`${tool.name} find-by-text on ${page} failed: ${(found.stderr || found.stdout).slice(0, 300)}`);
+      rows.push({ page, label: 'find one item by text', bytes: Buffer.byteLength(found.stdout), estTokens: estimateTokens(found.stdout) });
     }
     const extract = await tool.extract(session);
     rows.push({ page, label: 'structured extract', bytes: Buffer.byteLength(extract.stdout), estTokens: estimateTokens(extract.stdout) });

@@ -46,6 +46,26 @@ export function feedStats(count = 200, threshold = 700) {
   return { countAboveThreshold: above.length, threshold, topTitle: top.title, topPoints: top.points };
 }
 
+export function inventoryItem(i) {
+  const price = ((((i * 271) + 83) % 9000) + 1000) / 100;
+  return { index: i, sku: `SKU-${String(i).padStart(3, '0')}`, price };
+}
+
+export function inventoryStats(pages = 5, perPage = 8) {
+  const items = Array.from({ length: pages * perPage }, (_, i) => inventoryItem(i));
+  const top = items.reduce((a, b) => (b.price > a.price ? b : a));
+  const above50 = items.filter(item => item.price > 50).length;
+  return { topSku: top.sku, topPrice: top.price, above50, pages, perPage };
+}
+
+export function signupChallenge() {
+  return { a: 47, b: 269 };
+}
+
+export function signupCode(email) {
+  return `ACT-${fnv1a(`signup|${email}`).toUpperCase()}`;
+}
+
 function articleHtml() {
   return `<!doctype html><title>Fixture Article</title>
     <main>
@@ -154,17 +174,94 @@ function storyHtml(route) {
     <p>${'Story body sentence. '.repeat(20)}</p></main>`;
 }
 
+function inventoryHtml(route) {
+  const { pages, perPage } = inventoryStats();
+  const query = route.includes('?') ? route.split('?')[1] : '';
+  const page = Math.min(Math.max(Number(new URLSearchParams(query).get('page')) || 1, 1), pages);
+  const items = Array.from({ length: perPage }, (_, k) => inventoryItem((page - 1) * perPage + k));
+  const pageMax = items.reduce((a, b) => (b.price > a.price ? b : a));
+  const rows = items.map(item => `
+      <tr><td>${item.sku}</td><td>Warehouse part ${item.index} with a descriptive catalog name</td>
+      <td class="price">$${item.price.toFixed(2)}</td></tr>`).join('\n');
+  const links = Array.from({ length: pages }, (_, p) =>
+    `<a href="/inventory?page=${p + 1}"${p + 1 === page ? ' aria-current="page"' : ''}>Page ${p + 1}</a>`).join(' ');
+  return `<!doctype html><title>Inventory page ${page} of ${pages}</title>
+    <main>
+      <h1>Inventory — page ${page} of ${pages}</h1>
+      <nav>${links}</nav>
+      <table><thead><tr><th>SKU</th><th>Name</th><th>Price</th></tr></thead><tbody>${rows}</tbody></table>
+      <p>Highest price on this page: ${pageMax.sku} at $${pageMax.price.toFixed(2)}.</p>
+    </main>`;
+}
+
+function signupHtml() {
+  return `<!doctype html><title>Fixture Signup</title>
+    <main>
+      <h1>Create account</h1>
+      <form id="signup">
+        <input id="name" aria-label="Full name">
+        <input id="email" aria-label="Email" placeholder="you@example.com">
+        <button id="submit" type="submit">Sign up</button>
+      </form>
+      <div id="challenge" hidden>
+        <p id="challenge-text"></p>
+        <input id="challenge-answer" aria-label="Verification answer">
+        <button id="verify" type="button">Verify</button>
+      </div>
+      <p id="status">Waiting</p>
+    </main>
+    <script>
+      document.getElementById('signup').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const res = await fetch('/api/signup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: document.getElementById('name').value,
+            email: document.getElementById('email').value,
+          }),
+        });
+        const body = await res.json();
+        setTimeout(() => {
+          if (!body.ok) { document.getElementById('status').textContent = 'Error: ' + body.error; return; }
+          document.getElementById('challenge-text').textContent = body.challenge;
+          document.getElementById('challenge').hidden = false;
+          document.getElementById('status').textContent = 'Answer the verification question to finish.';
+        }, 150);
+      });
+      document.getElementById('verify').addEventListener('click', async () => {
+        const res = await fetch('/api/signup/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: document.getElementById('email').value,
+            answer: document.getElementById('challenge-answer').value,
+          }),
+        });
+        const body = await res.json();
+        setTimeout(() => {
+          document.getElementById('status').textContent = body.ok
+            ? 'Account created: ' + body.code
+            : 'Error: ' + body.error;
+        }, 150);
+      });
+    </script>`;
+}
+
 export function fixtureHtml(route) {
-  if (route.startsWith('/form')) return formHtml();
-  if (route.startsWith('/feed')) return feedHtml();
-  if (route.startsWith('/steps')) return stepsHtml();
-  if (route.startsWith('/story/')) return storyHtml(route);
-  if (route === '/start' || route.startsWith('/hop/') || route === '/finish') return hopHtml(route);
+  const path = route.split('?')[0];
+  if (path.startsWith('/form')) return formHtml();
+  if (path.startsWith('/inventory')) return inventoryHtml(route);
+  if (path.startsWith('/signup')) return signupHtml();
+  if (path.startsWith('/feed')) return feedHtml();
+  if (path.startsWith('/steps')) return stepsHtml();
+  if (path.startsWith('/story/')) return storyHtml(path);
+  if (path === '/start' || path.startsWith('/hop/') || path === '/finish') return hopHtml(path);
   return articleHtml();
 }
 
 export function startFixtureServer() {
-  const state = { orders: [], accessLog: [] };
+  const state = { orders: [], signups: [], accessLog: [] };
   const server = http.createServer((req, res) => {
     const route = (req.url || '/').split('?')[0];
     state.accessLog.push({
@@ -173,21 +270,51 @@ export function startFixtureServer() {
       userAgent: req.headers['user-agent'] || '',
       at: Date.now(),
     });
-    if (req.method === 'POST' && route === '/api/order') {
+    const readJson = (handler) => {
       let body = '';
       req.on('data', chunk => { body += chunk; });
       req.on('end', () => {
         let payload = {};
         try { payload = JSON.parse(body); } catch {}
+        const response = handler(payload);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(response));
+      });
+    };
+    if (req.method === 'POST' && route === '/api/order') {
+      readJson((payload) => {
         const code = orderCode(payload.email || '', payload.coupon || '', payload.country || '');
         state.orders.push({ ...payload, code, at: Date.now() });
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: true, code }));
+        return { ok: true, code };
+      });
+      return;
+    }
+    if (req.method === 'POST' && route === '/api/signup') {
+      readJson((payload) => {
+        if (!payload.email || !payload.email.includes('@')) {
+          return { ok: false, error: 'A valid email address is required.' };
+        }
+        const { a, b } = signupChallenge();
+        state.signups.push({ email: payload.email, name: payload.name || '', phase: 'challenged', at: Date.now() });
+        return { ok: true, challenge: `Verification question: what is ${a} + ${b}?` };
+      });
+      return;
+    }
+    if (req.method === 'POST' && route === '/api/signup/verify') {
+      readJson((payload) => {
+        const { a, b } = signupChallenge();
+        if (Number(payload.answer) !== a + b) {
+          state.signups.push({ email: payload.email || '', phase: 'failed-verify', at: Date.now() });
+          return { ok: false, error: 'Wrong verification answer. Read the question again.' };
+        }
+        const code = signupCode(payload.email || '');
+        state.signups.push({ email: payload.email || '', phase: 'verified', code, at: Date.now() });
+        return { ok: true, code };
       });
       return;
     }
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
-    res.end(fixtureHtml(route));
+    res.end(fixtureHtml(req.url || '/'));
   });
   return new Promise((resolve, reject) => {
     server.once('error', reject);

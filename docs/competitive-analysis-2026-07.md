@@ -145,7 +145,9 @@ Key events to track:
 1. **`snapshot --diff`** (G-2) — shipped in 0.13.0: refs are now stable within
    a document (elements keep their `@ref` across re-snapshots; navigation
    resets), and `snapshot --diff` emits only added/removed lines per session
-   with an omitted-unchanged summary.
+   with an omitted-unchanged summary. *Extended in 0.16.0*: `snapshot --grep`
+   (targeted find with ancestor context) and `open` inlining small pages'
+   interactive elements, both driven by the agent-in-the-loop benchmark.
 2. **Publish token benchmarks** (G-4) — shipped in 0.14.0:
    `benchmarks/chromux-token-benchmark.mjs` measures agent-visible payloads
    (full HTML vs snapshot vs `--interactive` vs `--diff` vs shaped extract) on
