@@ -748,9 +748,11 @@ with the local `node` binary, looking at `CHROMUX_NODE`, common Homebrew/system
 paths, and then `PATH`. If macOS blocks an unsigned download on first launch,
 use Control-click > Open or approve it in System Settings > Privacy & Security.
 
-The one-pass installer in `install.md` asks macOS users whether to download the
-latest release app, copy it to `/Applications/chromux.app`, and launch it. If
-`/Applications` is not writable, it falls back to `~/Applications/chromux.app`.
+The one-pass setup in `install.md` has agents ask macOS users whether to also
+install the menu bar app, then builds it from the checkout (or downloads the
+latest release app without the Xcode Command Line Tools), copies it to
+`/Applications/chromux.app`, and launches it. If `/Applications` is not
+writable, it falls back to `~/Applications/chromux.app`.
 
 From a repo checkout, build and install the same native wrapper into
 `/Applications` so Spotlight and Launchpad can find it (requires the Xcode

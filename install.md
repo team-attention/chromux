@@ -21,6 +21,12 @@ do the work end to end without asking follow-up questions unless the next step
 requires a user-owned action, such as entering a password, installing Google
 Chrome, or resolving uncommitted changes in an existing checkout.
 
+One exception on macOS: after the CLI and skills are installed, ask the user
+whether to also install the chromux menu bar app to `/Applications` (it adds a
+`cx` status item, a Spotlight-findable app, and an optional Launch at Login
+item). Install it only if the user says yes; see "macOS App (ask the user
+first)" below. Do not silently skip it and do not install it unasked.
+
 The supported CLI install targets are macOS, Linux, and native Windows. The
 native status bar app is macOS-only.
 
@@ -101,18 +107,33 @@ if ! grep -Fq '<!-- chromux-browser-guide:start -->' "$HOME/.claude/CLAUDE.md" &
    ! grep -Fq 'Use `chromux` for browser work when available.' "$HOME/.claude/CLAUDE.md"; then
   printf '\n%s\n' "$CHROMUX_GUIDE" >> "$HOME/.claude/CLAUDE.md"
 fi
+```
 
-if [ "$(uname -s)" = "Darwin" ]; then
-  if xcrun --find swiftc >/dev/null 2>&1; then
-    ./apps/macos-status-bar/install-app.sh
-  else
-    ./apps/macos-status-bar/install-release-app.sh
-  fi
+Then, on macOS, ask about the menu bar app (next section) before running the
+smoke test. New Codex, Claude Code, or Hermes sessions should now load the
+chromux browser skills automatically.
+
+## macOS App (ask the user first)
+
+On macOS, ask the user whether to also install the chromux menu bar app, for
+example: "Install the chromux menu bar app to /Applications so Spotlight can
+find it? It shows running profiles and their disk usage from a cx status item."
+
+The install scripts prompt on a terminal and skip themselves in non-interactive
+shells, so an agent must collect the user's answer and pass `--yes` explicitly.
+If the user says yes, run from the checkout:
+
+```bash
+if xcrun --find swiftc >/dev/null 2>&1; then
+  ./apps/macos-status-bar/install-app.sh --yes
+else
+  ./apps/macos-status-bar/install-release-app.sh --yes
 fi
 ```
 
-Then run the smoke test below. New Codex, Claude Code, or Hermes sessions should
-now load the chromux browser skills automatically.
+If the user says no, skip this step; the CLI and dashboard (`chromux app`) work
+without the native app, and the user can install it later with the same
+commands.
 
 ## Recommended Setup
 
