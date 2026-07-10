@@ -1,12 +1,51 @@
 # chromux
 
-tmux for Chrome tabs — zero-dependency parallel Chrome tab controller via raw CDP.
+> **tmux for Chrome tabs.** Turn the Chrome you already use — logins, cookies, history and all — into a fleet of parallel, agent-driveable browser sessions. Raw CDP, zero dependencies, zero model calls to replay.
 
-## Why
+[![npm](https://img.shields.io/npm/v/@team-attention/chromux)](https://www.npmjs.com/package/@team-attention/chromux)
+![node](https://img.shields.io/badge/node-%3E%3D22-brightgreen)
+![dependencies](https://img.shields.io/badge/runtime_deps-0-blue)
+![license](https://img.shields.io/badge/license-MIT-black)
 
-AI agents need to browse the web in parallel using the user's **real Chrome** (with logins preserved, no bot detection). Existing tools either bundle their own Chromium (Playwright/Puppeteer) or can't isolate tabs properly (agent-browser `--cdp --session`).
+```bash
+npm i -g @team-attention/chromux
 
-chromux solves this by talking to Chrome's DevTools Protocol directly using only Node.js built-ins — no Playwright, no Puppeteer, no npm dependencies.
+chromux open inbox https://mail.example.com     # your real Chrome — already logged in
+chromux snapshot inbox --interactive            # page structure with @refs, ~36 tokens
+chromux click inbox @3                          # act on a ref…
+chromux snapshot inbox --diff                   # …verify what changed for ~47 tokens
+```
+
+## Why people get hooked
+
+- **Your logins already work.** No cloud browser to re-authenticate, no
+  extension bridge to babysit, no bundled Chromium with a bot-shaped
+  fingerprint. chromux drives real, persistent Chrome profiles over raw CDP —
+  log in once, run unattended forever, on macOS, Linux, native Windows, WSL,
+  servers, and CI.
+- **Agents read hundreds of times less.** Observation payloads are the
+  product: on a measured 200-story feed page, full HTML is ~20,400 tokens,
+  `snapshot --interactive` is ~7,200 — and verifying an action with
+  `snapshot --diff` is **~47 tokens**. Reproduce it yourself with the
+  checked-in token benchmark (table below).
+- **Flows become assets, not costs.** Derive a working flow once, freeze it
+  with `chromux script save`, and every later run replays it with **zero
+  model calls** — `open` even tells the next agent the script exists. When a
+  site changes, the failed replay hands your agent the script path and a
+  repair hint: fix once, replay forever. Extraction results can be held to a
+  JSON-schema contract with `--schema`, so drift fails loudly instead of
+  silently corrupting your pipeline.
+- **Parallel by design.** One daemon per profile, N independent tab sessions:
+  ten agents can browse concurrently in the same logged-in profile without
+  stepping on each other. `batch` pools workers over URL queues with retries
+  and per-host backoff; `pause`/`resume` is the one-command kill switch for a
+  whole wave.
+- **Zero dependencies. Zero LLM. Zero cloud.** One file on Node.js ≥ 22
+  built-ins. chromux is the deterministic hand; your coding agent is the
+  brain — no per-step token bills, no vendor lock-in, no data leaving your
+  machine.
+
+## How it compares
 
 | | Playwright/Puppeteer | agent-browser `--cdp` | chromux |
 |---|---|---|---|
@@ -16,6 +55,27 @@ chromux solves this by talking to Chrome's DevTools Protocol directly using only
 | Parallel agents | Yes | **Broken** | **Yes** |
 | Dependencies | 100s of MB | playwright-core | **None** |
 | Profile management | No | No | **Yes** |
+
+Design principles, sharpened against the 2026 agent-browser landscape (see
+`docs/competitive-analysis-2026-07.md` in the repo):
+
+- **No agent loop, no bundled LLM.** chromux is the deterministic hand; the
+  coding agent driving it is the brain. Tools that embed per-step model calls
+  fight cost and flakiness; a saved chromux flow replays for zero tokens, and
+  when it breaks, the calling agent is the self-healing layer.
+- **The user's real, logged-in profiles, locally.** Cloud browsers rebuild
+  identity server-side and extension bridges are fragile; raw CDP over
+  persistent local profiles works anywhere a shell works — WSL, servers, CI.
+- **Observation payloads are the product.** Agents pay per byte they read
+  back: stable snapshot refs, `--interactive`, `snapshot --diff`, and shaped
+  `page(...)` extraction under `--schema` keep per-step reading near-constant
+  even on large pages (see Token Footprint below).
+- **Learning compounds per host.** Site notes (`chromux note`) store durable
+  facts, replay scripts (`chromux script`) store proven flows, and both
+  surface automatically in `open` responses on the next visit.
+- **Parallelism is one profile, many sessions.** A daemon per profile keeps N
+  independent tabs live for concurrent agents, with crawl-mode resource caps,
+  `batch` worker pools, and `pause`/`resume` as the wave kill switch.
 
 ## Prerequisites
 
@@ -190,7 +250,10 @@ response is not proof that the page reached the intended state.
 | `open --background <session> <url>` | Explicitly create a new tab without activating it |
 | `run <session> <code\|--file PATH\|->` | Run multi-step async JS with `cdp`, `js`, `sleep`, `waitLoad`, `page`, `waitFor`, and `assertPage` helpers |
 | `run <session> --page-file PATH` | Run a JS file directly in the page context, bypassing all shell/string escaping |
+| `run <session> --script <host>/<name>` | Replay a saved action script deterministically (no model calls) |
+| `run <session> ... --schema PATH` | Validate the run result against a JSON-schema subset; mismatches fail with per-path errors |
 | `run <session> ... --receipt PATH` | Write a redacted local JSON receipt without storing raw inline code or typed text |
+| `script [save\|show\|rm] [<host>/<name>]` | List, save, show, or remove per-host replay scripts |
 | `batch --file urls.txt --workers N --retries N --host-backoff-ms MS --out results.jsonl` | Crawl URLs through a worker-tab pool with bounded retry and host backoff |
 | `cdp <session> <Method> <params-json>` | Send one raw CDP method to a session |
 | `note [host] [--add "text"]` | List, show, or append durable site notes surfaced on `open` |
@@ -255,6 +318,19 @@ return await page('({url:location.href,title:document.title})');
 JS
 ```
 
+`waitFor` also accepts an **array of fallback candidates** for selector and
+text waits — the first candidate that matches wins and is reported back as
+`matched`, so saved scripts can carry several locator strategies and survive a
+single site change:
+
+```bash
+chromux run s - <<'JS'
+const found = await waitFor(['#search', 'input[name="q"]', '[role="searchbox"]'], { kind: 'selector', timeoutMs: 5000 });
+await js(`document.querySelector(${JSON.stringify(found.matched)}).value = 'chromux'`);
+return found;
+JS
+```
+
 Use `--receipt` when a browser operation should leave replay/debug evidence:
 
 ```bash
@@ -295,18 +371,28 @@ chromux cdp s Runtime.evaluate '{"expression":"navigator.userAgent","returnByVal
 
 | Command | Description |
 |---------|-------------|
-| `snapshot <session>` | Accessibility tree with `@ref` numbers |
+| `snapshot <session>` | Accessibility tree with `@ref` numbers (refs stay stable within a document) |
 | `snapshot <session> --interactive` | Only interactive elements (smaller payload) |
+| `snapshot <session> --diff` | Only lines added/removed since the previous snapshot of this session |
 | `click <session> @<ref>` | Click element by ref |
 | `click <session> "selector"` | Click by CSS selector |
 | `click <session> --xy X Y` | Click validated viewport coordinates via CDP mouse events |
 | `fill <session> @<ref> "text"` | Fill input field |
 | `type <session> "text"` | Insert text into the focused field |
-| `press <session> <Enter\|Tab\|Escape\|Backspace>` | Press a supported special key |
+| `press <session> <key>` | Press a supported special key: Enter, Tab, Escape, Backspace, Delete, ArrowUp/Down/Left/Right, Home, End, PageUp, PageDown |
 | `wait-for-text <session> "text" [timeout-ms]` | Wait until page text appears |
 | `wait-for-selector <session> "selector" [timeout-ms]` | Wait until a selector is visible |
 | `screenshot <session> [path]` | Take PNG screenshot |
 | `show <session>` | Open DevTools in browser (inspect live tab, even headless) |
+
+Snapshot `@ref` numbers are stable within a document: re-snapshotting the same
+page keeps existing refs and only assigns new numbers to new elements, so refs
+held by an agent stay valid until navigation replaces the document. Building on
+that, `snapshot --diff` prints only the lines added and removed since the
+previous snapshot of that session (any action in between), with a one-line
+summary of how many unchanged lines were omitted — after several actions on a
+large page this is a fraction of a full snapshot. The first `--diff` call, or
+one after a navigation, falls back to a full snapshot and says why.
 
 `click` brings the tab forward before acting. Ref/selector clicks scroll the
 target into view and fail when the element is hidden, zero-size, stale, outside
@@ -370,6 +456,38 @@ interactive snapshot, screenshot, click/fill/wait style interaction, and
 `batch` p50/p95 timings.
 Use it before and after automation changes when performance or scheduler
 behavior matters.
+
+### Token Footprint
+
+Agents pay for every byte they read back, so observation payload size is a
+first-class metric. The deterministic token benchmark measures the
+agent-visible stdout of common observation commands on local fixture pages
+(bytes are exact; tokens are estimated as chars/4):
+
+```bash
+CHROMUX_HOME="$(mktemp -d /tmp/chromux-tokens-XXXXXX)" \
+  node benchmarks/chromux-token-benchmark.mjs --out /tmp/chromux-tokens.json
+```
+
+Representative run (Chromium 141, deterministic fixtures; the feed page has
+200 stories with ~600 interactive elements):
+
+| command | article page | form page | 200-item feed |
+|---|---|---|---|
+| full page HTML (`run` outerHTML) | ~785 tok | ~118 tok | ~20,387 tok |
+| `snapshot` (full) | ~769 tok | ~63 tok | ~13,410 tok |
+| `snapshot --interactive` | ~36 tok | ~38 tok | ~7,154 tok |
+| `snapshot --diff` after one action | ~37 tok | ~39 tok | **~47 tok** |
+| structured extract (`run` + shaped `page(...)`) | ~27 tok | ~27 tok | ~28 tok |
+
+The workflow the skills teach — inspect structure with `--interactive`, verify
+each action with `--diff`, extract with a shaped `page(...)` result (optionally
+enforced by `--schema`) — keeps per-step observation payloads roughly constant
+even on large pages, instead of re-reading the whole tree every step. For
+context, published third-party comparisons report ~114K tokens per task
+through Playwright MCP versus ~27K through its CLI, and page snapshots in the
+hundreds of tokens for ref-based CLIs; run the benchmark on your own pages to
+compare like for like.
 
 ## Architecture
 
@@ -501,12 +619,52 @@ chromux open --foreground tab https://example.com
 | `CHROMUX_EXTRA_CHROME_ARGS` | empty | Extra Chrome launch args, split like shell words |
 | `CHROMUX_CLI_TIMEOUT_MS` | `90000` in crawl, `30000` in default | Default CLI request timeout for commands such as `open` |
 
+## Saved Action Scripts
+
+Scripts close the observe-once, replay-forever loop: when an agent has derived
+a working flow for a site (selectors, waits, extraction), it saves the flow as
+a plain `run` script under `~/.chromux/scripts/<host>/<name>.js`. Later runs
+replay it deterministically with zero model calls:
+
+```bash
+cat > top-links.js <<'EOF'
+const ready = await waitFor('a[href]', { kind: 'selector', timeoutMs: 5000 });
+return await page(`({
+  title: document.title,
+  links: [...document.querySelectorAll('a[href]')].slice(0, 10)
+    .map(a => ({ text: a.innerText.trim(), url: a.href })),
+})`);
+EOF
+chromux script save news.ycombinator.com/top-links --file top-links.js
+chromux run s --script news.ycombinator.com/top-links
+```
+
+- `open` responses list saved scripts for the page's host (`scripts` and a
+  ready-to-run `replay` command), so agents reuse proven flows instead of
+  re-deriving them.
+- Host matching walks parent domains like site notes: a script saved under
+  `naver.com` also surfaces and resolves on `search.naver.com`.
+- Record fallback locators inside scripts with `waitFor([...candidates])` —
+  the wait resolves to whichever candidate matches (`matched`), so one site
+  change does not break the replay.
+- When a replay fails, the error names the script path and ends with a repair
+  hint — the calling agent snapshots the page, fixes the flow, and
+  `chromux script save`s it again. The agent is the self-healing layer; the
+  CLI stays deterministic.
+- Add `--schema contract.json` to any `run` to enforce an extraction contract.
+  The result is validated against a JSON-schema subset (`type`, `required`,
+  `properties`, `items`, `enum`, `const`, `pattern`, `min*`/`max*`,
+  `additionalProperties: false`); mismatches exit non-zero with per-path
+  errors and a result preview, and receipts record `failureKind:
+  "schema_mismatch"`.
+
 ## Site Knowledge
 
 chromux surfaces durable, non-secret site notes from
-`~/.chromux/skills/<host>/*.md` in `open` responses. Host matching walks up
-parent domains, so notes saved under `naver.com` also surface on
-`search.naver.com` pages.
+`~/.chromux/skills/<host>/*.md` in `open` responses (the `hints` field), and
+`close` responses point at the host's note directory via `knowledgeHint`. Host
+matching walks up parent domains, so notes saved under `naver.com` also
+surface on `search.naver.com` pages.
 
 The `note` command is the write side of that loop:
 

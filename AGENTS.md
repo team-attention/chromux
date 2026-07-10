@@ -18,6 +18,21 @@ profiles through raw CDP. Keep the public command surface small and let
   usage and `skills/chromux-work/` for browser-work orchestration. Keep
   installation/runtime setup in `install.md`.
 - Keep repo-local helper runner material under `snippets/_builtin/`.
+- Command responses are an agent-facing product surface, not just data: `open`
+  returns `interactive`/`next`/`hints`/`scripts`/`replay`, actions return a
+  `next` verification hint, failed runs append repair hints. When changing
+  response fields or workflow guidance, keep the responses, `chromux help`,
+  `README.md`, and both skills telling the same story — and extend
+  `benchmarks/chromux-doc-check.mjs` needles so drift fails validation.
+- Durable per-host agent knowledge has two write surfaces: site notes
+  (`chromux note`, `~/.chromux/skills/<host>/`) for facts, and replay scripts
+  (`chromux script`, `~/.chromux/scripts/<host>/`) for proven flows. Features
+  that touch host knowledge should surface through both `open` responses and
+  the skills.
+- Observation payload size is a first-class metric (agents pay per byte read).
+  Changes to `snapshot`, `open`, or response shapes should be checked with
+  `benchmarks/chromux-token-benchmark.mjs`, and the README Token Footprint
+  table refreshed when numbers move materially.
 
 ## Validation
 
@@ -26,11 +41,28 @@ Run focused checks after changes:
 ```bash
 node chromux.mjs help
 ./test.sh
+node benchmarks/chromux-doc-check.mjs
 npm pack --dry-run
 ```
 
 `npm pack --dry-run` should include only the package allowlist from
 `package.json`; local planning or handoff artifacts should not be published.
+`chromux-doc-check.mjs` asserts that help, README, and both skills still
+document the public surface — add needles when adding features.
+
+`./test.sh` drives real Chrome and fetches `https://example.com|org|net` and
+`https://news.ycombinator.com`. In a sandbox without a usable browser or open
+egress, the suite still runs fully with three adjustments:
+
+- point `chromePath` in `$CHROMUX_HOME/config.json` at any Chromium binary
+  (e.g. a Playwright-managed one);
+- pass sandbox-safe flags via `CHROMUX_EXTRA_CHROME_ARGS`, typically
+  `--no-sandbox --disable-dev-shm-usage --disable-gpu --no-proxy-server`
+  (Chromium on Linux silently adopts `HTTPS_PROXY`, which turns blocked
+  egress into confusing `chrome-error://chromewebdata/` loads);
+- serve the external hosts from a local HTTPS fixture and map them with
+  `--host-resolver-rules="MAP example.com 127.0.0.1, ..."` plus
+  `--ignore-certificate-errors` (test-profile only).
 
 ## Release / Publish
 

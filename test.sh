@@ -302,6 +302,7 @@ CLICK_URL='data:text/html,%3Cbutton%20style%3D%22position%3Aabsolute%3Bleft%3A0%
 CHROMUX_PROFILE=$PROFILE node "$CT" open tab-click "$CLICK_URL" 2>/dev/null > /dev/null
 XY_CLICK=$(CHROMUX_PROFILE=$PROFILE node "$CT" click tab-click --xy 40 40 2>/dev/null)
 check "click --xy reports success" '"xy"' "$XY_CLICK"
+check "click response suggests snapshot --diff" "snapshot tab-click --diff" "$XY_CLICK"
 CLICK_TITLE=$(CHROMUX_PROFILE=$PROFILE node "$CT" eval tab-click "document.title" 2>/dev/null)
 check "click --xy changed page state" "clicked" "$CLICK_TITLE"
 if CHROMUX_PROFILE=$PROFILE node "$CT" click tab-click --xy 999999 999999 >/tmp/chromux-xy-out-$$.txt 2>&1; then
@@ -326,11 +327,28 @@ CHROMUX_PROFILE=$PROFILE node "$CT" type tab-input "Browser Test" 2>/dev/null > 
 TYPE_STATE=$(CHROMUX_PROFILE=$PROFILE node "$CT" eval tab-input "document.getElementById('name').value" 2>/dev/null)
 check "click then type updates focused input" "Browser Test" "$TYPE_STATE"
 CHROMUX_PROFILE=$PROFILE node "$CT" eval tab-input "window.inputCount=0;window.changeCount=0" 2>/dev/null > /dev/null
-CHROMUX_PROFILE=$PROFILE node "$CT" fill tab-input @1 "Filled Value" 2>/dev/null > /dev/null
+FILL_RESPONSE=$(CHROMUX_PROFILE=$PROFILE node "$CT" fill tab-input @1 "Filled Value" 2>/dev/null)
+check "fill response suggests snapshot --diff" "snapshot tab-input --diff" "$FILL_RESPONSE"
 FILL_STATE=$(CHROMUX_PROFILE=$PROFILE node "$CT" eval tab-input "JSON.stringify({value:document.getElementById('name').value,input:window.inputCount,change:window.changeCount})" 2>/dev/null)
 check "fill sets input value" "Filled Value" "$FILL_STATE"
 FILL_CHANGE_OK=$(CHROMUX_PROFILE=$PROFILE node "$CT" eval tab-input "window.changeCount > 0" 2>/dev/null)
 check "fill dispatches change event" "true" "$FILL_CHANGE_OK"
+
+# Snapshot must never leak typed password values.
+PASS_HTML='<input id="user" aria-label="User"><input id="pw" type="password" placeholder="Password">'
+PASS_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$PASS_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-password "$PASS_URL" 2>/dev/null > /dev/null
+CHROMUX_PROFILE=$PROFILE node "$CT" fill tab-password "#pw" "hunter2secret" 2>/dev/null > /dev/null
+PASS_SNAP=$(CHROMUX_PROFILE=$PROFILE node "$CT" snapshot tab-password 2>/dev/null)
+check "password snapshot keeps placeholder" "Password" "$PASS_SNAP"
+if echo "$PASS_SNAP" | grep -q "hunter2secret"; then
+  echo "  ✗ snapshot leaked password value"
+  FAIL=$((FAIL+1))
+else
+  echo "  ✓ snapshot does not leak password value"
+  PASS=$((PASS+1))
+fi
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-password 2>/dev/null > /dev/null
 
 # --- Test 5c.1b: snapshot --interactive filter ---
 echo ""
@@ -394,6 +412,26 @@ else
 fi
 rm -f /tmp/chromux-hidden-out-$$.txt /tmp/chromux-zero-out-$$.txt
 
+# --- Test 5c.2: snapshot --diff and stable refs ---
+echo ""
+echo "--- Test 5c.2: snapshot --diff and stable refs ---"
+DIFF_HTML='<title>DiffPage</title><button id="a">Alpha</button><button id="b">Beta</button>'
+DIFF_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$DIFF_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-diff "$DIFF_URL" 2>/dev/null > /dev/null
+DIFF_FIRST=$(CHROMUX_PROFILE=$PROFILE node "$CT" snapshot tab-diff --diff 2>/dev/null)
+check "first --diff falls back to full snapshot" "no previous snapshot" "$DIFF_FIRST"
+check "first --diff still lists elements" '@1 button "Alpha"' "$DIFF_FIRST"
+CHROMUX_PROFILE=$PROFILE node "$CT" eval tab-diff "const g=document.createElement('button');g.textContent='Gamma';document.body.appendChild(g);document.getElementById('a').remove();" 2>/dev/null > /dev/null
+DIFF_OUT=$(CHROMUX_PROFILE=$PROFILE node "$CT" snapshot tab-diff --diff 2>/dev/null)
+check "diff marks added element with new ref" '+ @3 button "Gamma"' "$DIFF_OUT"
+check "diff marks removed element" '\- @1 button "Alpha"' "$DIFF_OUT"
+check "diff omits unchanged lines" "1 unchanged omitted" "$DIFF_OUT"
+DIFF_QUIET=$(CHROMUX_PROFILE=$PROFILE node "$CT" snapshot tab-diff --diff 2>/dev/null)
+check "diff reports no changes when page is stable" "no changes since previous snapshot" "$DIFF_QUIET"
+DIFF_FULL=$(CHROMUX_PROFILE=$PROFILE node "$CT" snapshot tab-diff 2>/dev/null)
+check "surviving element keeps its ref across snapshots" '@2 button "Beta"' "$DIFF_FULL"
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-diff 2>/dev/null > /dev/null
+
 # --- Test 5c.3: press and waits ---
 echo ""
 echo "--- Test 5c.3: Press and wait shortcuts ---"
@@ -408,15 +446,32 @@ CHROMUX_PROFILE=$PROFILE node "$CT" press tab-press Backspace 2>/dev/null > /dev
 CHROMUX_PROFILE=$PROFILE node "$CT" press tab-press Enter 2>/dev/null > /dev/null
 CHROMUX_PROFILE=$PROFILE node "$CT" press tab-press Tab 2>/dev/null > /dev/null
 CHROMUX_PROFILE=$PROFILE node "$CT" press tab-press Escape 2>/dev/null > /dev/null
+CHROMUX_PROFILE=$PROFILE node "$CT" press tab-press ArrowDown 2>/dev/null > /dev/null
+CHROMUX_PROFILE=$PROFILE node "$CT" press tab-press Home 2>/dev/null > /dev/null
 PRESS_STATE=$(CHROMUX_PROFILE=$PROFILE node "$CT" eval tab-press "JSON.stringify({value:document.getElementById('first').value,active:document.activeElement.id,keys:window.keys})" 2>/dev/null)
 check "press Backspace edits focused input" '"value":"ab"' "$PRESS_STATE"
 check "press Tab moves focus" '"active":"second"' "$PRESS_STATE"
 check "press Enter recorded" "Enter" "$PRESS_STATE"
 check "press Escape recorded" "Escape" "$PRESS_STATE"
+check "press ArrowDown recorded" "ArrowDown" "$PRESS_STATE"
+check "press Home recorded" "Home" "$PRESS_STATE"
 WAIT_TEXT=$(CHROMUX_PROFILE=$PROFILE node "$CT" wait-for-text tab-press "Ready Text" 2000 2>/dev/null)
 check "wait-for-text reports success" "Ready Text" "$WAIT_TEXT"
 WAIT_SELECTOR=$(CHROMUX_PROFILE=$PROFILE node "$CT" wait-for-selector tab-press "#ready" 2000 2>/dev/null)
 check "wait-for-selector reports success" "#ready" "$WAIT_SELECTOR"
+RUN_FALLBACK=$(CHROMUX_PROFILE=$PROFILE node "$CT" run tab-press - <<'JS' 2>/dev/null
+return await waitFor(['#missing-primary', '#ready', '#also-missing'], { kind: 'selector', timeoutMs: 3000 });
+JS
+)
+check "waitFor fallback resolves the matching candidate" '"matched": "#ready"' "$RUN_FALLBACK"
+if CHROMUX_PROFILE=$PROFILE node "$CT" run tab-press "return await waitFor(['#nope-a', '#nope-b'], { kind: 'selector', timeoutMs: 300 })" >/tmp/chromux-fallback-out-$$.txt 2>&1; then
+  echo "  ✗ waitFor fallback with no matching candidate unexpectedly succeeded"
+  FAIL=$((FAIL+1))
+else
+  FALLBACK_OUT=$(cat /tmp/chromux-fallback-out-$$.txt)
+  check "waitFor fallback failure lists all candidates" "#nope-a | #nope-b" "$FALLBACK_OUT"
+fi
+rm -f /tmp/chromux-fallback-out-$$.txt
 if CHROMUX_PROFILE=$PROFILE node "$CT" wait-for-text tab-press "Never Appears" 300 >/tmp/chromux-wait-text-out-$$.txt 2>&1; then
   echo "  ✗ wait-for-text missing text unexpectedly succeeded"
   FAIL=$((FAIL+1))
@@ -432,6 +487,47 @@ else
   check "wait-for-selector timeout names selector" "#missing" "$WAIT_SELECTOR_OUT"
 fi
 rm -f /tmp/chromux-wait-text-out-$$.txt /tmp/chromux-wait-selector-out-$$.txt
+
+# --- Test 5c.4: saved action scripts and schema validation ---
+echo ""
+echo "--- Test 5c.4: Saved action scripts and schema validation ---"
+SCRIPT_NAME="test-extract-$$"
+SCRIPT_FILE="/tmp/chromux-script-$$.js"
+cat > "$SCRIPT_FILE" <<'EOF'
+return await page('({title: document.title, url: location.href})');
+EOF
+SAVE_OUT=$(node "$CT" script save "example.com/$SCRIPT_NAME" --file "$SCRIPT_FILE" 2>&1)
+check "script save reports script path" "scripts/example.com" "$SAVE_OUT"
+LIST_OUT=$(node "$CT" script example.com 2>&1)
+check "script host listing shows saved script" "$SCRIPT_NAME" "$LIST_OUT"
+SUB_LIST_OUT=$(node "$CT" script sub.example.com 2>&1)
+check "script listing walks parent domains" "$SCRIPT_NAME" "$SUB_LIST_OUT"
+SHOW_OUT=$(node "$CT" script show "example.com/$SCRIPT_NAME" 2>&1)
+check "script show prints saved code" "location.href" "$SHOW_OUT"
+OPEN_SCRIPT=$(CHROMUX_PROFILE=$PROFILE node "$CT" open tab-script https://example.com 2>/dev/null)
+check "open surfaces saved scripts for the host" "$SCRIPT_NAME" "$OPEN_SCRIPT"
+check "open includes a replay command" "chromux run tab-script --script example.com/$SCRIPT_NAME" "$OPEN_SCRIPT"
+RUN_SCRIPT=$(CHROMUX_PROFILE=$PROFILE node "$CT" run tab-script --script "example.com/$SCRIPT_NAME" 2>/dev/null)
+check "script replay returns page data" "example.com" "$RUN_SCRIPT"
+SCHEMA_FILE="/tmp/chromux-schema-$$.json"
+printf '{"type":"object","required":["title","url"],"properties":{"title":{"type":"string","minLength":1},"url":{"type":"string","pattern":"^https://"}}}' > "$SCHEMA_FILE"
+RUN_SCHEMA_OK=$(CHROMUX_PROFILE=$PROFILE node "$CT" run tab-script --script "example.com/$SCRIPT_NAME" --schema "$SCHEMA_FILE" 2>/dev/null)
+check "schema-validated replay prints result" "example.com" "$RUN_SCHEMA_OK"
+BAD_SCHEMA_FILE="/tmp/chromux-bad-schema-$$.json"
+printf '{"type":"object","required":["missingField"],"properties":{"title":{"type":"number"}}}' > "$BAD_SCHEMA_FILE"
+if CHROMUX_PROFILE=$PROFILE node "$CT" run tab-script --script "example.com/$SCRIPT_NAME" --schema "$BAD_SCHEMA_FILE" >/tmp/chromux-schema-out-$$.txt 2>&1; then
+  echo "  ✗ schema mismatch unexpectedly succeeded"
+  FAIL=$((FAIL+1))
+else
+  SCHEMA_OUT=$(cat /tmp/chromux-schema-out-$$.txt)
+  check "schema mismatch names missing property" "missingField" "$SCHEMA_OUT"
+  check "schema mismatch names wrong type path" '\$.title' "$SCHEMA_OUT"
+  check "failed replay points back at the script" "chromux script save example.com/$SCRIPT_NAME" "$SCHEMA_OUT"
+fi
+RM_OUT=$(node "$CT" script rm "example.com/$SCRIPT_NAME" 2>&1)
+check "script rm removes saved script" '"removed": true' "$RM_OUT"
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-script 2>/dev/null > /dev/null
+rm -f "$SCRIPT_FILE" "$SCHEMA_FILE" "$BAD_SCHEMA_FILE" /tmp/chromux-schema-out-$$.txt
 
 # --- Test 5d: watch and quiet aliases ---
 echo ""

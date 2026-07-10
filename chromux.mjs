@@ -199,6 +199,84 @@ function siteKnowledgeHostChain(host) {
   return chain;
 }
 
+// Read all note files for a host and its parent domains, oldest-label first.
+function readSiteNotesForHostChain(host) {
+  const notes = [];
+  for (const h of siteKnowledgeHostChain(host)) {
+    const dir = path.join(CHROMUX_HOME, 'skills', h);
+    let files = [];
+    try { files = fs.readdirSync(dir).filter(f => f.endsWith('.md')).sort(); } catch { continue; }
+    for (const f of files) {
+      try {
+        notes.push({ label: `${h}/${f}`, content: fs.readFileSync(path.join(dir, f), 'utf8').trim() });
+      } catch {}
+    }
+  }
+  return notes;
+}
+
+// ---- Saved action scripts (observe once, replay without an LLM) ----
+//
+// Scripts are plain `chromux run` runner scripts stored per host under
+// ~/.chromux/scripts/<host>/<name>.js. They are the deterministic-replay side
+// of the learning loop: an agent discovers a working flow once, saves it, and
+// later runs replay it with zero model calls. When a replay fails, the CLI
+// points back at the script so the calling agent can repair and re-save it.
+
+const SCRIPTS_DIR = path.join(CHROMUX_HOME, 'scripts');
+
+function validScriptName(name) {
+  return Boolean(name) && !name.includes('/') && VALID_NAME.test(name.replace(/\./g, '_'));
+}
+
+function parseScriptLabel(raw) {
+  const text = String(raw || '');
+  const slash = text.indexOf('/');
+  if (slash <= 0) return null;
+  const host = normalizeNoteHost(text.slice(0, slash));
+  let name = text.slice(slash + 1);
+  if (name.endsWith('.js')) name = name.slice(0, -3);
+  if (!host || !validScriptName(name)) return null;
+  return { host, name, label: `${host}/${name}` };
+}
+
+function scriptPathFor(host, name) {
+  return path.join(SCRIPTS_DIR, host, `${name}.js`);
+}
+
+function listScriptsForHost(host) {
+  try {
+    return fs.readdirSync(path.join(SCRIPTS_DIR, host))
+      .filter(file => file.endsWith('.js'))
+      .sort()
+      .map(file => file.slice(0, -3));
+  } catch {
+    return [];
+  }
+}
+
+// Like site notes, scripts saved under a parent domain also apply to
+// subdomains: naver.com/search-extract is visible on search.naver.com.
+function listScriptsForHostChain(host) {
+  const scripts = [];
+  for (const h of siteKnowledgeHostChain(host)) {
+    for (const name of listScriptsForHost(h)) {
+      scripts.push({ label: `${h}/${name}`, path: scriptPathFor(h, name) });
+    }
+  }
+  return scripts;
+}
+
+// Resolve a script label against the host chain, so `--script search.naver.com/x`
+// also finds a script saved under naver.com/x.
+function resolveScriptPath(ref) {
+  for (const h of siteKnowledgeHostChain(ref.host)) {
+    const p = scriptPathFor(h, ref.name);
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
+
 function siteKnowledgeHintForUrl(rawUrl) {
   const host = hostFromUrl(rawUrl);
   if (!host) return null;
@@ -1325,7 +1403,10 @@ async function closeInitialTabs(port) {
 
 const SNAPSHOT_JS = `((FILTER) => {
   const INTERACTIVE_ONLY = FILTER === 'interactive';
-  let refId = 0;
+  // Refs are stable within a document: an element keeps its data-ct-ref across
+  // re-snapshots, and new elements continue from the persisted counter. A
+  // navigation replaces the document, so refs naturally reset to @1.
+  let refMax = Number(document.documentElement.getAttribute('data-ct-ref-max')) || 0;
   const ROLES = {
     a:'link', button:'button', input:'textbox', select:'combobox',
     textarea:'textbox', img:'img', nav:'navigation', main:'main',
@@ -1352,6 +1433,8 @@ const SNAPSHOT_JS = `((FILTER) => {
     const tag = el.tagName.toLowerCase();
     const aria = el.getAttribute('aria-label');
     if (aria) return aria;
+    // Never leak typed secrets into snapshot text.
+    if (tag === 'input' && el.type === 'password') return el.placeholder || '';
     if (tag === 'input' || tag === 'textarea') return el.value || el.placeholder || '';
     if (tag === 'img') return el.alt || '';
     let text = '';
@@ -1386,8 +1469,13 @@ const SNAPSHOT_JS = `((FILTER) => {
     const indent = '  '.repeat(depth);
     let line = indent;
     if (interactive) {
-      const ref = ++refId;
-      el.setAttribute('data-ct-ref', String(ref));
+      let ref = Number(el.getAttribute('data-ct-ref')) || 0;
+      if (!ref) {
+        ref = ++refMax;
+        el.setAttribute('data-ct-ref', String(ref));
+      } else if (ref > refMax) {
+        refMax = ref;
+      }
       line += '@' + ref + ' ';
     }
     line += role || tag;
@@ -1400,8 +1488,58 @@ const SNAPSHOT_JS = `((FILTER) => {
     }
     return line + '\\n' + children;
   }
-  return '# ' + document.title + '\\n# ' + location.href + '\\n\\n' + walk(document.body, 0);
+  const out = '# ' + document.title + '\\n# ' + location.href + '\\n\\n' + walk(document.body, 0);
+  document.documentElement.setAttribute('data-ct-ref-max', String(refMax));
+  return out;
 })`;
+
+// ---- Snapshot diff (change-only reporting between snapshots) ----
+
+function parseSnapshotText(text) {
+  const lines = String(text).split('\n');
+  const title = lines[0]?.startsWith('# ') ? lines[0] : '# ';
+  const url = lines[1]?.startsWith('# ') ? lines[1] : '# ';
+  const body = lines.slice(2).filter(line => line.trim());
+  return { title, url, body };
+}
+
+// Multiset line diff between the previous and current snapshot of a session.
+// Stable @refs make unchanged elements produce identical lines, so the diff
+// stays small even on large pages. Falls back to the full snapshot when there
+// is no baseline or the page navigated since the baseline.
+function renderSnapshotDiff(previousText, currentText) {
+  if (typeof currentText !== 'string') return currentText;
+  const current = parseSnapshotText(currentText);
+  if (typeof previousText !== 'string') {
+    return `${current.title}\n${current.url}\n# diff: no previous snapshot for this session; full snapshot shown\n\n${current.body.join('\n')}\n`;
+  }
+  const previous = parseSnapshotText(previousText);
+  if (previous.url !== current.url) {
+    return `${current.title}\n${current.url}\n# diff: url changed since previous snapshot; full snapshot shown\n\n${current.body.join('\n')}\n`;
+  }
+  const remaining = new Map();
+  for (const line of previous.body) remaining.set(line, (remaining.get(line) || 0) + 1);
+  const added = [];
+  for (const line of current.body) {
+    const count = remaining.get(line) || 0;
+    if (count > 0) remaining.set(line, count - 1);
+    else added.push(line);
+  }
+  const removed = [];
+  for (const [line, count] of remaining) {
+    for (let i = 0; i < count; i++) removed.push(line);
+  }
+  const unchanged = current.body.length - added.length;
+  if (!added.length && !removed.length) {
+    return `${current.title}\n${current.url}\n# diff: no changes since previous snapshot (${unchanged} unchanged lines omitted)\n`;
+  }
+  const summary = `# diff vs previous snapshot: +${added.length} added, -${removed.length} removed, ${unchanged} unchanged omitted`;
+  const diffLines = [
+    ...added.map(line => `+ ${line}`),
+    ...removed.map(line => `- ${line}`),
+  ];
+  return `${current.title}\n${current.url}\n${summary}\n\n${diffLines.join('\n')}\n`;
+}
 
 // ============================================================
 // Daemon server (per-profile)
@@ -1560,7 +1698,63 @@ const KEY_DEFS = {
   Tab: { key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9, nativeVirtualKeyCode: 9 },
   Escape: { key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 },
   Backspace: { key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8, nativeVirtualKeyCode: 8 },
+  Delete: { key: 'Delete', code: 'Delete', windowsVirtualKeyCode: 46, nativeVirtualKeyCode: 46 },
+  ArrowUp: { key: 'ArrowUp', code: 'ArrowUp', windowsVirtualKeyCode: 38, nativeVirtualKeyCode: 38 },
+  ArrowDown: { key: 'ArrowDown', code: 'ArrowDown', windowsVirtualKeyCode: 40, nativeVirtualKeyCode: 40 },
+  ArrowLeft: { key: 'ArrowLeft', code: 'ArrowLeft', windowsVirtualKeyCode: 37, nativeVirtualKeyCode: 37 },
+  ArrowRight: { key: 'ArrowRight', code: 'ArrowRight', windowsVirtualKeyCode: 39, nativeVirtualKeyCode: 39 },
+  Home: { key: 'Home', code: 'Home', windowsVirtualKeyCode: 36, nativeVirtualKeyCode: 36 },
+  End: { key: 'End', code: 'End', windowsVirtualKeyCode: 35, nativeVirtualKeyCode: 35 },
+  PageUp: { key: 'PageUp', code: 'PageUp', windowsVirtualKeyCode: 33, nativeVirtualKeyCode: 33 },
+  PageDown: { key: 'PageDown', code: 'PageDown', windowsVirtualKeyCode: 34, nativeVirtualKeyCode: 34 },
 };
+
+/** Translate a snapshot @ref handle into its data-ct-ref attribute selector. */
+function refToSelector(selector) {
+  return selector.startsWith('@') ? `[data-ct-ref="${selector.slice(1)}"]` : selector;
+}
+
+// Shared page-side probe expressions for wait-for-text / wait-for-selector and
+// the run() waitFor helper, so all wait paths agree on what "visible" means.
+function textIncludesExpression(text) {
+  return `document.body ? document.body.innerText.includes(${JSON.stringify(String(text))}) : false`;
+}
+
+function selectorVisibleExpression(selector) {
+  return `((sel) => {
+    const el = document.querySelector(sel);
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+  })(${JSON.stringify(String(selector))})`;
+}
+
+// First candidate that matches wins: selectors must resolve to a visible
+// element, texts must be present in the page. This lets saved scripts carry
+// fallback locators so a single site change does not break a replay.
+function firstMatchExpression(kind, candidates) {
+  const list = JSON.stringify(candidates.map(String));
+  if (kind === 'text') {
+    return `((cands) => {
+      if (!document.body) return null;
+      const text = document.body.innerText;
+      for (const c of cands) { if (text.includes(c)) return c; }
+      return null;
+    })(${list})`;
+  }
+  return `((cands) => {
+    for (const c of cands) {
+      let el = null;
+      try { el = document.querySelector(c); } catch { continue; }
+      if (!el) continue;
+      const style = getComputedStyle(el);
+      const rect = el.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none') return c;
+    }
+    return null;
+  })(${list})`;
+}
 
 async function pressKey(cdp, key) {
   const def = KEY_DEFS[key];
@@ -1755,15 +1949,16 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     // including parent-domain notes (search.naver.com also reads naver.com).
     try {
       const knowledgeHint = siteKnowledgeHintForUrl(result.url);
-      const hints = [];
-      for (const h of siteKnowledgeHostChain(knowledgeHint?.host)) {
-        const dir = path.join(CHROMUX_HOME, 'skills', h);
-        if (!fs.existsSync(dir)) continue;
-        for (const f of fs.readdirSync(dir).filter(f => f.endsWith('.md')).sort()) {
-          hints.push(`# Hint: ${h}/${f}\n` + fs.readFileSync(path.join(dir, f), 'utf8').trim());
-        }
-      }
+      const hints = readSiteNotesForHostChain(knowledgeHint?.host)
+        .map(note => `# Hint: ${note.label}\n${note.content}`);
       if (hints.length) result.hints = hints.join('\n\n');
+      // Surface saved replay scripts for this host so agents reuse proven
+      // flows instead of re-deriving them.
+      const scripts = listScriptsForHostChain(knowledgeHint?.host);
+      if (scripts.length) {
+        result.scripts = scripts.map(s => s.label);
+        result.replay = `chromux run ${session} --script ${scripts[0].label}`;
+      }
     } catch {}
     return result;
   }
@@ -1772,11 +1967,19 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     const u = new URL(routePath, 'http://x');
     const session = decodeURIComponent(u.pathname.split('/')[2]);
     const filter = u.searchParams.get('filter');
+    const wantDiff = u.searchParams.get('diff') === '1';
     const s = getSession(sessions, session);
     touchSession(s);
     const expression = `(${SNAPSHOT_JS})(${JSON.stringify(filter)})`;
     const r = await s.cdp.send('Runtime.evaluate', { expression, returnByValue: true });
-    return r.result.value;
+    const text = r.result.value;
+    if (typeof text !== 'string') return text;
+    // Every snapshot (plain or --diff) becomes the next baseline per filter.
+    const baselineKey = filter || 'full';
+    if (!s.snapshotBaselines) s.snapshotBaselines = {};
+    const previous = s.snapshotBaselines[baselineKey];
+    s.snapshotBaselines[baselineKey] = text;
+    return wantDiff ? renderSnapshotDiff(previous, text) : text;
   }
 
   if (routePath === '/cdp' && method === 'POST') {
@@ -1859,10 +2062,21 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
         options.text != null ? 'text'
           : options.selector != null ? 'selector'
             : options.expression != null ? 'expression'
-              : typeof condition === 'string' ? 'selector'
+              : (typeof condition === 'string' || Array.isArray(condition)) ? 'selector'
                 : 'expression'
       );
       const value = options.text ?? options.selector ?? options.expression ?? condition;
+      // Selector/text waits accept an array of fallback candidates; the first
+      // one that matches wins and is reported back as `matched`.
+      const candidates = (kind === 'selector' || kind === 'text') && Array.isArray(value)
+        ? value.map(String).filter(Boolean)
+        : null;
+      if (candidates && !candidates.length) {
+        throw new Error(`waitFor ${kind} requires at least one candidate`);
+      }
+      const describeValue = () => kind === 'expression'
+        ? '[expression]'
+        : (candidates ? candidates.join(' | ') : String(value));
       const deadline = Date.now() + timeout;
       let lastError = null;
       let lastValue = null;
@@ -1872,21 +2086,20 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
             await sleep(Math.min(timeout, Number(options.ms) || 300));
             return { kind, timeoutMs: timeout };
           }
-          const expression = kind === 'text'
-            ? `document.body ? document.body.innerText.includes(${JSON.stringify(String(value))}) : false`
-            : kind === 'selector'
-              ? `((sel) => {
-                  const el = document.querySelector(sel);
-                  if (!el) return false;
-                  const style = getComputedStyle(el);
-                  const rect = el.getBoundingClientRect();
-                  return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
-                })(${JSON.stringify(String(value))})`
-              : String(value);
+          const expression = candidates
+            ? firstMatchExpression(kind, candidates)
+            : kind === 'text'
+              ? textIncludesExpression(value)
+              : kind === 'selector'
+                ? selectorVisibleExpression(value)
+                : String(value);
           lastValue = await evalJs(expression, Math.min(timeout + 1000, 30000));
-          if (lastValue === true || (kind === 'expression' && options.truthy !== false && Boolean(lastValue))) {
+          const matched = candidates && typeof lastValue === 'string' ? lastValue : null;
+          if (matched || lastValue === true || (!candidates && kind === 'expression' && options.truthy !== false && Boolean(lastValue))) {
             const state = await currentPageState();
-            return { kind, value: kind === 'expression' ? '[expression]' : String(value), timeoutMs: timeout, ...state };
+            const proof = { kind, value: describeValue(), timeoutMs: timeout, ...state };
+            if (candidates) proof.matched = matched;
+            return proof;
           }
         } catch (err) {
           lastError = err.message;
@@ -1894,7 +2107,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
         await sleep(pollMs);
       }
       const state = await currentPageState();
-      throw new Error(`waitFor ${kind} failed after ${timeout}ms: ${kind === 'expression' ? '[expression]' : String(value)} url=${state.url || ''} title=${state.title || ''} last=${JSON.stringify(redactReceiptValue(lastValue, 'lastValue'))}${lastError ? ` error=${lastError}` : ''}`);
+      throw new Error(`waitFor ${kind} failed after ${timeout}ms: ${describeValue()} url=${state.url || ''} title=${state.title || ''} last=${JSON.stringify(redactReceiptValue(lastValue, 'lastValue'))}${lastError ? ` error=${lastError}` : ''}`);
     };
     const assertPage = async (expression, options = {}) => {
       const state = await waitFor(expression, { ...options, kind: 'expression', timeoutMs: options.timeoutMs || 1 });
@@ -1942,12 +2155,10 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
         type: 'mouseReleased', x, y, button, clickCount,
       });
       await sleep(100);
-      return { clicked: { xy: [x, y], button, clicks: clickCount } };
+      return { clicked: { xy: [x, y], button, clicks: clickCount }, next: `chromux snapshot ${session} --diff` };
     }
     if (!selector) throw httpErr(400, 'selector or xy required');
-    const sel = selector.startsWith('@')
-      ? `[data-ct-ref="${selector.slice(1)}"]`
-      : selector;
+    const sel = refToSelector(selector);
     await s.cdp.send('Page.bringToFront', {});
     const r = await s.cdp.send('Runtime.evaluate', {
       expression: `((sel) => {
@@ -1999,16 +2210,14 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
       });
     }
     await sleep(500);
-    return { clicked: selector };
+    return { clicked: selector, next: `chromux snapshot ${session} --diff` };
   }
 
   if (routePath === '/fill' && method === 'POST') {
     const { session, selector, text } = body;
     const s = getSession(sessions, session);
     touchSession(s);
-    const sel = selector.startsWith('@')
-      ? `[data-ct-ref="${selector.slice(1)}"]`
-      : selector;
+    const sel = refToSelector(selector);
     const r = await s.cdp.send('Runtime.evaluate', {
       expression: `((sel, txt) => {
         const el = document.querySelector(sel);
@@ -2036,7 +2245,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
       returnByValue: true, awaitPromise: false,
     });
     if (r.exceptionDetails) throw httpErr(400, r.exceptionDetails.exception?.description || 'fill failed');
-    return { filled: selector, text };
+    return { filled: selector, text, next: `chromux snapshot ${session} --diff` };
   }
 
   if (routePath === '/type' && method === 'POST') {
@@ -2046,7 +2255,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     touchSession(s);
     await s.cdp.send('Page.bringToFront', {});
     await s.cdp.send('Input.insertText', { text });
-    return { typed: text };
+    return { typed: text, next: `chromux snapshot ${session} --diff` };
   }
 
   if (routePath === '/press' && method === 'POST') {
@@ -2055,7 +2264,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     const s = getSession(sessions, session);
     touchSession(s);
     await pressKey(s.cdp, key);
-    return { pressed: key };
+    return { pressed: key, next: `chromux snapshot ${session} --diff` };
   }
 
   if ((routePath === '/wait-for-text' || routePath === '/wait-for-selector') && method === 'POST') {
@@ -2071,14 +2280,8 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     let lastError = null;
     while (Date.now() <= deadline) {
       const expression = isTextWait
-        ? `document.body ? document.body.innerText.includes(${JSON.stringify(needle)}) : false`
-        : `((sel) => {
-            const el = document.querySelector(sel);
-            if (!el) return false;
-            const style = getComputedStyle(el);
-            const rect = el.getBoundingClientRect();
-            return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
-          })(${JSON.stringify(needle)})`;
+        ? textIncludesExpression(needle)
+        : selectorVisibleExpression(needle);
       const r = await s.cdp.send('Runtime.evaluate', {
         expression,
         returnByValue: true,
@@ -2198,7 +2401,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     const resolved = path.resolve(p);
     const realResolved = fs.realpathSync(path.dirname(resolved)) + path.sep + path.basename(resolved);
     const allowedBases = ['/tmp', '/private/tmp', os.tmpdir(), os.homedir()];
-    if (!allowedBases.some(base => realResolved.startsWith(base + path.sep) || realResolved.startsWith(base))) {
+    if (!allowedBases.some(base => pathWithinBase(realResolved, base))) {
       throw httpErr(400, `Screenshot path not allowed: ${resolved}`);
     }
     fs.writeFileSync(resolved, Buffer.from(r.data, 'base64'));
@@ -2780,17 +2983,108 @@ async function cmdNote(args) {
     return;
   }
   // Show notes for the host, including parent-domain notes.
-  let shown = 0;
-  for (const h of siteKnowledgeHostChain(host)) {
-    const dir = path.join(skillsRoot, h);
-    let files = [];
-    try { files = fs.readdirSync(dir).filter(f => f.endsWith('.md')).sort(); } catch { continue; }
-    for (const f of files) {
-      console.log(`# ${h}/${f}\n${fs.readFileSync(path.join(dir, f), 'utf8').trim()}\n`);
-      shown++;
-    }
+  const notes = readSiteNotesForHostChain(host);
+  for (const note of notes) console.log(`# ${note.label}\n${note.content}\n`);
+  if (!notes.length) console.log(`No notes for ${host}. Add one: chromux note ${host} --add "durable finding"`);
+}
+
+// ---- Saved action scripts CLI (list, show, save, rm) ----
+
+function requireScriptLabel(raw, usage) {
+  const ref = parseScriptLabel(raw);
+  if (!ref) {
+    console.error(`Invalid script label "${raw || ''}". Use <host>/<name>, e.g. naver.com/search-extract`);
+    console.error(usage);
+    process.exit(1);
   }
-  if (!shown) console.log(`No notes for ${host}. Add one: chromux note ${host} --add "durable finding"`);
+  return ref;
+}
+
+async function cmdScript(args) {
+  const usage = 'Usage: chromux script [<host> | show <host>/<name> | save <host>/<name> (--file PATH|-) | rm <host>/<name>]';
+  const sub = args[0];
+
+  if (!sub) {
+    let hosts = [];
+    try {
+      hosts = fs.readdirSync(SCRIPTS_DIR).filter(h => listScriptsForHost(h).length);
+    } catch {}
+    if (!hosts.length) {
+      console.log('No saved scripts yet. Save one: chromux script save <host>/<name> --file flow.js');
+      return;
+    }
+    for (const h of hosts.sort()) {
+      console.log(h);
+      for (const name of listScriptsForHost(h)) {
+        console.log(`  ${h}/${name} -> ${displayChromuxPath(scriptPathFor(h, name))}`);
+      }
+    }
+    return;
+  }
+
+  if (sub === 'save') {
+    const ref = requireScriptLabel(args[1], usage);
+    let code;
+    const fileArg = takeFlagValue(args, '--file', { required: 'a path' });
+    if (fileArg) code = fs.readFileSync(fileArg, 'utf8');
+    else if (args.includes('-')) code = fs.readFileSync(0, 'utf8');
+    if (code == null || !code.trim()) {
+      console.error('script save requires code via --file PATH or stdin (-)');
+      process.exit(1);
+    }
+    const filePath = scriptPathFor(ref.host, ref.name);
+    const existed = fs.existsSync(filePath);
+    fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(filePath, code.endsWith('\n') ? code : `${code}\n`, { mode: 0o600 });
+    console.log(JSON.stringify({
+      script: ref.label,
+      path: displayChromuxPath(filePath),
+      bytes: Buffer.byteLength(code),
+      updated: existed,
+      replay: `chromux run <session> --script ${ref.label}`,
+    }, null, 2));
+    return;
+  }
+
+  if (sub === 'show') {
+    const ref = requireScriptLabel(args[1], usage);
+    const filePath = resolveScriptPath(ref);
+    if (!filePath) {
+      console.error(`No script "${ref.label}". Save one: chromux script save ${ref.label} --file flow.js`);
+      process.exit(1);
+    }
+    console.log(fs.readFileSync(filePath, 'utf8'));
+    return;
+  }
+
+  if (sub === 'rm') {
+    const ref = requireScriptLabel(args[1], usage);
+    const filePath = scriptPathFor(ref.host, ref.name);
+    if (!fs.existsSync(filePath)) {
+      console.error(`No script "${ref.label}" at ${displayChromuxPath(filePath)}`);
+      process.exit(1);
+    }
+    fs.unlinkSync(filePath);
+    console.log(JSON.stringify({ script: ref.label, removed: true }, null, 2));
+    return;
+  }
+
+  // `chromux script <host>` — list scripts for the host, including parents.
+  const host = normalizeNoteHost(sub);
+  if (!host) {
+    console.error(`Unknown script subcommand or host: ${sub}`);
+    console.error(usage);
+    process.exit(1);
+  }
+  const scripts = listScriptsForHostChain(host);
+  if (!scripts.length) {
+    console.log(`No scripts for ${host}. Save one: chromux script save ${host}/<name> --file flow.js`);
+    return;
+  }
+  for (const s of scripts) {
+    console.log(`${s.label} -> ${displayChromuxPath(s.path)}`);
+    console.log(`  replay: chromux run <session> --script ${s.label}`);
+  }
 }
 
 // After close/kill, if this session/profile hit failures on hosts that have no
@@ -2862,6 +3156,22 @@ function cmdResume(profileName) {
 // CLI client (talks to the profile daemon endpoint)
 // ============================================================
 
+/** Remove `<flag> <value>` from args and return the value (null when absent). */
+function takeFlagValue(args, flag, { required = 'a value' } = {}) {
+  const idx = args.indexOf(flag);
+  if (idx < 0) return null;
+  const value = args[idx + 1];
+  if (value == null) { console.error(`${flag} requires ${required}`); process.exit(1); }
+  args.splice(idx, 2);
+  return value;
+}
+
+/** Remove `--timeout <ms>` from args and return the parsed number (undefined when absent). */
+function takeTimeoutFlag(args) {
+  const raw = takeFlagValue(args, '--timeout', { required: 'a millisecond value' });
+  return raw == null ? undefined : parseInt(raw);
+}
+
 /**
  * eval — supports literal arg, --file <path>, or stdin (`-`), with --timeout <ms>.
  * Examples:
@@ -2873,9 +3183,7 @@ function cmdResume(profileName) {
 async function cmdEval(args, sock) {
   if (!args[0]) { console.error('Usage: chromux eval <session> <code|--file PATH|-> [--timeout MS] [--no-iife]'); process.exit(1); }
   const session = args[0];
-  let timeoutMs;
-  const tIdx = args.indexOf('--timeout');
-  if (tIdx >= 0) { timeoutMs = parseInt(args[tIdx + 1]); args.splice(tIdx, 2); }
+  const timeoutMs = takeTimeoutFlag(args);
   const noIife = args.includes('--no-iife');
   if (noIife) args.splice(args.indexOf('--no-iife'), 1);
   let code;
@@ -3051,19 +3359,8 @@ function buildRunReceipt({ session, codeSource, timeoutMs, startedAt, endedAt, r
 }
 
 function readCodeArg(args, usage) {
-  let timeoutMs;
-  const tIdx = args.indexOf('--timeout');
-  if (tIdx >= 0) {
-    timeoutMs = parseInt(args[tIdx + 1]);
-    args.splice(tIdx, 2);
-  }
-  let receiptPath = null;
-  const receiptIdx = args.indexOf('--receipt');
-  if (receiptIdx >= 0) {
-    receiptPath = args[receiptIdx + 1];
-    if (!receiptPath) { console.error('--receipt requires a path'); process.exit(1); }
-    args.splice(receiptIdx, 2);
-  }
+  const timeoutMs = takeTimeoutFlag(args);
+  const receiptPath = takeFlagValue(args, '--receipt', { required: 'a path' });
   const session = args[0];
   if (!session) { console.error(usage); process.exit(1); }
   let code;
@@ -3090,20 +3387,26 @@ async function cmdRun(args, sock) {
   let timeoutMs;
   let receiptPath = null;
   let codeSource;
-  if (args.includes('--page-file')) {
-    const receiptIdx = args.indexOf('--receipt');
-    if (receiptIdx >= 0) {
-      receiptPath = args[receiptIdx + 1];
-      if (!receiptPath) { console.error('--receipt requires a path'); process.exit(1); }
-      args.splice(receiptIdx, 2);
+  const schemaPath = takeFlagValue(args, '--schema', { required: 'a JSON schema path' });
+  const scriptLabel = takeFlagValue(args, '--script', { required: 'a <host>/<name> script label' });
+  if (scriptLabel) {
+    const ref = requireScriptLabel(scriptLabel, 'Usage: chromux run <session> --script <host>/<name> [--timeout MS] [--receipt PATH] [--schema PATH]');
+    const scriptFile = resolveScriptPath(ref);
+    if (!scriptFile) {
+      console.error(`No script "${ref.label}". List scripts: chromux script ${ref.host}`);
+      process.exit(1);
     }
-    const pfIdx = args.indexOf('--page-file');
-    const p = args[pfIdx + 1];
-    if (!p) { console.error('--page-file requires a path'); process.exit(1); }
+    receiptPath = takeFlagValue(args, '--receipt', { required: 'a path' });
+    timeoutMs = takeTimeoutFlag(args);
+    session = args[0];
+    if (!session) { console.error('Usage: chromux run <session> --script <host>/<name> [--timeout MS] [--receipt PATH] [--schema PATH]'); process.exit(1); }
+    code = fs.readFileSync(scriptFile, 'utf8');
+    codeSource = { kind: 'script', label: ref.label, path: scriptFile };
+  } else if (args.includes('--page-file')) {
+    receiptPath = takeFlagValue(args, '--receipt', { required: 'a path' });
+    const p = takeFlagValue(args, '--page-file', { required: 'a path' });
     const pageCode = fs.readFileSync(p, 'utf8');
-    args.splice(pfIdx, 2);
-    const tIdx = args.indexOf('--timeout');
-    if (tIdx >= 0) { timeoutMs = parseInt(args[tIdx + 1]); args.splice(tIdx, 2); }
+    timeoutMs = takeTimeoutFlag(args);
     session = args[0];
     if (!session) { console.error('Usage: chromux run <session> --page-file PATH [--timeout MS] [--receipt PATH]'); process.exit(1); }
     code = `return await js(${JSON.stringify(pageCode)});`;
@@ -3113,20 +3416,124 @@ async function cmdRun(args, sock) {
   }
   const httpTimeout = (timeoutMs ? timeoutMs : 30000) + 5000;
   const startedAt = Date.now();
+  const writeReceipt = (result, error) => {
+    if (!receiptPath) return;
+    const receipt = buildRunReceipt({ session, codeSource, timeoutMs, startedAt, endedAt: Date.now(), result, error });
+    writeSafeJsonArtifact(receiptPath, receipt, 'run receipt');
+  };
+  let result;
   try {
-    const result = await cliReq('POST', '/run', { session, code, timeoutMs }, sock, httpTimeout);
-    if (receiptPath) {
-      const receipt = buildRunReceipt({ session, codeSource, timeoutMs, startedAt, endedAt: Date.now(), result, error: null });
-      writeSafeJsonArtifact(receiptPath, receipt, 'run receipt');
-    }
-    return result;
+    result = await cliReq('POST', '/run', { session, code, timeoutMs }, sock, httpTimeout);
   } catch (error) {
-    if (receiptPath) {
-      const receipt = buildRunReceipt({ session, codeSource, timeoutMs, startedAt, endedAt: Date.now(), result: null, error });
-      writeSafeJsonArtifact(receiptPath, receipt, 'run receipt');
-    }
+    writeReceipt(null, error);
+    decorateScriptReplayError(error, codeSource);
     throw error;
   }
+  const schemaErrors = schemaPath ? validateAgainstSchemaFile(result, schemaPath) : [];
+  if (schemaErrors.length) {
+    const error = new Error(schemaMismatchMessage(schemaPath, schemaErrors, result));
+    writeReceipt(null, error);
+    decorateScriptReplayError(error, codeSource);
+    throw error;
+  }
+  writeReceipt(result, null);
+  return result;
+}
+
+// When a saved-script replay fails, point the calling agent back at the
+// script so it can repair and re-save it — the agent is the self-healing LLM.
+function decorateScriptReplayError(error, codeSource) {
+  if (codeSource?.kind !== 'script') return;
+  error.message += `\nscript: ${codeSource.label} (${codeSource.path})`
+    + `\nhint: saved-script replay failed — snapshot the page to see its current state, fix the flow, then update it: chromux script save ${codeSource.label} --file <fixed.js>`;
+}
+
+// ---- Zero-dependency JSON Schema subset validator (run --schema) ----
+//
+// Supports the practical subset agents need for extraction contracts:
+// type (incl. arrays of types), enum, const, required, properties,
+// additionalProperties:false, items, minItems/maxItems, minLength/maxLength,
+// pattern, minimum/maximum. Unknown keywords are ignored.
+
+function jsonTypeOf(value) {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return 'array';
+  return typeof value;
+}
+
+function validateJsonSchema(value, schema, at = '$', errors = []) {
+  if (schema === true || schema == null || typeof schema !== 'object') return errors;
+  const fail = message => errors.push({ path: at, message });
+  const actual = jsonTypeOf(value);
+
+  if (schema.type) {
+    const types = [].concat(schema.type);
+    const matches = types.some(t => t === 'integer'
+      ? (actual === 'number' && Number.isInteger(value))
+      : t === actual);
+    if (!matches) {
+      fail(`expected type ${types.join('|')}, got ${actual}`);
+      return errors;
+    }
+  }
+  if (schema.enum && !schema.enum.some(option => JSON.stringify(option) === JSON.stringify(value))) {
+    fail(`expected one of ${JSON.stringify(schema.enum)}, got ${JSON.stringify(value)}`);
+  }
+  if (schema.const !== undefined && JSON.stringify(schema.const) !== JSON.stringify(value)) {
+    fail(`expected const ${JSON.stringify(schema.const)}, got ${JSON.stringify(value)}`);
+  }
+  if (actual === 'string') {
+    if (Number.isFinite(schema.minLength) && value.length < schema.minLength) fail(`string shorter than minLength ${schema.minLength}`);
+    if (Number.isFinite(schema.maxLength) && value.length > schema.maxLength) fail(`string longer than maxLength ${schema.maxLength}`);
+    if (schema.pattern && !(new RegExp(schema.pattern)).test(value)) fail(`string does not match pattern ${schema.pattern}`);
+  }
+  if (actual === 'number') {
+    if (Number.isFinite(schema.minimum) && value < schema.minimum) fail(`number below minimum ${schema.minimum}`);
+    if (Number.isFinite(schema.maximum) && value > schema.maximum) fail(`number above maximum ${schema.maximum}`);
+  }
+  if (actual === 'array') {
+    if (Number.isFinite(schema.minItems) && value.length < schema.minItems) fail(`array shorter than minItems ${schema.minItems}`);
+    if (Number.isFinite(schema.maxItems) && value.length > schema.maxItems) fail(`array longer than maxItems ${schema.maxItems}`);
+    if (schema.items) {
+      value.forEach((item, i) => validateJsonSchema(item, schema.items, `${at}[${i}]`, errors));
+    }
+  }
+  if (actual === 'object') {
+    for (const key of schema.required || []) {
+      if (!(key in value)) fail(`missing required property "${key}"`);
+    }
+    if (schema.properties) {
+      for (const [key, childSchema] of Object.entries(schema.properties)) {
+        if (key in value) validateJsonSchema(value[key], childSchema, `${at}.${key}`, errors);
+      }
+    }
+    if (schema.additionalProperties === false) {
+      const known = new Set(Object.keys(schema.properties || {}));
+      for (const key of Object.keys(value)) {
+        if (!known.has(key)) fail(`unexpected additional property "${key}"`);
+      }
+    }
+  }
+  return errors;
+}
+
+function validateAgainstSchemaFile(result, schemaPath) {
+  let schema;
+  try {
+    schema = JSON.parse(fs.readFileSync(schemaPath, 'utf8'));
+  } catch (err) {
+    console.error(`Cannot read schema ${schemaPath}: ${err.message}`);
+    process.exit(1);
+  }
+  return validateJsonSchema(result, schema);
+}
+
+function schemaMismatchMessage(schemaPath, schemaErrors, result) {
+  const preview = JSON.stringify(result);
+  const clipped = preview && preview.length > 2000 ? `${preview.slice(0, 2000)}…` : preview;
+  return `Result does not match schema ${schemaPath}:\n`
+    + schemaErrors.map(e => `- ${e.path}: ${e.message}`).join('\n')
+    + `\nresult: ${clipped}`;
 }
 
 function getBatchArg(args, flag, fallback = null) {
@@ -3201,7 +3608,10 @@ function classifyBatchFailure(err) {
   const lower = message.toLowerCase();
   let failureKind = 'unknown';
   let retryable = false;
-  if (/timeout|timed out|handler timeout/.test(lower)) {
+  if (/does not match schema/.test(lower)) {
+    failureKind = 'schema_mismatch';
+    retryable = false;
+  } else if (/timeout|timed out|handler timeout/.test(lower)) {
     failureKind = 'timeout';
     retryable = true;
   } else if (/resource guard/.test(lower)) {
@@ -3361,18 +3771,11 @@ async function cmdCdp(args, sock) {
     console.error('Usage: chromux cdp <session> <Method> <params-json|--params-file PATH> [--timeout MS]');
     process.exit(1);
   }
-  let timeoutMs;
-  const tIdx = args.indexOf('--timeout');
-  if (tIdx >= 0) {
-    timeoutMs = parseInt(args[tIdx + 1]);
-    args.splice(tIdx, 2);
-  }
+  const timeoutMs = takeTimeoutFlag(args);
   let params = {};
-  const fIdx = args.indexOf('--params-file');
-  if (fIdx >= 0) {
-    const p = args[fIdx + 1];
-    if (!p) { console.error('--params-file requires a path'); process.exit(1); }
-    params = parseJsonArg(fs.readFileSync(p, 'utf8'), '--params-file');
+  const paramsFile = takeFlagValue(args, '--params-file', { required: 'a path' });
+  if (paramsFile) {
+    params = parseJsonArg(fs.readFileSync(paramsFile, 'utf8'), '--params-file');
   } else if (args[2]) {
     params = parseJsonArg(args[2], 'params-json');
   }
@@ -3403,7 +3806,7 @@ async function cmdClick(args, sock) {
 async function cmdPress(args, sock) {
   const session = args[0];
   const key = args[1];
-  if (!session || !key) { console.error('Usage: chromux press <session> <Enter|Tab|Escape|Backspace>'); process.exit(1); }
+  if (!session || !key) { console.error(`Usage: chromux press <session> <${Object.keys(KEY_DEFS).join('|')}>`); process.exit(1); }
   return cliReq('POST', '/press', { session, key }, sock);
 }
 
@@ -3501,11 +3904,10 @@ async function resolveProfilePort(profileName) {
   return runtime?.status === 'running' ? runtime.port : null;
 }
 
-async function ensureDaemon(profileName) {
-  let endpoint = daemonEndpointFromState(readState(profileName));
-  const desiredMode = getMode();
-
-  // Check if daemon already running (short timeout to fail fast)
+// Probe the recorded daemon endpoint: reuse it when healthy and in the desired
+// mode, otherwise stop the mismatched daemon and clear its endpoint state.
+async function reuseHealthyDaemon(profileName, desiredMode) {
+  const endpoint = daemonEndpointFromState(readState(profileName));
   try {
     const health = await cliReq('GET', '/health', null, endpoint, 3000);
     if (endpoint?.type === 'tcp' && (!health.mode || health.mode === desiredMode)) return endpoint;
@@ -3513,20 +3915,23 @@ async function ensureDaemon(profileName) {
     await waitForEndpointGone(endpoint, 3000);
     clearDaemonEndpointState(profileName);
   } catch {}
+  return null;
+}
+
+async function ensureDaemon(profileName) {
+  const desiredMode = getMode();
+
+  // Check if daemon already running (short timeout to fail fast)
+  let endpoint = await reuseHealthyDaemon(profileName, desiredMode);
+  if (endpoint) return endpoint;
 
   // Acquire lockfile to prevent concurrent daemon starts (CR-008)
   const lockFile = path.join(RUN_DIR, `${profileName}.lock`);
   const lockFd = await acquireLock(lockFile);
   try {
     // Re-check after lock — another process may have started it
-    endpoint = daemonEndpointFromState(readState(profileName));
-    try {
-      const health = await cliReq('GET', '/health', null, endpoint, 3000);
-      if (endpoint?.type === 'tcp' && (!health.mode || health.mode === desiredMode)) return endpoint;
-      await cliReq('POST', '/stop', {}, endpoint, 3000).catch(() => {});
-      await waitForEndpointGone(endpoint, 3000);
-      clearDaemonEndpointState(profileName);
-    } catch {}
+    endpoint = await reuseHealthyDaemon(profileName, desiredMode);
+    if (endpoint) return endpoint;
 
     // Clean up stale legacy socket only while holding the startup lock. During
     // concurrent cold-start, another CLI may be starting the daemon; deleting
@@ -3605,10 +4010,10 @@ function sanitizeActivityArgs(cmd, args) {
   if (cmd === 'fill') return copy.map((arg, i) => i >= 2 ? '[redacted-text]' : arg);
   if (cmd === 'type') return copy.map((arg, i) => i >= 1 ? '[redacted-text]' : arg);
   if (cmd === 'run' || cmd === 'eval') {
+    const passthroughFlags = new Set(['--file', '--page-file', '--timeout', '--receipt', '--script', '--schema']);
     return copy.map((arg, i) => {
       if (i <= 0) return arg;
-      if (arg === '-' || arg === '--file' || copy[i - 1] === '--file' || arg === '--timeout' || copy[i - 1] === '--timeout' || arg === '--receipt' || copy[i - 1] === '--receipt') return arg;
-      if (arg === '--no-iife') return arg;
+      if (arg === '-' || arg === '--no-iife' || passthroughFlags.has(arg) || passthroughFlags.has(copy[i - 1])) return arg;
       return '[code]';
     });
   }
@@ -3701,6 +4106,7 @@ async function runCli(cmd, args) {
     return r;
   }
   if (cmd === 'note') return cmdNote(args);
+  if (cmd === 'script') return cmdScript(args);
   if (cmd === 'pause') {
     const profileName = args[0] || getProfile();
     return runLoggedProfileCommand(cmd, args, profileName, () => cmdPause(profileName));
@@ -3746,7 +4152,10 @@ async function runCli(cmd, args) {
       },
       snapshot:   () => {
         const filter = getArgValue(args, '--filter') || (args.includes('--interactive') ? 'interactive' : null);
-        const q = filter ? `?filter=${encodeURIComponent(filter)}` : '';
+        const params = new URLSearchParams();
+        if (filter) params.set('filter', filter);
+        if (args.includes('--diff')) params.set('diff', '1');
+        const q = params.size ? `?${params}` : '';
         return cliReq('GET', `/snapshot/${args[0]}${q}`, null, sock);
       },
       cdp:        () => cmdCdp(args, sock),
@@ -4244,7 +4653,7 @@ function readBody(req) {
 }
 // Convert the most common Playwright/Puppeteer muscle-memory mistakes inside
 // `run` scripts into an immediate pointer at the actual helper surface.
-const RUN_HELPER_HINT = "chromux run executes in the runner context with helpers cdp(method, params), js(pageCode), page(expr), sleep(ms), waitLoad(). Use js('...') to run code inside the page.";
+const RUN_HELPER_HINT = "chromux run executes in the runner context with helpers cdp(method, params), js(pageCode), page(expr), sleep(ms), waitLoad(), waitFor(selectorOrTextOrExpression | [fallback, candidates], opts), assertPage(expr). Use js('...') to run code inside the page.";
 function decorateRunError(err) {
   const msg = String(err?.message || '');
   if (msg.includes(RUN_HELPER_HINT)) return;
@@ -4288,8 +4697,11 @@ const HELP = `chromux — tmux for Chrome tabs
 The core surface:
   chromux open <session> <url>       Create or navigate a tab
   chromux open --background <s> <u>  Explicitly create a background tab
-  chromux run <session> -            Multi-step async JS with cdp/js/page helpers
+  chromux run <session> -            Multi-step async JS with cdp/js/page/waitFor/assertPage helpers
+                                     (waitFor accepts [fallback, candidates] for selector/text waits)
   chromux run <session> --page-file F  Run a JS file directly in the page (no shell escaping)
+  chromux run <session> --script <host>/<name>  Replay a saved action script (no model calls)
+  chromux run <session> ... --schema s.json     Validate the run result against a JSON schema
   chromux run <session> --receipt p  Write a redacted local run receipt
   chromux batch --file urls.txt      Crawl URLs through a worker-tab pool
   chromux batch --file urls.txt --retries N --host-backoff-ms MS
@@ -4311,14 +4723,16 @@ Lifecycle:
   chromux list                       List active sessions
 
 Convenience shortcuts:
-  chromux snapshot <session>         Accessibility tree with @ref
+  chromux snapshot <session>         Accessibility tree with @ref (refs stay stable per document)
   chromux snapshot <s> --interactive Only interactive elements (smaller payload)
+  chromux snapshot <s> --diff        Only lines added/removed since the previous snapshot
   chromux click <session> @<ref>     Click by ref number
   chromux click <session> "selector" Click by CSS selector
   chromux click <session> --xy X Y   Click by viewport coordinates
   chromux fill <session> @<ref> "t"  Fill input field
   chromux type <session> "text"      Insert text into focused field
-  chromux press <session> Enter      Press Enter, Tab, Escape, or Backspace
+  chromux press <session> Enter      Press Enter, Tab, Escape, Backspace, Delete,
+                                     arrows, Home, End, PageUp, or PageDown
   chromux wait-for-text <s> "text"   Wait for visible page text
   chromux wait-for-selector <s> SEL  Wait for visible selector
   chromux screenshot <session> [p]   Take PNG screenshot
@@ -4337,6 +4751,16 @@ Site knowledge:
   chromux note <host> --add "text"   Append a durable site note (surfaced on next open)
   Notes live in ~/.chromux/skills/<host>/*.md and are attached to open results
   for that host and its subdomains.
+
+Saved action scripts (observe once, replay deterministically):
+  chromux script                     List saved replay scripts by host
+  chromux script <host>              List scripts for a host (includes parent domains)
+  chromux script show <host>/<name>  Print a saved script
+  chromux script save <host>/<name> --file f.js   Save/update a replay script (stdin: -)
+  chromux script rm <host>/<name>   Remove a saved script
+  Scripts are plain run scripts in ~/.chromux/scripts/<host>/<name>.js; open
+  responses list them for the page's host, and failed replays point back at
+  the script so the calling agent can repair and re-save it.
 
 Runner snippets:
   snippets/_builtin/page-extract.js      Structured page metadata extraction
@@ -4370,6 +4794,7 @@ Paths:
   ~/.chromux/profiles/<name>/        Chrome user-data-dir per profile
   ~/.chromux/profiles/<name>/.state   Profile state with Chrome CDP port and daemonPort
   ~/.chromux/run/<name>.lock          Daemon startup lock (transient)
+  ~/.chromux/scripts/<host>/          Saved replay scripts per host
   ~/.chromux/activity/events.jsonl    Local full-URL activity event log
   ~/.chromux/activity/config.json     Activity retention config
   ~/.chromux/activity/aggregates.json Command aggregate counters`;
