@@ -166,8 +166,12 @@ function renderProfiles() {
   $('#eventCount').textContent = state.data?.activity?.totalEvents || 0;
   $('#homePath').textContent = state.data?.chromuxHome || '';
   $('#profileSearch').value = state.profileSearch;
-  $('#profileStatusFilter').value = state.profileStatusFilter;
-  $('#selectedProfileCount').textContent = `${selectedCount} selected / ${profiles.length} shown`;
+  $$('[data-status-filter]').forEach(button => {
+    button.classList.toggle('is-active', button.dataset.statusFilter === state.profileStatusFilter);
+  });
+  $('#bulkBar').hidden = selectedCount === 0;
+  $('#selectedProfileCount').textContent = `${selectedCount} / ${profiles.length}`;
+  $('#selectedProfileCount').title = `${selectedCount} selected of ${profiles.length} shown`;
   $('#deleteSelectedProfiles').disabled = selectedCount === 0;
   $('#selectAllProfiles').checked = profiles.length > 0 && visibleSelectedCount === profiles.length;
   $('#selectAllProfiles').indeterminate = visibleSelectedCount > 0 && visibleSelectedCount < profiles.length;
@@ -224,7 +228,7 @@ function renderProfileDetail() {
 
   const disabled = profile ? '' : 'disabled';
   $('#profileActions').innerHTML = `
-    <button data-action="launch-headed" ${disabled}>Launch headed</button>
+    <button data-action="launch-headed" class="primary" ${disabled}>Launch headed</button>
     <button data-action="open-foreground" ${disabled}>Open foreground</button>
     <button data-action="stop-daemon" ${disabled}>Stop daemon</button>
     <button data-action="kill" class="danger" ${disabled}>Kill profile</button>
@@ -421,9 +425,11 @@ $('#profileSearch').addEventListener('input', (event) => {
   state.profileSearch = event.target.value;
   renderProfiles();
 });
-$('#profileStatusFilter').addEventListener('change', (event) => {
-  state.profileStatusFilter = event.target.value;
-  renderProfiles();
+$$('[data-status-filter]').forEach(button => {
+  button.addEventListener('click', () => {
+    state.profileStatusFilter = button.dataset.statusFilter;
+    renderProfiles();
+  });
 });
 $('#selectAllProfiles').addEventListener('change', (event) => {
   const profiles = visibleProfiles();

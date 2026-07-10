@@ -11,80 +11,67 @@
       <aside class="sidebar">
         <div class="brand-row">
           <div class="brand-mark" aria-hidden="true">cx</div>
-          <div>
-            <h1>chromux status</h1>
+          <div class="brand-copy">
+            <h1>chromux</h1>
             <p id="homePath"></p>
           </div>
+          <button id="refreshButton" class="icon-button" title="Refresh">&#8635;</button>
         </div>
-        <div class="sidebar-stats" aria-label="Activity totals">
-          <div>
-            <span id="profileCount">0</span>
-            <label>profiles</label>
-          </div>
-          <div>
-            <span id="eventCount">0</span>
-            <label>events</label>
-          </div>
-        </div>
-        <div class="profile-toolbar">
-          <span>Profiles</span>
-          <button id="refreshButton" class="icon-button" title="Refresh">R</button>
-        </div>
-        <div class="filter-toolbar">
-          <input id="profileSearch" type="search" aria-label="Search profiles" placeholder="Search">
-          <select id="profileStatusFilter" aria-label="Filter profiles by status">
-            <option value="all">All</option>
-            <option value="active">Active</option>
-            <option value="stopped">Stopped</option>
-          </select>
-        </div>
-        <div class="bulk-toolbar">
-          <label class="select-all">
-            <input id="selectAllProfiles" type="checkbox">
-            <span>Select</span>
-          </label>
-          <span id="selectedProfileCount">0 selected / 0 shown</span>
-          <button id="deleteSelectedProfiles" class="danger" disabled>Delete selected</button>
+        <p class="sidebar-totals" aria-label="Activity totals"><span id="profileCount">0</span> profiles &middot; <span id="eventCount">0</span> events</p>
+        <input id="profileSearch" type="search" aria-label="Search profiles" placeholder="Search profiles">
+        <div class="filter-pills" role="group" aria-label="Filter profiles by status">
+          <button class="filter-pill is-active" data-status-filter="all">All</button>
+          <button class="filter-pill" data-status-filter="active">Active</button>
+          <button class="filter-pill" data-status-filter="stopped">Stopped</button>
         </div>
         <nav id="profileList" class="profile-list" aria-label="Profiles"></nav>
+        <div id="bulkBar" class="bulk-bar" hidden>
+          <label class="select-all">
+            <input id="selectAllProfiles" type="checkbox">
+            <span>All shown</span>
+          </label>
+          <span id="selectedProfileCount">0 selected</span>
+          <button id="deleteSelectedProfiles" class="danger" disabled>Delete</button>
+        </div>
       </aside>
 
       <main class="main-pane">
         <header class="topbar">
-          <div>
-            <p class="eyebrow">Selected profile</p>
+          <div class="topbar-heading">
+            <p class="eyebrow">Profile</p>
             <h2 id="selectedName">No profile</h2>
           </div>
           <div id="profileActions" class="actions"></div>
         </header>
 
-        <section class="summary-band" aria-label="Profile summary">
-          <div>
-            <label>Status</label>
-            <strong id="summaryStatus">-</strong>
+        <section class="overview-card" aria-label="Profile overview">
+          <div class="summary-band" aria-label="Profile summary">
+            <div>
+              <label>Status</label>
+              <strong id="summaryStatus">-</strong>
+            </div>
+            <div>
+              <label>Daemon</label>
+              <strong id="summaryDaemon">-</strong>
+            </div>
+            <div>
+              <label>Sessions</label>
+              <strong id="summarySessions">-</strong>
+            </div>
+            <div>
+              <label>Modified</label>
+              <strong id="summaryModified">-</strong>
+            </div>
           </div>
-          <div>
-            <label>Daemon</label>
-            <strong id="summaryDaemon">-</strong>
-          </div>
-          <div>
-            <label>Sessions</label>
-            <strong id="summarySessions">-</strong>
-          </div>
-          <div>
-            <label>Modified</label>
-            <strong id="summaryModified">-</strong>
-          </div>
-        </section>
-
-        <section class="detail-layout">
-          <div class="profile-facts">
-            <h3>Runtime</h3>
-            <dl id="runtimeFacts"></dl>
-          </div>
-          <div class="profile-facts">
-            <h3>Activity</h3>
-            <dl id="activityFacts"></dl>
+          <div class="detail-layout">
+            <div class="profile-facts">
+              <h3>Runtime</h3>
+              <dl id="runtimeFacts"></dl>
+            </div>
+            <div class="profile-facts">
+              <h3>Activity</h3>
+              <dl id="activityFacts"></dl>
+            </div>
           </div>
         </section>
 

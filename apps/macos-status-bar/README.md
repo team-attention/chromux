@@ -58,10 +58,24 @@ from a checkout when you want terminal or agent usage.
 
 - Adds a `cx` item to the macOS status bar.
 - Starts `chromux app --host 127.0.0.1 --port 0`.
-- Opens the local dashboard in a native WebKit window.
-- Shows currently active profiles in the `cx` menu when it opens.
-- Supports active-first sorting, filtering, bulk profile selection, and deletion
-  through the dashboard.
+- Opens the local dashboard in a native WebKit window with dark chrome
+  (window background and titlebar match the dashboard canvas color).
+- Shows currently active profiles in the `cx` menu when it opens; clicking an
+  active profile entry opens the dashboard window.
+- Supports active-first sorting, search, status filtering, bulk profile
+  selection, and deletion through the dashboard. Bulk actions appear only
+  while at least one profile is selected.
 - Provides menu items for opening the dashboard, opening the URL in a browser,
   restarting the local server, and quitting.
 - Stops the local server process on quit.
+
+## Design
+
+The dashboard UI in `status-app/` follows `status-app/DESIGN.md` (dark token
+system). UI work in this folder and in `status-app/` must follow the AGENTS.md
+guides next to those files.
+
+For window-chrome QA without the OS Screen Recording permission, run the app
+binary with `CHROMUX_STATUS_WINDOW_SNAPSHOT=<path-prefix>`; after the dashboard
+loads it writes `<prefix>-chrome.png` (window frame including titlebar) and
+`<prefix>-content.png` (rendered dashboard).

@@ -187,7 +187,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     }
 
     private func updateStatus(_ text: String) {
-        statusLine.title = text.isEmpty ? "chromux status" : text
+        // Keep the status line to one short readable line.
+        let firstLine = text.split(separator: "\n").first.map(String.init) ?? ""
+        let compact = firstLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        statusLine.title = compact.isEmpty ? "chromux status" : String(compact.prefix(80))
     }
 
     private func replaceProfileMenuItems(with items: [NSMenuItem]) {
@@ -212,27 +215,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         replaceProfileMenuItems(with: disabledProfileItems(["Loading profiles..."]))
 
         URLSession.shared.dataTask(with: stateURL) { [weak self] data, _, error in
-            let titles: [String]
+            var messages: [String]?
+            var activeProfiles: [ProfileState] = []
             if let error {
-                titles = ["Profiles unavailable: \(error.localizedDescription)"]
+                messages = ["Profiles unavailable: \(error.localizedDescription)"]
             } else if let data, let state = try? JSONDecoder().decode(StatusState.self, from: data) {
-                let activeProfiles = state.profiles
+                activeProfiles = state.profiles
                     .filter { $0.isActive }
                     .sorted {
                         if $0.status == $1.status { return $0.name.localizedStandardCompare($1.name) == .orderedAscending }
                         return $0.status == "running"
                     }
                 if activeProfiles.isEmpty {
-                    titles = ["No active profiles"]
-                } else {
-                    titles = ["Active Profiles"] + activeProfiles.map(\.menuTitle)
+                    messages = ["No active profiles"]
                 }
             } else {
-                titles = ["Profiles unavailable: invalid server response"]
+                messages = ["Profiles unavailable: invalid server response"]
             }
 
             DispatchQueue.main.async {
-                self?.replaceProfileMenuItems(with: self?.disabledProfileItems(titles) ?? [])
+                guard let self else { return }
+                if let messages {
+                    self.replaceProfileMenuItems(with: self.disabledProfileItems(messages))
+                } else {
+                    self.replaceProfileMenuItems(with: self.activeProfileItems(activeProfiles))
+                }
             }
         }.resume()
     }
@@ -241,17 +248,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         titles.map { title in
             let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
             item.isEnabled = false
-            if title == "Active Profiles" {
-                item.attributedTitle = NSAttributedString(
-                    string: title,
-                    attributes: [
-                        .font: NSFont.menuBarFont(ofSize: 0).withSize(11),
-                        .foregroundColor: NSColor.secondaryLabelColor,
-                    ]
-                )
-            }
             return item
         }
+    }
+
+    private func activeProfileItems(_ profiles: [ProfileState]) -> [NSMenuItem] {
+        let header = NSMenuItem(title: "Active Profiles", action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        header.attributedTitle = NSAttributedString(
+            string: "Active Profiles",
+            attributes: [
+                .font: NSFont.menuBarFont(ofSize: 0).withSize(11),
+                .foregroundColor: NSColor.secondaryLabelColor,
+            ]
+        )
+
+        let rows = profiles.map { profile in
+            let item = NSMenuItem(title: profile.menuTitle, action: #selector(openDashboard), keyEquivalent: "")
+            item.target = self
+            item.toolTip = "Open the chromux dashboard"
+            return item
+        }
+        log("active profile menu: \(rows.count) clickable item(s) wired to openDashboard")
+        return [header] + rows
     }
 
     private func stopServer() {
@@ -272,9 +291,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         }
 
         if window == nil {
+            // Match the dashboard canvas color from status-app/DESIGN.md (#010102)
+            // so no light chrome or white flash frames the dark page.
+            let canvas = NSColor(srgbRed: 1.0 / 255.0, green: 1.0 / 255.0, blue: 2.0 / 255.0, alpha: 1.0)
+
             let config = WKWebViewConfiguration()
             let web = WKWebView(frame: NSRect(x: 0, y: 0, width: 1120, height: 760), configuration: config)
             web.navigationDelegate = self
+            web.underPageBackgroundColor = canvas
             webView = web
 
             let win = NSWindow(
@@ -284,10 +308,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
                 defer: false
             )
             win.title = "chromux status"
+            win.appearance = NSAppearance(named: .darkAqua)
+            win.backgroundColor = canvas
+            win.titlebarAppearsTransparent = true
             win.contentView = web
             win.center()
             window = win
-            log("dashboard window ready")
+            log("dashboard window ready: background=\(canvas.description), appearance=\(win.appearance?.name.rawValue ?? "default"), titlebarTransparent=\(win.titlebarAppearsTransparent)")
         }
 
         loadDashboardIfVisible()
@@ -299,6 +326,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         guard let url = serverURL, let webView else { return }
         if webView.url != url {
             webView.load(URLRequest(url: url))
+        }
+    }
+
+    // QA hook: CHROMUX_STATUS_WINDOW_SNAPSHOT=<path-prefix> writes
+    // <prefix>-chrome.png (window frame incl. titlebar) and
+    // <prefix>-content.png (rendered dashboard) after load, without needing
+    // the OS Screen Recording permission.
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        guard let base = ProcessInfo.processInfo.environment["CHROMUX_STATUS_WINDOW_SNAPSHOT"], !base.isEmpty else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            self?.writeWindowSnapshots(basePath: base)
+        }
+    }
+
+    private func writeWindowSnapshots(basePath: String) {
+        guard let window, let webView else { return }
+        if let frameView = window.contentView?.superview,
+           let rep = frameView.bitmapImageRepForCachingDisplay(in: frameView.bounds) {
+            frameView.cacheDisplay(in: frameView.bounds, to: rep)
+            if let data = rep.representation(using: .png, properties: [:]) {
+                try? data.write(to: URL(fileURLWithPath: basePath + "-chrome.png"))
+                log("window chrome snapshot written: \(basePath)-chrome.png")
+            }
+        }
+        webView.takeSnapshot(with: WKSnapshotConfiguration()) { [weak self] image, _ in
+            guard let self, let image, let tiff = image.tiffRepresentation,
+                  let rep = NSBitmapImageRep(data: tiff),
+                  let data = rep.representation(using: .png, properties: [:]) else { return }
+            try? data.write(to: URL(fileURLWithPath: basePath + "-content.png"))
+            self.log("web content snapshot written: \(basePath)-content.png")
         }
     }
 
