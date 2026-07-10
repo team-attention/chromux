@@ -332,6 +332,22 @@ check "fill sets input value" "Filled Value" "$FILL_STATE"
 FILL_CHANGE_OK=$(CHROMUX_PROFILE=$PROFILE node "$CT" eval tab-input "window.changeCount > 0" 2>/dev/null)
 check "fill dispatches change event" "true" "$FILL_CHANGE_OK"
 
+# Snapshot must never leak typed password values.
+PASS_HTML='<input id="user" aria-label="User"><input id="pw" type="password" placeholder="Password">'
+PASS_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$PASS_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-password "$PASS_URL" 2>/dev/null > /dev/null
+CHROMUX_PROFILE=$PROFILE node "$CT" fill tab-password "#pw" "hunter2secret" 2>/dev/null > /dev/null
+PASS_SNAP=$(CHROMUX_PROFILE=$PROFILE node "$CT" snapshot tab-password 2>/dev/null)
+check "password snapshot keeps placeholder" "Password" "$PASS_SNAP"
+if echo "$PASS_SNAP" | grep -q "hunter2secret"; then
+  echo "  ✗ snapshot leaked password value"
+  FAIL=$((FAIL+1))
+else
+  echo "  ✓ snapshot does not leak password value"
+  PASS=$((PASS+1))
+fi
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-password 2>/dev/null > /dev/null
+
 # --- Test 5c.1b: snapshot --interactive filter ---
 echo ""
 echo "--- Test 5c.1b: snapshot --interactive filter ---"
@@ -408,11 +424,15 @@ CHROMUX_PROFILE=$PROFILE node "$CT" press tab-press Backspace 2>/dev/null > /dev
 CHROMUX_PROFILE=$PROFILE node "$CT" press tab-press Enter 2>/dev/null > /dev/null
 CHROMUX_PROFILE=$PROFILE node "$CT" press tab-press Tab 2>/dev/null > /dev/null
 CHROMUX_PROFILE=$PROFILE node "$CT" press tab-press Escape 2>/dev/null > /dev/null
+CHROMUX_PROFILE=$PROFILE node "$CT" press tab-press ArrowDown 2>/dev/null > /dev/null
+CHROMUX_PROFILE=$PROFILE node "$CT" press tab-press Home 2>/dev/null > /dev/null
 PRESS_STATE=$(CHROMUX_PROFILE=$PROFILE node "$CT" eval tab-press "JSON.stringify({value:document.getElementById('first').value,active:document.activeElement.id,keys:window.keys})" 2>/dev/null)
 check "press Backspace edits focused input" '"value":"ab"' "$PRESS_STATE"
 check "press Tab moves focus" '"active":"second"' "$PRESS_STATE"
 check "press Enter recorded" "Enter" "$PRESS_STATE"
 check "press Escape recorded" "Escape" "$PRESS_STATE"
+check "press ArrowDown recorded" "ArrowDown" "$PRESS_STATE"
+check "press Home recorded" "Home" "$PRESS_STATE"
 WAIT_TEXT=$(CHROMUX_PROFILE=$PROFILE node "$CT" wait-for-text tab-press "Ready Text" 2000 2>/dev/null)
 check "wait-for-text reports success" "Ready Text" "$WAIT_TEXT"
 WAIT_SELECTOR=$(CHROMUX_PROFILE=$PROFILE node "$CT" wait-for-selector tab-press "#ready" 2000 2>/dev/null)

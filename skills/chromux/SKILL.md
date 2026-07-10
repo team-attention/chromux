@@ -74,8 +74,9 @@ Run `chromux help` for exact syntax. The day-to-day mental model is:
   are convenience shortcuts for visible interaction and observable UI state.
   For a known multi-step sequence, prefer a single `run` call over many separate
   shortcut commands — it collapses several agent round-trips into one.
-- `type` inserts literal text into the focused field. Use `press` for Enter,
-  Tab, Escape, and Backspace.
+- `type` inserts literal text into the focused field. Use `press` for special
+  keys: Enter, Tab, Escape, Backspace, Delete, the arrow keys, Home, End,
+  PageUp, and PageDown (arrow keys drive dropdowns and autocomplete lists).
 - `run` executes multi-step async JavaScript with `cdp`, `js`, `sleep`,
   `waitLoad`, `page(expr?)`, `waitFor(...)`, and `assertPage(...)` helpers.
   Use `run --receipt PATH` when a flow needs redacted local timing and replay

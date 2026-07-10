@@ -302,7 +302,7 @@ chromux cdp s Runtime.evaluate '{"expression":"navigator.userAgent","returnByVal
 | `click <session> --xy X Y` | Click validated viewport coordinates via CDP mouse events |
 | `fill <session> @<ref> "text"` | Fill input field |
 | `type <session> "text"` | Insert text into the focused field |
-| `press <session> <Enter\|Tab\|Escape\|Backspace>` | Press a supported special key |
+| `press <session> <key>` | Press a supported special key: Enter, Tab, Escape, Backspace, Delete, ArrowUp/Down/Left/Right, Home, End, PageUp, PageDown |
 | `wait-for-text <session> "text" [timeout-ms]` | Wait until page text appears |
 | `wait-for-selector <session> "selector" [timeout-ms]` | Wait until a selector is visible |
 | `screenshot <session> [path]` | Take PNG screenshot |

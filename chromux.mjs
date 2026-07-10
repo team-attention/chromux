@@ -199,6 +199,22 @@ function siteKnowledgeHostChain(host) {
   return chain;
 }
 
+// Read all note files for a host and its parent domains, oldest-label first.
+function readSiteNotesForHostChain(host) {
+  const notes = [];
+  for (const h of siteKnowledgeHostChain(host)) {
+    const dir = path.join(CHROMUX_HOME, 'skills', h);
+    let files = [];
+    try { files = fs.readdirSync(dir).filter(f => f.endsWith('.md')).sort(); } catch { continue; }
+    for (const f of files) {
+      try {
+        notes.push({ label: `${h}/${f}`, content: fs.readFileSync(path.join(dir, f), 'utf8').trim() });
+      } catch {}
+    }
+  }
+  return notes;
+}
+
 function siteKnowledgeHintForUrl(rawUrl) {
   const host = hostFromUrl(rawUrl);
   if (!host) return null;
@@ -1352,6 +1368,8 @@ const SNAPSHOT_JS = `((FILTER) => {
     const tag = el.tagName.toLowerCase();
     const aria = el.getAttribute('aria-label');
     if (aria) return aria;
+    // Never leak typed secrets into snapshot text.
+    if (tag === 'input' && el.type === 'password') return el.placeholder || '';
     if (tag === 'input' || tag === 'textarea') return el.value || el.placeholder || '';
     if (tag === 'img') return el.alt || '';
     let text = '';
@@ -1560,7 +1578,37 @@ const KEY_DEFS = {
   Tab: { key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9, nativeVirtualKeyCode: 9 },
   Escape: { key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 },
   Backspace: { key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8, nativeVirtualKeyCode: 8 },
+  Delete: { key: 'Delete', code: 'Delete', windowsVirtualKeyCode: 46, nativeVirtualKeyCode: 46 },
+  ArrowUp: { key: 'ArrowUp', code: 'ArrowUp', windowsVirtualKeyCode: 38, nativeVirtualKeyCode: 38 },
+  ArrowDown: { key: 'ArrowDown', code: 'ArrowDown', windowsVirtualKeyCode: 40, nativeVirtualKeyCode: 40 },
+  ArrowLeft: { key: 'ArrowLeft', code: 'ArrowLeft', windowsVirtualKeyCode: 37, nativeVirtualKeyCode: 37 },
+  ArrowRight: { key: 'ArrowRight', code: 'ArrowRight', windowsVirtualKeyCode: 39, nativeVirtualKeyCode: 39 },
+  Home: { key: 'Home', code: 'Home', windowsVirtualKeyCode: 36, nativeVirtualKeyCode: 36 },
+  End: { key: 'End', code: 'End', windowsVirtualKeyCode: 35, nativeVirtualKeyCode: 35 },
+  PageUp: { key: 'PageUp', code: 'PageUp', windowsVirtualKeyCode: 33, nativeVirtualKeyCode: 33 },
+  PageDown: { key: 'PageDown', code: 'PageDown', windowsVirtualKeyCode: 34, nativeVirtualKeyCode: 34 },
 };
+
+/** Translate a snapshot @ref handle into its data-ct-ref attribute selector. */
+function refToSelector(selector) {
+  return selector.startsWith('@') ? `[data-ct-ref="${selector.slice(1)}"]` : selector;
+}
+
+// Shared page-side probe expressions for wait-for-text / wait-for-selector and
+// the run() waitFor helper, so all wait paths agree on what "visible" means.
+function textIncludesExpression(text) {
+  return `document.body ? document.body.innerText.includes(${JSON.stringify(String(text))}) : false`;
+}
+
+function selectorVisibleExpression(selector) {
+  return `((sel) => {
+    const el = document.querySelector(sel);
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+  })(${JSON.stringify(String(selector))})`;
+}
 
 async function pressKey(cdp, key) {
   const def = KEY_DEFS[key];
@@ -1755,14 +1803,8 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     // including parent-domain notes (search.naver.com also reads naver.com).
     try {
       const knowledgeHint = siteKnowledgeHintForUrl(result.url);
-      const hints = [];
-      for (const h of siteKnowledgeHostChain(knowledgeHint?.host)) {
-        const dir = path.join(CHROMUX_HOME, 'skills', h);
-        if (!fs.existsSync(dir)) continue;
-        for (const f of fs.readdirSync(dir).filter(f => f.endsWith('.md')).sort()) {
-          hints.push(`# Hint: ${h}/${f}\n` + fs.readFileSync(path.join(dir, f), 'utf8').trim());
-        }
-      }
+      const hints = readSiteNotesForHostChain(knowledgeHint?.host)
+        .map(note => `# Hint: ${note.label}\n${note.content}`);
       if (hints.length) result.hints = hints.join('\n\n');
     } catch {}
     return result;
@@ -1873,15 +1915,9 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
             return { kind, timeoutMs: timeout };
           }
           const expression = kind === 'text'
-            ? `document.body ? document.body.innerText.includes(${JSON.stringify(String(value))}) : false`
+            ? textIncludesExpression(value)
             : kind === 'selector'
-              ? `((sel) => {
-                  const el = document.querySelector(sel);
-                  if (!el) return false;
-                  const style = getComputedStyle(el);
-                  const rect = el.getBoundingClientRect();
-                  return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
-                })(${JSON.stringify(String(value))})`
+              ? selectorVisibleExpression(value)
               : String(value);
           lastValue = await evalJs(expression, Math.min(timeout + 1000, 30000));
           if (lastValue === true || (kind === 'expression' && options.truthy !== false && Boolean(lastValue))) {
@@ -1945,9 +1981,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
       return { clicked: { xy: [x, y], button, clicks: clickCount } };
     }
     if (!selector) throw httpErr(400, 'selector or xy required');
-    const sel = selector.startsWith('@')
-      ? `[data-ct-ref="${selector.slice(1)}"]`
-      : selector;
+    const sel = refToSelector(selector);
     await s.cdp.send('Page.bringToFront', {});
     const r = await s.cdp.send('Runtime.evaluate', {
       expression: `((sel) => {
@@ -2006,9 +2040,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     const { session, selector, text } = body;
     const s = getSession(sessions, session);
     touchSession(s);
-    const sel = selector.startsWith('@')
-      ? `[data-ct-ref="${selector.slice(1)}"]`
-      : selector;
+    const sel = refToSelector(selector);
     const r = await s.cdp.send('Runtime.evaluate', {
       expression: `((sel, txt) => {
         const el = document.querySelector(sel);
@@ -2071,14 +2103,8 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     let lastError = null;
     while (Date.now() <= deadline) {
       const expression = isTextWait
-        ? `document.body ? document.body.innerText.includes(${JSON.stringify(needle)}) : false`
-        : `((sel) => {
-            const el = document.querySelector(sel);
-            if (!el) return false;
-            const style = getComputedStyle(el);
-            const rect = el.getBoundingClientRect();
-            return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
-          })(${JSON.stringify(needle)})`;
+        ? textIncludesExpression(needle)
+        : selectorVisibleExpression(needle);
       const r = await s.cdp.send('Runtime.evaluate', {
         expression,
         returnByValue: true,
@@ -2198,7 +2224,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     const resolved = path.resolve(p);
     const realResolved = fs.realpathSync(path.dirname(resolved)) + path.sep + path.basename(resolved);
     const allowedBases = ['/tmp', '/private/tmp', os.tmpdir(), os.homedir()];
-    if (!allowedBases.some(base => realResolved.startsWith(base + path.sep) || realResolved.startsWith(base))) {
+    if (!allowedBases.some(base => pathWithinBase(realResolved, base))) {
       throw httpErr(400, `Screenshot path not allowed: ${resolved}`);
     }
     fs.writeFileSync(resolved, Buffer.from(r.data, 'base64'));
@@ -2780,17 +2806,9 @@ async function cmdNote(args) {
     return;
   }
   // Show notes for the host, including parent-domain notes.
-  let shown = 0;
-  for (const h of siteKnowledgeHostChain(host)) {
-    const dir = path.join(skillsRoot, h);
-    let files = [];
-    try { files = fs.readdirSync(dir).filter(f => f.endsWith('.md')).sort(); } catch { continue; }
-    for (const f of files) {
-      console.log(`# ${h}/${f}\n${fs.readFileSync(path.join(dir, f), 'utf8').trim()}\n`);
-      shown++;
-    }
-  }
-  if (!shown) console.log(`No notes for ${host}. Add one: chromux note ${host} --add "durable finding"`);
+  const notes = readSiteNotesForHostChain(host);
+  for (const note of notes) console.log(`# ${note.label}\n${note.content}\n`);
+  if (!notes.length) console.log(`No notes for ${host}. Add one: chromux note ${host} --add "durable finding"`);
 }
 
 // After close/kill, if this session/profile hit failures on hosts that have no
@@ -2862,6 +2880,22 @@ function cmdResume(profileName) {
 // CLI client (talks to the profile daemon endpoint)
 // ============================================================
 
+/** Remove `<flag> <value>` from args and return the value (null when absent). */
+function takeFlagValue(args, flag, { required = 'a value' } = {}) {
+  const idx = args.indexOf(flag);
+  if (idx < 0) return null;
+  const value = args[idx + 1];
+  if (value == null) { console.error(`${flag} requires ${required}`); process.exit(1); }
+  args.splice(idx, 2);
+  return value;
+}
+
+/** Remove `--timeout <ms>` from args and return the parsed number (undefined when absent). */
+function takeTimeoutFlag(args) {
+  const raw = takeFlagValue(args, '--timeout', { required: 'a millisecond value' });
+  return raw == null ? undefined : parseInt(raw);
+}
+
 /**
  * eval — supports literal arg, --file <path>, or stdin (`-`), with --timeout <ms>.
  * Examples:
@@ -2873,9 +2907,7 @@ function cmdResume(profileName) {
 async function cmdEval(args, sock) {
   if (!args[0]) { console.error('Usage: chromux eval <session> <code|--file PATH|-> [--timeout MS] [--no-iife]'); process.exit(1); }
   const session = args[0];
-  let timeoutMs;
-  const tIdx = args.indexOf('--timeout');
-  if (tIdx >= 0) { timeoutMs = parseInt(args[tIdx + 1]); args.splice(tIdx, 2); }
+  const timeoutMs = takeTimeoutFlag(args);
   const noIife = args.includes('--no-iife');
   if (noIife) args.splice(args.indexOf('--no-iife'), 1);
   let code;
@@ -3051,19 +3083,8 @@ function buildRunReceipt({ session, codeSource, timeoutMs, startedAt, endedAt, r
 }
 
 function readCodeArg(args, usage) {
-  let timeoutMs;
-  const tIdx = args.indexOf('--timeout');
-  if (tIdx >= 0) {
-    timeoutMs = parseInt(args[tIdx + 1]);
-    args.splice(tIdx, 2);
-  }
-  let receiptPath = null;
-  const receiptIdx = args.indexOf('--receipt');
-  if (receiptIdx >= 0) {
-    receiptPath = args[receiptIdx + 1];
-    if (!receiptPath) { console.error('--receipt requires a path'); process.exit(1); }
-    args.splice(receiptIdx, 2);
-  }
+  const timeoutMs = takeTimeoutFlag(args);
+  const receiptPath = takeFlagValue(args, '--receipt', { required: 'a path' });
   const session = args[0];
   if (!session) { console.error(usage); process.exit(1); }
   let code;
@@ -3091,19 +3112,10 @@ async function cmdRun(args, sock) {
   let receiptPath = null;
   let codeSource;
   if (args.includes('--page-file')) {
-    const receiptIdx = args.indexOf('--receipt');
-    if (receiptIdx >= 0) {
-      receiptPath = args[receiptIdx + 1];
-      if (!receiptPath) { console.error('--receipt requires a path'); process.exit(1); }
-      args.splice(receiptIdx, 2);
-    }
-    const pfIdx = args.indexOf('--page-file');
-    const p = args[pfIdx + 1];
-    if (!p) { console.error('--page-file requires a path'); process.exit(1); }
+    receiptPath = takeFlagValue(args, '--receipt', { required: 'a path' });
+    const p = takeFlagValue(args, '--page-file', { required: 'a path' });
     const pageCode = fs.readFileSync(p, 'utf8');
-    args.splice(pfIdx, 2);
-    const tIdx = args.indexOf('--timeout');
-    if (tIdx >= 0) { timeoutMs = parseInt(args[tIdx + 1]); args.splice(tIdx, 2); }
+    timeoutMs = takeTimeoutFlag(args);
     session = args[0];
     if (!session) { console.error('Usage: chromux run <session> --page-file PATH [--timeout MS] [--receipt PATH]'); process.exit(1); }
     code = `return await js(${JSON.stringify(pageCode)});`;
@@ -3361,18 +3373,11 @@ async function cmdCdp(args, sock) {
     console.error('Usage: chromux cdp <session> <Method> <params-json|--params-file PATH> [--timeout MS]');
     process.exit(1);
   }
-  let timeoutMs;
-  const tIdx = args.indexOf('--timeout');
-  if (tIdx >= 0) {
-    timeoutMs = parseInt(args[tIdx + 1]);
-    args.splice(tIdx, 2);
-  }
+  const timeoutMs = takeTimeoutFlag(args);
   let params = {};
-  const fIdx = args.indexOf('--params-file');
-  if (fIdx >= 0) {
-    const p = args[fIdx + 1];
-    if (!p) { console.error('--params-file requires a path'); process.exit(1); }
-    params = parseJsonArg(fs.readFileSync(p, 'utf8'), '--params-file');
+  const paramsFile = takeFlagValue(args, '--params-file', { required: 'a path' });
+  if (paramsFile) {
+    params = parseJsonArg(fs.readFileSync(paramsFile, 'utf8'), '--params-file');
   } else if (args[2]) {
     params = parseJsonArg(args[2], 'params-json');
   }
@@ -3403,7 +3408,7 @@ async function cmdClick(args, sock) {
 async function cmdPress(args, sock) {
   const session = args[0];
   const key = args[1];
-  if (!session || !key) { console.error('Usage: chromux press <session> <Enter|Tab|Escape|Backspace>'); process.exit(1); }
+  if (!session || !key) { console.error(`Usage: chromux press <session> <${Object.keys(KEY_DEFS).join('|')}>`); process.exit(1); }
   return cliReq('POST', '/press', { session, key }, sock);
 }
 
@@ -3501,11 +3506,10 @@ async function resolveProfilePort(profileName) {
   return runtime?.status === 'running' ? runtime.port : null;
 }
 
-async function ensureDaemon(profileName) {
-  let endpoint = daemonEndpointFromState(readState(profileName));
-  const desiredMode = getMode();
-
-  // Check if daemon already running (short timeout to fail fast)
+// Probe the recorded daemon endpoint: reuse it when healthy and in the desired
+// mode, otherwise stop the mismatched daemon and clear its endpoint state.
+async function reuseHealthyDaemon(profileName, desiredMode) {
+  const endpoint = daemonEndpointFromState(readState(profileName));
   try {
     const health = await cliReq('GET', '/health', null, endpoint, 3000);
     if (endpoint?.type === 'tcp' && (!health.mode || health.mode === desiredMode)) return endpoint;
@@ -3513,20 +3517,23 @@ async function ensureDaemon(profileName) {
     await waitForEndpointGone(endpoint, 3000);
     clearDaemonEndpointState(profileName);
   } catch {}
+  return null;
+}
+
+async function ensureDaemon(profileName) {
+  const desiredMode = getMode();
+
+  // Check if daemon already running (short timeout to fail fast)
+  let endpoint = await reuseHealthyDaemon(profileName, desiredMode);
+  if (endpoint) return endpoint;
 
   // Acquire lockfile to prevent concurrent daemon starts (CR-008)
   const lockFile = path.join(RUN_DIR, `${profileName}.lock`);
   const lockFd = await acquireLock(lockFile);
   try {
     // Re-check after lock — another process may have started it
-    endpoint = daemonEndpointFromState(readState(profileName));
-    try {
-      const health = await cliReq('GET', '/health', null, endpoint, 3000);
-      if (endpoint?.type === 'tcp' && (!health.mode || health.mode === desiredMode)) return endpoint;
-      await cliReq('POST', '/stop', {}, endpoint, 3000).catch(() => {});
-      await waitForEndpointGone(endpoint, 3000);
-      clearDaemonEndpointState(profileName);
-    } catch {}
+    endpoint = await reuseHealthyDaemon(profileName, desiredMode);
+    if (endpoint) return endpoint;
 
     // Clean up stale legacy socket only while holding the startup lock. During
     // concurrent cold-start, another CLI may be starting the daemon; deleting
@@ -3605,10 +3612,10 @@ function sanitizeActivityArgs(cmd, args) {
   if (cmd === 'fill') return copy.map((arg, i) => i >= 2 ? '[redacted-text]' : arg);
   if (cmd === 'type') return copy.map((arg, i) => i >= 1 ? '[redacted-text]' : arg);
   if (cmd === 'run' || cmd === 'eval') {
+    const passthroughFlags = new Set(['--file', '--page-file', '--timeout', '--receipt']);
     return copy.map((arg, i) => {
       if (i <= 0) return arg;
-      if (arg === '-' || arg === '--file' || copy[i - 1] === '--file' || arg === '--timeout' || copy[i - 1] === '--timeout' || arg === '--receipt' || copy[i - 1] === '--receipt') return arg;
-      if (arg === '--no-iife') return arg;
+      if (arg === '-' || arg === '--no-iife' || passthroughFlags.has(arg) || passthroughFlags.has(copy[i - 1])) return arg;
       return '[code]';
     });
   }
@@ -4318,7 +4325,8 @@ Convenience shortcuts:
   chromux click <session> --xy X Y   Click by viewport coordinates
   chromux fill <session> @<ref> "t"  Fill input field
   chromux type <session> "text"      Insert text into focused field
-  chromux press <session> Enter      Press Enter, Tab, Escape, or Backspace
+  chromux press <session> Enter      Press Enter, Tab, Escape, Backspace, Delete,
+                                     arrows, Home, End, PageUp, or PageDown
   chromux wait-for-text <s> "text"   Wait for visible page text
   chromux wait-for-selector <s> SEL  Wait for visible selector
   chromux screenshot <session> [p]   Take PNG screenshot
