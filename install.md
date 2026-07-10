@@ -103,7 +103,11 @@ if ! grep -Fq '<!-- chromux-browser-guide:start -->' "$HOME/.claude/CLAUDE.md" &
 fi
 
 if [ "$(uname -s)" = "Darwin" ]; then
-  ./apps/macos-status-bar/install-release-app.sh
+  if xcrun --find swiftc >/dev/null 2>&1; then
+    ./apps/macos-status-bar/install-app.sh
+  else
+    ./apps/macos-status-bar/install-release-app.sh
+  fi
 fi
 ```
 
@@ -167,8 +171,22 @@ It sorts active profiles first, filters profiles by name/status, and can
 bulk-delete selected local profile directories. The app does not require
 Electron, Playwright, Puppeteer, Python, an account, or an external service.
 
-On macOS, install the menu bar app from a GitHub Release when you want a
-double-clickable app:
+On macOS, install the menu bar app to `/Applications` when you want a
+double-clickable app that Spotlight and Launchpad can find. From a repo
+checkout with the Xcode Command Line Tools, build and install the current
+sources (recommended; the GitHub Release app can lag the repo):
+
+```bash
+./apps/macos-status-bar/install-app.sh
+```
+
+The from-source installer asks before building, copies `chromux.app` to
+`/Applications/chromux.app`, registers it with LaunchServices so Spotlight
+indexes it immediately, and launches it.
+Pass `--yes` for non-interactive installs and `--no-open` to skip the launch.
+
+Without the Xcode Command Line Tools, install the latest GitHub Release app
+instead:
 
 ```bash
 ./apps/macos-status-bar/install-release-app.sh
@@ -191,7 +209,8 @@ Use the checkout install above for terminal and agent usage.
 If the download is unsigned and macOS blocks the first launch, use Control-click
 > Open or approve it in System Settings > Privacy & Security.
 
-From a repo checkout, build the same native wrapper locally:
+For a quick dev loop without installing, build and launch the wrapper from
+`dist/`:
 
 ```bash
 ./apps/macos-status-bar/build.sh
@@ -200,7 +219,8 @@ open "apps/macos-status-bar/dist/chromux.app"
 
 The wrapper creates a `cx` menu bar item, starts the local `chromux app` server,
 opens the dashboard in a WebKit window, and shows currently active profiles in
-the `cx` menu when it opens.
+the `cx` menu when it opens. Its menu includes a "Launch at Login" toggle so
+the status item is always present after login.
 
 If you use pnpm globally, this also works:
 

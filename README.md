@@ -140,9 +140,9 @@ CHROMUX_TASK=research-pass chromux open agent-d https://example.com
 # Open the local profile/activity companion app
 chromux app --open
 
-# Build and launch the native macOS app from a checkout (macOS only)
-./apps/macos-status-bar/build.sh
-open "apps/macos-status-bar/dist/chromux.app"
+# Build and install the native macOS app into /Applications (macOS only),
+# so Spotlight and Launchpad can find it
+./apps/macos-status-bar/install-app.sh
 
 # Each operates independently
 chromux snapshot agent-a
@@ -751,7 +751,15 @@ The one-pass installer in `install.md` asks macOS users whether to download the
 latest release app, copy it to `/Applications/chromux.app`, and launch it. If
 `/Applications` is not writable, it falls back to `~/Applications/chromux.app`.
 
-From a repo checkout, build and launch the same native wrapper locally:
+From a repo checkout, build and install the same native wrapper into
+`/Applications` so Spotlight and Launchpad can find it (requires the Xcode
+Command Line Tools):
+
+```bash
+./apps/macos-status-bar/install-app.sh
+```
+
+For a quick dev loop without installing, build and launch from `dist/`:
 
 ```bash
 ./apps/macos-status-bar/build.sh
@@ -767,8 +775,8 @@ ls apps/macos-status-bar/release/
 
 The wrapper adds a `cx` item to the macOS status bar, starts the same local
 dashboard server, and exposes menu actions for opening the dashboard, opening it
-in a browser, restarting the server, and quitting. The `cx` menu also refreshes
-and shows currently active profiles when it opens.
+in a browser, restarting the server, toggling Launch at Login, and quitting.
+The `cx` menu also refreshes and shows currently active profiles when it opens.
 
 ## License
 

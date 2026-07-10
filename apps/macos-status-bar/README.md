@@ -19,6 +19,30 @@ Node from `CHROMUX_NODE`, common Homebrew/system paths, and then `PATH`.
 open "apps/macos-status-bar/dist/chromux.app"
 ```
 
+## Install From Checkout
+
+Build and install the app to `/Applications` so Spotlight and Launchpad can
+find and launch it:
+
+```bash
+./apps/macos-status-bar/install-app.sh
+```
+
+The installer asks before building; pass `--yes` for non-interactive installs
+and `--no-open` to skip launching the app afterwards. If `/Applications` is not
+writable, it falls back to `~/Applications/chromux.app`. Building requires the
+Xcode Command Line Tools (`swiftc`).
+
+## App Icon
+
+The bundle ships `assets/chromux.icns`, generated from
+`assets/logo/chromux-app-icon.svg` at the repo root. Regenerate it after icon
+changes (requires local Google Chrome for the SVG render):
+
+```bash
+./apps/macos-status-bar/make-icon.sh
+```
+
 ## Release Package
 
 Build a zipped app bundle for GitHub Releases from macOS:
@@ -67,6 +91,8 @@ from a checkout when you want terminal or agent usage.
   while at least one profile is selected.
 - Provides menu items for opening the dashboard, opening the URL in a browser,
   restarting the local server, and quitting.
+- Provides a "Launch at Login" toggle (macOS 13+ `SMAppService`) so the menu
+  bar item is always present after login.
 - Stops the local server process on quit.
 
 ## Design
