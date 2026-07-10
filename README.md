@@ -2,13 +2,12 @@
 
 > **tmux for Chrome tabs.** Turn the Chrome you already use — logins, cookies, history and all — into a fleet of parallel, agent-driveable browser sessions. Raw CDP, zero dependencies, zero model calls to replay.
 
-[![npm](https://img.shields.io/npm/v/@team-attention/chromux)](https://www.npmjs.com/package/@team-attention/chromux)
 ![node](https://img.shields.io/badge/node-%3E%3D22-brightgreen)
 ![dependencies](https://img.shields.io/badge/runtime_deps-0-blue)
 ![license](https://img.shields.io/badge/license-MIT-black)
 
 ```bash
-npm i -g @team-attention/chromux
+git clone https://github.com/team-attention/chromux && cd chromux && npm install -g .
 
 chromux open inbox https://mail.example.com     # your real Chrome — already logged in
 chromux snapshot inbox --interactive            # page structure with @refs, ~36 tokens

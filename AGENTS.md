@@ -66,14 +66,18 @@ egress, the suite still runs fully with three adjustments:
 
 ## Release / Publish
 
-Publishing is handled by `.github/workflows/npm-publish.yml` on pushes to
-`main` and by manual `workflow_dispatch`. The workflow validates the package,
-checks whether the exact `package.json` version is already present on npm, and
-then runs `npm publish --provenance` with the repository `NPM_TOKEN` secret.
+Automatic npm publishing is **disabled** (removed in commit `77fe76e`;
+`.github/workflows/npm-publish.yml` no longer exists — treat any doc that says
+merging to `main` publishes as stale). `.github/workflows/ci.yml` validates
+pull requests and pushes; it does not publish. The canonical install path is a
+repo checkout plus `npm install -g .` (see `install.md`); the npm registry
+package lags the repo and is only updated by an explicit, user-requested
+release.
 
-Before pushing a publishable change, bump `package.json` to a version that is not
-already published. Do not publish manually from a local machine unless the user
-explicitly asks for it; the repo workflow is the deployment path.
+Before pushing a change intended for a future release, still bump
+`package.json` to an unpublished version — it keeps versions meaningful and a
+later manual `npm publish` one command away. Never run `npm publish` unless
+the user explicitly asks for a package release.
 
 ## Pre-Publish Checklist
 
@@ -82,18 +86,16 @@ Before committing, pushing, tagging, or publishing a final chromux change:
 - Run `git status --short` and confirm the staged files are only the intended
   repo changes.
 - Bump `package.json` `version` (patch for bug fixes, minor for new features,
-  major for breaking CLI changes). `.github/workflows/npm-publish.yml` runs on
-  every push to `main` and will fail with `<pkg>@<version> is already published`
-  if the version was not bumped — so the bump is a release gate, not just
-  hygiene. Bumping in the same PR as the change keeps the publish trigger
-  one merge away.
+  major for breaking CLI changes) so versions stay meaningful and a later
+  explicit release is one command away. Merging to `main` does NOT publish;
+  see Release / Publish above.
 - Run `node chromux.mjs help` and confirm the documented public command surface
   matches the CLI output.
 - Run `./test.sh` for behavioral coverage.
 - Run `npm pack --dry-run` and confirm the tarball contains only the package
   allowlist from `package.json`.
-- For publishable fixes, bump `package.json` before pushing; the GitHub Actions
-  workflow publishes on `main` when the version is new.
+- npm releases happen only when the user explicitly asks; until then the repo
+  checkout (`npm install -g .`) is the supported install.
 - If behavior changed, update the matching docs and skills in the same change:
   `README.md`, `install.md`, `skills/chromux/`, and `skills/chromux-work/`.
 - Before finalizing, read `install.md` and the relevant files under `skills/`
