@@ -38,12 +38,13 @@ const fillOne = async (sel, val) => js(`((sel, txt) => {
     if (!match) throw new Error('No option matching "' + txt + '" in ' + sel);
     const setter = Object.getOwnPropertyDescriptor(view.HTMLSelectElement.prototype, 'value')?.set;
     if (setter) setter.call(el, match.value); else el.value = match.value;
+    el.dispatchEvent(new view.Event('input', { bubbles: true }));
   } else {
     if (!('value' in el)) throw new Error('Field is not fillable via value: ' + sel);
     const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value')?.set;
     if (setter) setter.call(el, txt); else el.value = txt;
+    el.dispatchEvent(new view.InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: txt }));
   }
-  el.dispatchEvent(new view.Event('input', { bubbles: true }));
   el.dispatchEvent(new view.Event('change', { bubbles: true }));
   return { tag: el.tagName.toLowerCase(), id: el.id || '' };
 })(${JSON.stringify(sel)}, ${JSON.stringify(String(val))})`);
