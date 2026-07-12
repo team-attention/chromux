@@ -634,6 +634,71 @@ IDLE_OUT=$(CHROMUX_PROFILE=$PROFILE node "$CT" run tab-gone "return await waitFo
 check "run waitFor network-idle resolves on quiet page" '"kind": "network-idle"' "$IDLE_OUT"
 CHROMUX_PROFILE=$PROFILE node "$CT" close tab-gone 2>/dev/null > /dev/null
 
+# --- Test 5c.1h: autocomplete --pick, click --text, skill topics, verify priming ---
+echo ""
+echo "--- Test 5c.1h: autocomplete --pick, click --text, skill topics, verify priming ---"
+PICK_PAGE_HTML='<title>PickPage</title><input id="city" aria-label="City"><ul id="sug" hidden></ul><p id="chosen">none</p><a href="/x">x</a><a href="/y">y</a><a href="/z">z</a><script>const SUG={se:["Seattle (SEA)","Seoul (SEL)"],lo:["London (LHR)"]};const input=document.getElementById("city");input.addEventListener("input",()=>{const list=document.getElementById("sug");const opts=SUG[input.value.toLowerCase()]||[];setTimeout(()=>{list.innerHTML=opts.map(o=>`<li role="option">${o}</li>`).join("");list.hidden=!opts.length;},200);});document.getElementById("sug").addEventListener("click",(e)=>{const li=e.target.closest("li");if(!li)return;input.value=li.textContent;document.getElementById("chosen").textContent="chose "+li.textContent;document.getElementById("sug").hidden=true;});</script>'
+PICK_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$PICK_PAGE_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-pick "$PICK_URL" 2>/dev/null > /dev/null
+PICK_OUT=$(CHROMUX_PROFILE=$PROFILE node "$CT" fill tab-pick "#city" "se" --pick "Seoul (SEL)" 2>/dev/null)
+check "fill --pick chooses the matching suggestion" '"picked": "Seoul (SEL)"' "$PICK_OUT"
+check "fill --pick effect visible in verify diff" "chose Seoul (SEL)" "$PICK_OUT"
+if CHROMUX_PROFILE=$PROFILE node "$CT" fill tab-pick "#city" "zz" --pick "Nowhere" >/tmp/chromux-pick-miss-$$.txt 2>&1; then
+  echo "  ✗ fill --pick with no matching suggestion unexpectedly succeeded"
+  FAIL=$((FAIL+1))
+else
+  PICK_MISS=$(cat /tmp/chromux-pick-miss-$$.txt)
+  check "fill --pick fails with a hint when nothing appears" "No suggestion matching" "$PICK_MISS"
+fi
+rm -f /tmp/chromux-pick-miss-$$.txt
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-pick 2>/dev/null > /dev/null
+
+TEXTCLICK_HTML='<title>TextClickPage</title><button id="sv">Save draft</button><button>Delete</button><button>Delete</button><a href="/x">x</a><a href="/y">y</a><script>document.getElementById("sv").addEventListener("click",function(){document.title=this.textContent.trim()});</script>'
+TEXTCLICK_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$TEXTCLICK_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-textclick "$TEXTCLICK_URL" 2>/dev/null > /dev/null
+TEXT_CLICK=$(CHROMUX_PROFILE=$PROFILE node "$CT" click tab-textclick --text "Save draft" 2>/dev/null)
+check "click --text resolves a unique label" '"text": "Save draft"' "$TEXT_CLICK"
+TEXT_TITLE=$(CHROMUX_PROFILE=$PROFILE node "$CT" eval tab-textclick "document.title" 2>/dev/null)
+check "click --text actually clicked" "Save draft" "$TEXT_TITLE"
+if CHROMUX_PROFILE=$PROFILE node "$CT" click tab-textclick --text "Delete" >/tmp/chromux-text-amb-$$.txt 2>&1; then
+  echo "  ✗ ambiguous click --text unexpectedly succeeded"
+  FAIL=$((FAIL+1))
+else
+  TEXT_AMB=$(cat /tmp/chromux-text-amb-$$.txt)
+  check "ambiguous click --text lists candidates" "matches 2 elements" "$TEXT_AMB"
+fi
+rm -f /tmp/chromux-text-amb-$$.txt
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-textclick 2>/dev/null > /dev/null
+
+SKILL_LIST=$(node "$CT" skill 2>/dev/null)
+check "skill lists topics" '"forms"' "$SKILL_LIST"
+SKILL_TOPIC=$(node "$CT" skill recovery 2>/dev/null)
+check "skill topic prints human handoff recipe" "open --foreground" "$SKILL_TOPIC"
+if node "$CT" skill nope-topic >/tmp/chromux-skill-miss-$$.txt 2>&1; then
+  echo "  ✗ unknown skill topic unexpectedly succeeded"
+  FAIL=$((FAIL+1))
+else
+  SKILL_MISS=$(cat /tmp/chromux-skill-miss-$$.txt)
+  check "unknown skill topic lists available ones" "recovery" "$SKILL_MISS"
+fi
+rm -f /tmp/chromux-skill-miss-$$.txt
+
+# Verify baseline is primed at open: the FIRST action on a large page must
+# return a real diff, not "first observation of a large page".
+PRIMED_HTML='<title>PrimedPage</title><button id="add">Add</button><script>document.getElementById("add").addEventListener("click",()=>{const p=document.createElement("p");p.textContent="added row";document.body.appendChild(p)});</script>'"$(node -e 'let h="";for(let i=0;i<80;i++)h+=`<p>Filler paragraph ${i} with enough words to make the page large.</p>`;process.stdout.write(h)')"
+PRIMED_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$PRIMED_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-primed "$PRIMED_URL" 2>/dev/null > /dev/null
+PRIMED_OUT=$(CHROMUX_PROFILE=$PROFILE node "$CT" click tab-primed "#add" 2>/dev/null)
+check "first action on a large page gets a real verify diff" "added row" "$PRIMED_OUT"
+if echo "$PRIMED_OUT" | grep -q "first observation of a large page"; then
+  echo "  ✗ verify baseline was not primed at open"
+  FAIL=$((FAIL+1))
+else
+  echo "  ✓ verify baseline primed at open"
+  PASS=$((PASS+1))
+fi
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-primed 2>/dev/null > /dev/null
+
 # --- Test 5c.2: click target validation ---
 echo ""
 echo "--- Test 5c.2: Click target validation ---"

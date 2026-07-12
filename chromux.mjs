@@ -1753,7 +1753,9 @@ const SNAPSHOT_JS = `((FILTER, CLICKABLE) => {
     }
     return line + '\\n' + children;
   }
-  const out = '# ' + document.title + '\\n# ' + location.href + '\\n\\n' + walk(document.body, 0);
+  // Cap the URL line: data:/blob: URLs can be tens of KB and would drown the
+  // snapshot (and every diff computed from it) in address noise.
+  const out = '# ' + document.title + '\\n# ' + location.href.substring(0, 300) + '\\n\\n' + walk(document.body, 0);
   document.documentElement.setAttribute('data-ct-ref-max', String(refMax));
   return out;
 })`;
@@ -2013,6 +2015,10 @@ function withDialogNote(s, since, result) {
 // Track in-flight page requests for waitFor({kind:'network-idle'}). Long-lived
 // streams (websocket/eventsource) are ignored and stale entries are pruned so
 // a single hung request cannot make a page look busy forever.
+// Stealth note: this enables the Network domain on demand, like watch/network
+// — an observable CDP signal the default snapshot/click paths avoid.
+// `watch network --off` wipes these listeners too (CDPClient.off clears all
+// listeners per event), so that path must also clear _inflightOn to re-arm.
 function ensureNetworkInflightTracking(s) {
   if (s._inflightOn) return Promise.resolve();
   s._inflightOn = true;
@@ -2044,8 +2050,12 @@ function inflightCount(s, staleMs = 20000) {
 // window.open) as a first-class session, so "the result is in another tab"
 // stops being a dead end. Discovery events come from the daemon's
 // browser-level CDP connection.
-async function adoptPopup(port, sessions, sessionName, s, since, browserState) {
+async function adoptPopup(port, sessions, sessionName, s, since, browserState, settings) {
   if (!browserState) return null;
+  // Adoption respects the same session cap as /open — popup chains must not
+  // bypass CHROMUX_MAX_SESSIONS_PER_PROFILE (crawl-mode worker pools rely on
+  // it).
+  if (settings?.maxSessions > 0 && sessions.size >= settings.maxSessions) return null;
   const entry = browserState.popups.find(p => p.openerId === s.targetId && p.at >= since - 100);
   if (!entry) return null;
   browserState.popups.splice(browserState.popups.indexOf(entry), 1);
@@ -2135,6 +2145,10 @@ async function startDaemon(profileName, port, daemonPort) {
       browserState.client = client;
     } catch {}
   }
+  // Browser.setDownloadBehavior applies to the whole Chrome profile (default
+  // browser context) — while a chromux download is in flight, a manual
+  // download in a headed profile would also land in the chromux directory.
+  // The behavior is therefore enabled per download and restored right after.
   browserState.ensureDownloadBehavior = async () => {
     if (!browserState.client) await connectBrowserClient();
     if (!browserState.client) throw httpErr(503, 'Browser-level CDP connection unavailable for downloads');
@@ -2143,6 +2157,11 @@ async function startDaemon(profileName, port, daemonPort) {
     fs.mkdirSync(downloadPath, { recursive: true });
     await browserState.client.send('Browser.setDownloadBehavior', { behavior: 'allowAndName', downloadPath, eventsEnabled: true });
     browserState.downloadPath = downloadPath;
+  };
+  browserState.restoreDownloadBehavior = async () => {
+    if (!browserState.client || !browserState.downloadPath) return;
+    await browserState.client.send('Browser.setDownloadBehavior', { behavior: 'default', eventsEnabled: false }).catch(() => {});
+    browserState.downloadPath = null;
   };
   await connectBrowserClient();
 
@@ -2610,6 +2629,17 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
             }
           }
         }
+        // Prime the verify baseline at navigation time so the FIRST action on
+        // a page gets a real diff instead of "first observation of a large
+        // page". Local capture only — nothing is added to the response.
+        const primer = await s.cdp.send('Runtime.evaluate', {
+          expression: `(${SNAPSHOT_JS})(null, 'stable')`,
+          returnByValue: true,
+        }, 3000);
+        if (typeof primer?.result?.value === 'string') {
+          if (!s.snapshotBaselines) s.snapshotBaselines = {};
+          s.snapshotBaselines.verify = primer.result.value;
+        }
       } catch {}
     }
     // Surface host-specific hint files from ~/.chromux/skills/<host>/*.md,
@@ -2674,6 +2704,9 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     if (!session || code == null) throw httpErr(400, 'session and code required');
     const s = getSession(sessions, session);
     touchSession(s);
+    // Dialogs auto-handled during a run are the run's own business; clearing
+    // here keeps them from being misattributed to the next click/fill/press.
+    s.lastDialog = null;
     const requestedTimeout = (typeof timeoutMs === 'number' && timeoutMs > 0) ? timeoutMs : undefined;
     const defaultCdpTimeout = requestedTimeout ?? (settings.mode === 'crawl' ? 5000 : undefined);
     const defaultJsTimeout = requestedTimeout ?? (settings.mode === 'crawl' ? 3000 : undefined);
@@ -2827,7 +2860,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     touchSession(s);
     const actionStart = Date.now();
     const finishClick = async (result) => {
-      const popup = await adoptPopup(port, sessions, session, s, actionStart, browserState);
+      const popup = await adoptPopup(port, sessions, session, s, actionStart, browserState, settings);
       if (popup) result.newSession = popup;
       return withDialogNote(s, actionStart, result);
     };
@@ -2859,8 +2892,40 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
       }
       return finishClick({ clicked: { xy: [x, y], button, clicks: clickCount }, next: `chromux snapshot ${session} --diff` });
     }
-    if (!selector) throw httpErr(400, 'selector or xy required');
-    const sel = refToSelector(selector);
+    if (!selector && !body.text) throw httpErr(400, 'selector, text, or xy required');
+    // --text fallback: resolve by visible label when @refs went stale after a
+    // re-render. Ambiguity is an error that lists the candidates.
+    const finderJs = selector
+      ? `
+        const el = deepQuery(${JSON.stringify(refToSelector(selector))});
+        if (!el) throw new Error('Element not found: ' + ${JSON.stringify(refToSelector(selector))});
+        return el;`
+      : `
+        const needle = ${JSON.stringify(String(body.text))}.trim().toLowerCase();
+        const matches = [];
+        const labelOf = (node) => ((node.getAttribute && node.getAttribute('aria-label')) || node.innerText || node.value || '').trim().replace(/\\s+/g, ' ');
+        const collect = (doc) => {
+          for (const node of doc.querySelectorAll('a[href],button,input,select,textarea,[role="button"],[role="link"],[role="tab"],[role="menuitem"],[onclick],[data-ct-listener]')) {
+            if (!deepVisible(node)) continue;
+            const label = labelOf(node).toLowerCase();
+            if (!label) continue;
+            if (label === needle) matches.push({ node, label: labelOf(node), exact: true });
+            else if (label.includes(needle)) matches.push({ node, label: labelOf(node), exact: false });
+          }
+          for (const frame of doc.querySelectorAll('iframe,frame')) {
+            try { if (frame.contentDocument) collect(frame.contentDocument); } catch {}
+          }
+        };
+        collect(document);
+        const exact = matches.filter(m => m.exact);
+        const pool = exact.length ? exact : matches;
+        if (!pool.length) throw new Error('No clickable element with text ' + JSON.stringify(${JSON.stringify(String(body.text))}) + '; try snapshot --grep to locate it');
+        if (pool.length > 1) {
+          const list = pool.slice(0, 8).map(m => m.node.tagName.toLowerCase() + (m.node.id ? '#' + m.node.id : '') + ' "' + m.label.slice(0, 60) + '"').join('; ');
+          throw new Error('Text matches ' + pool.length + ' elements — use a selector/@ref or a longer text: ' + list);
+        }
+        return pool[0].node;`;
+    const targetLabel = selector || `text:${String(body.text)}`;
     await s.cdp.send('Page.bringToFront', {});
     const r = await s.cdp.send('Runtime.evaluate', {
       expression: `((sel) => {
@@ -2873,8 +2938,8 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
             : '';
           return node.tagName.toLowerCase() + id + cls;
         }
-        const el = deepQuery(sel);
-        if (!el) throw new Error('Element not found: ' + sel);
+        const el = (() => { ${finderJs}
+        })();
         el.scrollIntoView?.({ block: 'center', inline: 'center' });
         const view = el.ownerDocument.defaultView || window;
         const rect = el.getBoundingClientRect();
@@ -2895,25 +2960,45 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
           throw new Error('Click target is covered: ' + sel + ' hit ' + describe(hit));
         }
         // CDP input events use top-viewport coordinates: add each ancestor
-        // frame's offset (border included) up to the top window.
+        // frame's offset (border and padding shift the inner viewport) up to
+        // the top window.
         let x = lx;
         let y = ly;
         let w = view;
+        let outermostFrame = null;
         while (w !== w.parent && w.frameElement) {
-          const fr = w.frameElement.getBoundingClientRect();
-          x += fr.left + w.frameElement.clientLeft;
-          y += fr.top + w.frameElement.clientTop;
+          const frameEl = w.frameElement;
+          const fr = frameEl.getBoundingClientRect();
+          let padLeft = 0;
+          let padTop = 0;
+          try {
+            const fcs = frameEl.ownerDocument.defaultView.getComputedStyle(frameEl);
+            padLeft = parseFloat(fcs.paddingLeft) || 0;
+            padTop = parseFloat(fcs.paddingTop) || 0;
+          } catch {}
+          x += fr.left + frameEl.clientLeft + padLeft;
+          y += fr.top + frameEl.clientTop + padTop;
+          outermostFrame = frameEl;
           w = w.parent;
         }
         if (x < 0 || y < 0 || x >= window.innerWidth || y >= window.innerHeight) {
           throw new Error('Click target outside top viewport (scroll its frame into view): ' + sel);
+        }
+        // A frame-local hit test cannot see top-document overlays covering
+        // the frame; confirm the top document still exposes the frame at the
+        // final click point.
+        if (outermostFrame) {
+          const topHit = document.elementFromPoint(x, y);
+          if (topHit && topHit !== outermostFrame && !outermostFrame.contains(topHit) && !topHit.contains(outermostFrame)) {
+            throw new Error('Click target is covered by a top-page element: ' + sel + ' hit ' + describe(topHit));
+          }
         }
         return {
           x,
           y,
           hit: describe(hit),
         };
-      })(${JSON.stringify(sel)})`,
+      })(${JSON.stringify(targetLabel)})`,
       returnByValue: true, awaitPromise: false,
     });
     if (r.exceptionDetails) throw httpErr(400, r.exceptionDetails.exception?.description || 'click failed');
@@ -2931,13 +3016,14 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
       });
     }
     await sleep(500);
+    const clickedValue = selector || { text: body.text };
     const verifyMs = body.verify === false ? null
       : (typeof body.verify === 'number' ? body.verify : (settings.mode === 'crawl' ? null : 300));
     if (verifyMs != null) {
       const changed = await captureVerifyDiff(s, verifyMs);
-      if (changed != null) return finishClick({ clicked: selector, changed });
+      if (changed != null) return finishClick({ clicked: clickedValue, changed });
     }
-    return finishClick({ clicked: selector, next: `chromux snapshot ${session} --diff` });
+    return finishClick({ clicked: clickedValue, next: `chromux snapshot ${session} --diff` });
   }
 
   if (routePath === '/fill' && method === 'POST') {
@@ -3027,13 +3113,52 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
       returnByValue: true, awaitPromise: false,
     });
     if (r.exceptionDetails) throw httpErr(400, r.exceptionDetails.exception?.description || 'fill failed');
+    // --pick: the type-then-choose autocomplete pattern in one round-trip.
+    // After the value lands, wait for a suggestion matching `pick` to render
+    // and click it (exact label match wins over prefix over substring).
+    let picked = null;
+    if (body.pick != null && body.pick !== '') {
+      const pickExpression = `((needle, inputSel) => {
+        ${DEEP_QUERY_JS}
+        const lower = String(needle).trim().toLowerCase();
+        const labelOf = (el) => ((el.getAttribute && el.getAttribute('aria-label')) || el.innerText || el.textContent || '').trim().replace(/\\s+/g, ' ');
+        const candidates = [];
+        const input = deepQuery(inputSel);
+        for (const el of document.querySelectorAll('[role="option"],[role="menuitem"],li,[class*="suggest"] *,[class*="autocomplete"] *,[class*="option"]')) {
+          if (input && (el === input || el.contains(input) || input.contains(el))) continue;
+          if (!deepVisible(el)) continue;
+          const label = labelOf(el);
+          if (label && label.length <= 200) candidates.push({ el, label });
+        }
+        const match = candidates.find(c => c.label.toLowerCase() === lower)
+          || candidates.find(c => c.label.toLowerCase().startsWith(lower))
+          || candidates.find(c => c.label.toLowerCase().includes(lower));
+        if (!match) return null;
+        const view = match.el.ownerDocument.defaultView || window;
+        for (const type of ['mouseover', 'mousedown', 'mouseup', 'click']) {
+          match.el.dispatchEvent(new view.MouseEvent(type, { bubbles: true, cancelable: true, view }));
+        }
+        return match.label.slice(0, 120);
+      })(${JSON.stringify(String(body.pick))}, ${JSON.stringify(sel)})`;
+      const pickDeadline = Date.now() + Math.min(Math.max(Number(body.pickTimeoutMs) || 3000, 500), 15000);
+      while (Date.now() <= pickDeadline) {
+        const pr = await s.cdp.send('Runtime.evaluate', { expression: pickExpression, returnByValue: true }, 5000);
+        if (pr.exceptionDetails) throw httpErr(400, pr.exceptionDetails.exception?.description || 'pick failed');
+        if (pr.result?.value) { picked = pr.result.value; break; }
+        await sleep(150);
+      }
+      if (!picked) throw httpErr(408, `No suggestion matching "${body.pick}" appeared after typing into ${selector}; the widget may need key events (click + type + arrows) instead`);
+    }
     const verifyMs = body.verify === false ? null
       : (typeof body.verify === 'number' ? body.verify : (settings.mode === 'crawl' ? null : 300));
     if (verifyMs != null) {
       const changed = await captureVerifyDiff(s, verifyMs, selector);
-      if (changed != null) return withDialogNote(s, actionStart, { filled: selector, text, changed });
+      if (changed != null) return withDialogNote(s, actionStart, picked != null ? { filled: selector, text, picked, changed } : { filled: selector, text, changed });
     }
-    return withDialogNote(s, actionStart, { filled: selector, text, next: `chromux snapshot ${session} --diff` });
+    const result = picked != null
+      ? { filled: selector, text, picked, next: `chromux snapshot ${session} --diff` }
+      : { filled: selector, text, next: `chromux snapshot ${session} --diff` };
+    return withDialogNote(s, actionStart, result);
   }
 
   if (routePath === '/type' && method === 'POST') {
@@ -3060,7 +3185,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     const actionStart = Date.now();
     await pressKey(s.cdp, key);
     const finishPress = async (result) => {
-      const popup = await adoptPopup(port, sessions, session, s, actionStart, browserState);
+      const popup = await adoptPopup(port, sessions, session, s, actionStart, browserState, settings);
       if (popup) result.newSession = popup;
       return withDialogNote(s, actionStart, result);
     };
@@ -3082,38 +3207,51 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     touchSession(s);
     if (!browserState?.ensureDownloadBehavior) throw httpErr(503, 'Downloads need the daemon browser-level CDP connection');
     await browserState.ensureDownloadBehavior();
+    const downloadDir = browserState.downloadPath;
     const before = new Set(browserState.downloads.keys());
-    if (selector) {
-      const sel = refToSelector(selector);
-      const r = await s.cdp.send('Runtime.evaluate', {
-        expression: `((sel) => {
-          ${DEEP_QUERY_JS}
-          const el = deepQuery(sel);
-          if (!el) throw new Error('Element not found: ' + sel);
-          el.click();
-          return true;
-        })(${JSON.stringify(sel)})`,
-        returnByValue: true, awaitPromise: false,
-      });
-      if (r.exceptionDetails) throw httpErr(400, r.exceptionDetails.exception?.description || 'download trigger failed');
-    } else {
-      // Navigating to a downloadable resource aborts the navigation
-      // (net::ERR_ABORTED) while the download proceeds — that is expected.
-      await s.cdp.send('Page.navigate', { url: fileUrl }).catch(() => {});
-    }
-    const deadline = Date.now() + Math.min(Math.max(Number(timeoutMs) || 60000, 1000), 600000);
     let guid = null;
     let record = null;
-    while (Date.now() <= deadline) {
-      for (const [g, d] of browserState.downloads) {
-        if (!before.has(g)) { guid = g; record = d; }
+    try {
+      if (selector) {
+        const sel = refToSelector(selector);
+        const r = await s.cdp.send('Runtime.evaluate', {
+          expression: `((sel) => {
+            ${DEEP_QUERY_JS}
+            const el = deepQuery(sel);
+            if (!el) throw new Error('Element not found: ' + sel);
+            el.click();
+            return true;
+          })(${JSON.stringify(sel)})`,
+          returnByValue: true, awaitPromise: false,
+        });
+        if (r.exceptionDetails) throw httpErr(400, r.exceptionDetails.exception?.description || 'download trigger failed');
+      } else {
+        // Navigating to a downloadable resource aborts the navigation
+        // (net::ERR_ABORTED) while the download proceeds — that is expected.
+        await s.cdp.send('Page.navigate', { url: fileUrl }).catch(() => {});
       }
-      if (record && record.state !== 'inProgress') break;
-      await sleep(150);
+      const deadline = Date.now() + Math.min(Math.max(Number(timeoutMs) || 60000, 1000), 600000);
+      while (Date.now() <= deadline) {
+        const started = [...browserState.downloads.keys()].filter(g => !before.has(g));
+        if (started.length > 1) {
+          throw httpErr(409, `The trigger started ${started.length} downloads at once — download them one at a time`);
+        }
+        if (started.length === 1) {
+          guid = started[0];
+          record = browserState.downloads.get(guid);
+          if (record.state !== 'inProgress') break;
+        }
+        await sleep(150);
+      }
+    } finally {
+      // Restore profile-wide download behavior as soon as the wait ends so a
+      // headed profile's manual downloads are only redirected while a chromux
+      // download is actually in flight.
+      await browserState.restoreDownloadBehavior();
     }
     if (!record) throw httpErr(408, 'No download started before timeout — the click/url may not trigger a download');
     if (record.state !== 'completed') throw httpErr(408, `Download did not complete (state: ${record.state || 'inProgress'})`);
-    const savedAs = path.join(browserState.downloadPath, guid);
+    const savedAs = path.join(downloadDir, guid);
     let destDir = browserState.downloadPath;
     if (to) {
       const resolvedTo = path.resolve(to);
@@ -3124,7 +3262,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
       fs.mkdirSync(resolvedTo, { recursive: true });
       destDir = resolvedTo;
     }
-    const suggested = record.suggestedFilename || guid;
+    const suggested = path.basename(record.suggestedFilename || guid);
     const ext = path.extname(suggested);
     const stem = path.basename(suggested, ext);
     let dest = path.join(destDir, suggested);
@@ -3368,11 +3506,17 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
       s.cdp.off('Network.requestWillBeSent');
       s.cdp.off('Network.responseReceived');
       s.cdp.off('Network.loadingFailed');
+      s.cdp.off('Network.loadingFinished');
       // Don't disable Network in headless mode (needed for UA override)
       if (!isHeadless) { try { await s.cdp.send('Network.disable'); } catch {} }
       delete s._netBuf;
       delete s._netPending;
       delete s._netOn;
+      // The off() calls above also wiped the network-idle inflight tracker's
+      // listeners; clear its state so the next waitFor network-idle re-arms
+      // instead of reading a frozen counter.
+      delete s._inflightOn;
+      delete s._inflight;
       return { network: 'disabled', session };
     }
 
@@ -4721,10 +4865,40 @@ function takeVerifyFlag(args) {
   return ms ?? 300;
 }
 
+// On-demand deep guides: the main SKILL.md is paid as input on every agent
+// turn, so topic depth lives here and loads only when a task needs it.
+function cmdSkillTopic(args) {
+  const topicsDir = path.join(MODULE_DIR, 'skills', 'chromux', 'topics');
+  let topics = [];
+  try {
+    topics = fs.readdirSync(topicsDir).filter(f => f.endsWith('.md')).map(f => f.slice(0, -3)).sort();
+  } catch {}
+  const topic = args[0];
+  if (!topic) {
+    console.log(JSON.stringify({
+      topics,
+      usage: 'chromux skill <topic> prints the deep guide for that topic',
+    }, null, 2));
+    return;
+  }
+  const file = path.join(topicsDir, `${path.basename(topic)}.md`);
+  if (!topics.includes(path.basename(topic)) || !fs.existsSync(file)) {
+    console.error(`Unknown skill topic "${topic}". Available: ${topics.join(', ') || '(none found)'}`);
+    process.exit(1);
+  }
+  console.log(fs.readFileSync(file, 'utf8'));
+}
+
 async function cmdClick(args, sock) {
   const verify = takeVerifyFlag(args);
   const session = args[0];
-  if (!session) { console.error('Usage: chromux click <session> (@ref|selector|--xy X Y) [--verify [MS]]'); process.exit(1); }
+  if (!session) { console.error('Usage: chromux click <session> (@ref|selector|--text "label"|--xy X Y) [--verify [MS]]'); process.exit(1); }
+  const textIdx = args.indexOf('--text');
+  if (textIdx !== -1) {
+    const text = args[textIdx + 1];
+    if (!text) { console.error('Usage: chromux click <session> --text "visible label"'); process.exit(1); }
+    return cliReq('POST', '/click', { session, text, verify }, sock);
+  }
   const xyIdx = args.indexOf('--xy');
   if (xyIdx >= 0) {
     const x = Number(args[xyIdx + 1]);
@@ -5066,6 +5240,7 @@ async function runCli(cmd, args) {
   }
   if (cmd === 'note') return cmdNote(args);
   if (cmd === 'script') return cmdScript(args);
+  if (cmd === 'skill') return cmdSkillTopic(args);
   if (cmd === 'pause') {
     const profileName = args[0] || getProfile();
     return runLoggedProfileCommand(cmd, args, profileName, () => cmdPause(profileName));
@@ -5126,6 +5301,15 @@ async function runCli(cmd, args) {
       click:      () => cmdClick(args, sock),
       fill:       () => {
         const verify = takeVerifyFlag(args);
+        // fill <s> <sel> "text" --pick "label" types then chooses the
+        // matching autocomplete suggestion in the same round-trip.
+        let pick;
+        const pickIdx = args.indexOf('--pick');
+        if (pickIdx !== -1) {
+          pick = args[pickIdx + 1];
+          if (!pick) { console.error('Usage: chromux fill <session> <selector> "text" --pick "suggestion label"'); process.exit(1); }
+          args.splice(pickIdx, 2);
+        }
         // fill <s> <sel> --file PATH [--file PATH...] sets a file input
         // through DOM.setFileInputFiles instead of typing a value.
         const files = [];
@@ -5141,7 +5325,7 @@ async function runCli(cmd, args) {
         if (files.length) {
           return cliReq('POST', '/fill', { session: args[0], selector: args[1], files, verify }, sock);
         }
-        return cliReq('POST', '/fill', { session: args[0], selector: args[1], text: args[2], verify }, sock);
+        return cliReq('POST', '/fill', { session: args[0], selector: args[1], text: args[2], pick, verify }, sock);
       },
       type:       () => {
         const verify = takeVerifyFlag(args);
@@ -5726,6 +5910,8 @@ Convenience shortcuts:
                                      shadow DOM; cross-origin frames are marked as unreachable
   chromux click <session> @<ref>     Click by ref number
   chromux click <session> "selector" Click by CSS selector
+  chromux click <session> --text "label"   Click by visible label when refs went stale
+                                     (ambiguous text fails and lists the candidates)
   chromux click <session> --xy X Y   Click by viewport coordinates
   A click that opens a popup/new tab adopts it automatically: the response
                                      carries "newSession" with the adopted session name
@@ -5733,6 +5919,8 @@ Convenience shortcuts:
                                      diff ("changed"). --verify MS tunes the settle wait,
                                      --no-verify skips it (crawl mode skips automatically)
   chromux fill <session> @<ref> "t"  Fill input field (native <select>: matches option value/label)
+  chromux fill <s> @<ref> "se" --pick "Seoul"   Type, wait for the autocomplete popup,
+                                     and choose the matching suggestion in one call
   chromux fill <s> @<ref> --file p   Set a file input for upload (repeat --file for multiple)
   chromux type <session> "text"      Insert text into focused field
   chromux press <session> Enter      Press Enter, Tab, Escape, Backspace, Delete,
@@ -5774,8 +5962,18 @@ Runner snippets:
   snippets/_builtin/page-extract.js      Structured page metadata extraction
   snippets/_builtin/form-flow.js         Whole form fill + submit + readiness in one call
                                          (--arg fields='{"#sel":"value"}' --arg submit='#go')
+  snippets/_builtin/table-extract.js     Table -> {headers, rows} without dumping HTML
+  snippets/_builtin/paginate-collect.js  Collect items across paginated pages
+  snippets/_builtin/wizard-flow.js       Multi-step wizard with per-step readiness proof
+  snippets/_builtin/search-and-pick.js   Type -> pick suggestion -> submit -> report
   snippets/_builtin/network-errors.js    Browser-observable resource diagnostics
   snippets/_builtin/page-assert.js       Selector, text, and DOM assertions
+
+Deep guides (on demand, keeps per-turn skill text small):
+  chromux skill                      List available topics
+  chromux skill forms                Forms, autocomplete --pick, uploads, wizards
+  chromux skill extraction           Grep/diff, tables, pagination, saved scripts
+  chromux skill recovery             Stale refs, dialogs, popups, human login handoff
 
 Policy:
   New browser actions should be expressed with run or cdp before adding verbs.

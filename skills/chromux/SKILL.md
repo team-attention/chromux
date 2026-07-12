@@ -119,9 +119,13 @@ snapshot. Navigation resets refs; in-page changes keep them stable.
    like any other ref. `fill` on a native `<select>` matches an option by
    value or label and fires `change`; never `type` into a select. Custom
    dropdowns (divs styled as comboboxes) are not `<select>` — use `click` +
-   arrow keys. File inputs: `fill exp-ab12 @<N> --file /path/report.pdf`.
-   Downloads: `download exp-ab12 @<N> --to DIR` waits for the completed file
-   and returns its path.
+   arrow keys. Autocomplete: `fill exp-ab12 @<N> "seo" --pick "Seoul"` types
+   and chooses the matching suggestion in one call. Stale refs after a SPA
+   re-render: `click exp-ab12 --text "로그인"` targets by visible label
+   (ambiguity fails with a candidate list). File inputs:
+   `fill exp-ab12 @<N> --file /path/report.pdf`. Downloads:
+   `download exp-ab12 @<N> --to DIR` waits for the completed file and
+   returns its path.
 4. Verify: read the `changed` diff in the action's own response; for slower
    UIs use `--verify 1000`, or `wait-for-text exp-ab12 "Saved"` /
    `wait-for-selector exp-ab12 ".toast"` for readiness
@@ -170,11 +174,22 @@ relative to the repo/skill directory):
 
 - `form-flow.js` — whole-form fill + submit + readiness (`--arg fields=...`,
   `--arg submit=...`, `--arg readyText=...`)
+- `table-extract.js` — table → `{headers, rows}` (`--arg table=...`)
+- `paginate-collect.js` — items across paginated pages (`--arg item=...`,
+  `--arg next=...`, `--arg fields=...`)
+- `wizard-flow.js` — multi-step wizard with per-step readiness proof
+  (`--arg steps=[...]`)
+- `search-and-pick.js` — type → pick suggestion → submit → report
 - `scroll-until.js` — scroll until selector count reaches a target
   (`--arg selector=...`, `--arg count=N`)
 - `page-extract.js` — structured page metadata without dumping HTML
 - `page-assert.js` — selector/text/DOM assertions (`--arg selector=...`)
 - `network-errors.js` — browser-observable broken-resource diagnostics
+
+Deeper guides load on demand — `chromux skill` lists topics;
+`chromux skill forms|extraction|recovery` prints the guide (autocomplete
+patterns, pagination/table extraction, dialog/popup recovery, and the
+pause → open --foreground → wait → resume human login handoff).
 
 ## Crawling And Batches
 

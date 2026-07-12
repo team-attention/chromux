@@ -435,8 +435,10 @@ chromux cdp s Runtime.evaluate '{"expression":"navigator.userAgent","returnByVal
 | `snapshot <session> --clickable` | Force behavior-based clickable detection (`cursor:pointer`/`onclick` divs get `@refs`); auto-enabled on pages with almost no standard interactive elements, or when behaviorally-clickable candidates are dense relative to the standard controls in the viewport (div-heavy SPAs behind a standard nav) |
 | `click <session> @<ref>` | Click element by ref. Actions verify by default: the response's `changed` field carries the post-action diff (`--verify MS` tunes the settle wait, `--no-verify` skips; also on `fill`/`type`/`press`; crawl mode skips automatically). A click that opens a popup/new tab adopts it automatically and reports it as `newSession` |
 | `click <session> "selector"` | Click by CSS selector |
+| `click <session> --text "label"` | Click by visible label when refs went stale after a re-render; ambiguous text fails and lists the candidates |
 | `click <session> --xy X Y` | Click validated viewport coordinates via CDP mouse events |
 | `fill <session> @<ref> "text"` | Fill input field (a native `<select>` matches an option by value or label and fires `change`) |
+| `fill <session> @<ref> "se" --pick "Seoul"` | Type, wait for the autocomplete popup, and choose the matching suggestion in one call (the response's `picked` field is the chosen label) |
 | `fill <session> @<ref> --file PATH` | Set a file input for upload via `DOM.setFileInputFiles` (repeat `--file` for multiple files) |
 | `type <session> "text"` | Insert text into the focused field |
 | `press <session> <key>` | Press a supported special key: Enter, Tab, Escape, Backspace, Delete, ArrowUp/Down/Left/Right, Home, End, PageUp, PageDown |
@@ -521,8 +523,19 @@ They cover common fast paths:
   or HTML dumps.
 - `form-flow.js`: whole-form fill (inputs and native selects), submit, and
   readiness proof in one call.
+- `table-extract.js`: a table as `{headers, rows}` without dumping HTML.
+- `paginate-collect.js`: collect items across paginated pages with per-page
+  field extraction.
+- `wizard-flow.js`: multi-step wizards with per-step readiness proof.
+- `search-and-pick.js`: type → pick suggestion → submit → report.
 - `network-errors.js`: browser-observable broken resource diagnostics.
 - `page-assert.js`: selector, text, and DOM assertion proof.
+
+Deeper task-type guides load on demand so the per-turn skill text stays
+small: `chromux skill` lists topics; `chromux skill forms|extraction|recovery`
+prints the guide (autocomplete `--pick` patterns, pagination and table
+extraction, dialog/popup recovery, and the pause → `open --foreground` →
+wait → resume human login handoff).
 
 Run them with `--file`, passing parameters as repeatable `--arg key=value`
 flags — values that parse as JSON arrive structured, everything else stays a
