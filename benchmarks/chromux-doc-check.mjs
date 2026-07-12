@@ -99,6 +99,8 @@ assertContains(checks, 'chromux skill download', docs.chromuxSkill, 'download ex
 assertContains(checks, 'chromux skill wait gone', docs.chromuxSkill, '--gone');
 assertContains(checks, 'chromux skill network idle', docs.chromuxSkill, 'network-idle');
 assertContains(checks, 'chromux skill autocomplete pick', docs.chromuxSkill, '--pick');
+assertContains(checks, 'chromux skill pick effect field', docs.chromuxSkill, 'pickEffect');
+assertContains(checks, 'chromux skill grep literal note', docs.chromuxSkill, 'literal reading');
 assertContains(checks, 'chromux skill click by text', docs.chromuxSkill, '--text');
 assertContains(checks, 'chromux skill topics on demand', docs.chromuxSkill, 'chromux skill');
 assertContains(checks, 'chromux skill table snippet', docs.chromuxSkill, 'table-extract.js');
@@ -118,6 +120,7 @@ assertContains(checks, 'README download verb', docs.readme, '`download <session>
 assertContains(checks, 'README wait gone', docs.readme, '--gone');
 assertContains(checks, 'README network idle', docs.readme, 'network-idle');
 assertContains(checks, 'README autocomplete pick', docs.readme, '--pick');
+assertContains(checks, 'README pick effect field', docs.readme, 'pickEffect');
 assertContains(checks, 'README click by text', docs.readme, '--text "label"');
 assertContains(checks, 'README skill topics', docs.readme, '`chromux skill`');
 assertContains(checks, 'README table snippet', docs.readme, 'table-extract.js');

@@ -51,7 +51,9 @@ chromux run exp-ab12 --file snippets/_builtin/form-flow.js \
 **Find something on a big page — grep, don't dump.**
 `chromux snapshot <s> --grep "pattern"` returns only matching lines (plus their
 ancestors for context) instead of the whole tree. The pattern is tried as a
-case-insensitive regex, then literally if the regex matches nothing. Grep for
+case-insensitive regex, then literally if the regex matches nothing; when the
+literal reading would match lines the regex result misses, the header says so
+(NOTE) — escape metacharacters if you meant the literal string. Grep for
 the label, value, or row you need; take a full `snapshot` only when you truly
 need the whole structure.
 
@@ -120,7 +122,9 @@ snapshot. Navigation resets refs; in-page changes keep them stable.
    value or label and fires `change`; never `type` into a select. Custom
    dropdowns (divs styled as comboboxes) are not `<select>` — use `click` +
    arrow keys. Autocomplete: `fill exp-ab12 @<N> "seo" --pick "Seoul"` types
-   and chooses the matching suggestion in one call. Stale refs after a SPA
+   and chooses the matching suggestion in one call; the response's `picked`
+   is the chosen label and `pickEffect` says what was observed (treat
+   "unconfirmed" as needing a check, not success). Stale refs after a SPA
    re-render: `click exp-ab12 --text "로그인"` targets by visible label
    (ambiguity fails with a candidate list). File inputs:
    `fill exp-ab12 @<N> --file /path/report.pdf`. Downloads:

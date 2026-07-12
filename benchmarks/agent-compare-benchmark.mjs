@@ -367,7 +367,10 @@ function buildTasks() {
       path: '/miniwob/click-checkboxes.html',
       mission: base => `Open ${base}/miniwob/click-checkboxes.html — an unmodified task from the MiniWoB++ browser-agent benchmark. Click START, then follow the instruction shown in the yellow box exactly (it names the checkbox items to select before submitting). The page grades you automatically and reports a reward. Work until the reward is positive; if an episode fails, a new one starts with a new instruction — read it and try again.\nANSWER JSON shape: {"instruction": "<the instruction you completed>"}`,
       grade({ fixture }) {
-        if (!miniwobSucceeded(fixture.state, '/miniwob/click-checkboxes.html')) return { ok: false, reason: 'MiniWoB server recorded no positive-reward episode' };
+        // click-checkboxes rewards fractionally per box; require a perfect
+        // episode so ">50% of boxes right" cannot grade as success.
+        const perfect = fixture.state.results.some(r => r.task === '/miniwob/click-checkboxes.html' && Number(r.rawReward) === 1);
+        if (!perfect) return { ok: false, reason: 'MiniWoB server recorded no perfect-reward episode' };
         return { ok: true };
       },
     },

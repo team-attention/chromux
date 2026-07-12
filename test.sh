@@ -436,7 +436,7 @@ GREPNOTE_HTML='<title>GrepNotePage</title><p>price (USD) 10</p><p>price (USD) 20
 GREPNOTE_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$GREPNOTE_HTML")"
 CHROMUX_PROFILE=$PROFILE node "$CT" open tab-grepnote "$GREPNOTE_URL" 2>/dev/null > /dev/null
 GREPNOTE_OUT=$(CHROMUX_PROFILE=$PROFILE node "$CT" snapshot tab-grepnote --grep "price (USD)" 2>/dev/null)
-check "grep warns when literal reading matches more lines" "read as literal text this matches 2 lines" "$GREPNOTE_OUT"
+check "grep warns when the literal reading matches lines the regex missed" "read as literal text this pattern also matches 2 lines NOT shown here" "$GREPNOTE_OUT"
 CHROMUX_PROFILE=$PROFILE node "$CT" close tab-grepnote 2>/dev/null > /dev/null
 RUN_ARGS_OUT=$(CHROMUX_PROFILE=$PROFILE node "$CT" run tab-select 'return { s: args.label, n: args.count, o: args.fields }' --arg label=hello --arg count=7 --arg fields='{"#email":"a@b.c"}' 2>/dev/null)
 check "run --arg passes string value" '"s": "hello"' "$RUN_ARGS_OUT"

@@ -1644,13 +1644,16 @@ const SNAPSHOT_JS = `((FILTER, CLICKABLE) => {
   // type=text|tel, so mask by autocomplete/name/id heuristics too.
   function isSensitiveInput(el) {
     if (el.type === 'password') return true;
-    const hints = ((el.getAttribute('autocomplete') || '') + ' ' + (el.name || '') + ' ' + (el.id || '')).toLowerCase();
-    return /cc-number|cc-csc|cc-exp|card[-_ ]?(number|no)|cvv|cvc|one-time-code|\\botp\\b|verification[-_ ]?code|ssn|social[-_ ]?security|\\bpin\\b|passport|routing[-_ ]?number|iban/.test(hints);
+    // Normalize separators so otp_code / otpCode-ish spellings hit the same
+    // word boundaries as otp-code.
+    const hints = ((el.getAttribute('autocomplete') || '') + ' ' + (el.name || '') + ' ' + (el.id || ''))
+      .toLowerCase().replace(/[_\\s]+/g, '-');
+    return /cc-number|cc-csc|cc-exp|card-?(number|no)|cardnumber|cvv|cvc|one-?time-?code|\\botp\\b|otpcode|verification-?code|ssn|social-?security|\\bpin\\b|pincode|passport|routing-?number|iban/.test(hints);
   }
   function getLabel(el, clickable) {
     const tag = el.tagName.toLowerCase();
     const aria = el.getAttribute('aria-label');
-    if (tag === 'input' && isSensitiveInput(el)) {
+    if ((tag === 'input' || tag === 'textarea' || tag === 'select') && isSensitiveInput(el)) {
       return aria || el.placeholder || '';
     }
     if (aria) return aria;
@@ -1750,7 +1753,7 @@ const SNAPSHOT_JS = `((FILTER, CLICKABLE) => {
       const checkish = el.type === 'checkbox' || el.type === 'radio';
       line += ' [' + (el.type || 'text') + (checkish && el.checked ? ' checked' : '') + ']';
     }
-    if (tag === 'select' && el.selectedOptions && el.selectedOptions[0]) {
+    if (tag === 'select' && el.selectedOptions && el.selectedOptions[0] && !isSensitiveInput(el)) {
       const sel = el.selectedOptions[0].textContent.trim().substring(0, 40);
       if (sel && sel !== label) line += ' = "' + sel.replace(/"/g, '') + '"';
     }
@@ -1840,10 +1843,12 @@ function renderSnapshotGrep(text, pattern) {
   const indentOf = (line) => (line.match(/^ */) || [''])[0].length;
   const collect = (re) => {
     const keep = new Set();
+    const matchedIdx = new Set();
     let matches = 0;
     for (let i = 0; i < body.length; i++) {
       if (!re.test(body[i])) continue;
       matches++;
+      matchedIdx.add(i);
       if (matches > MAX_MATCHES) continue;
       keep.add(i);
       let depth = indentOf(body[i]);
@@ -1852,13 +1857,13 @@ function renderSnapshotGrep(text, pattern) {
         if (d < depth) { keep.add(j); depth = d; }
       }
     }
-    return { keep, matches };
+    return { keep, matches, matchedIdx };
   };
   const literalRe = new RegExp(String(pattern).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
   let re = literalRe;
   try { re = new RegExp(pattern, 'i'); } catch {}
   let mode = 'regex';
-  let { keep, matches } = collect(re);
+  let { keep, matches, matchedIdx } = collect(re);
   let literalNote = '';
   if (re.source !== literalRe.source) {
     if (!matches) {
@@ -1867,11 +1872,13 @@ function renderSnapshotGrep(text, pattern) {
     } else {
       // Silent-wrong guard: a pattern that is a valid regex can match the
       // WRONG lines (e.g. "price (USD)" as a group) while the literal text
-      // matches different ones. When the literal reading finds more, say so
-      // loudly instead of letting the regex result masquerade as the answer.
+      // matches different ones. Whenever the literal reading matches any
+      // line this regex result does NOT include, say so loudly instead of
+      // letting the regex result masquerade as the answer.
       const literal = collect(literalRe);
-      if (literal.matches > matches) {
-        literalNote = `; NOTE: read as literal text this matches ${literal.matches} lines (regex matched ${matches}) — escape regex metacharacters if you meant the literal string`;
+      const literalOnly = [...literal.matchedIdx].filter(i => !matchedIdx.has(i)).length;
+      if (literalOnly > 0) {
+        literalNote = `; NOTE: read as literal text this pattern also matches ${literalOnly} line${literalOnly === 1 ? '' : 's'} NOT shown here — escape regex metacharacters if you meant the literal string`;
       }
     }
   }
@@ -3139,6 +3146,10 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     // --pick correctness: a suggestion must have APPEARED after typing. Mark
     // the candidates already visible now so a static nav/list item whose text
     // matches the pick can never win the race against the real popup.
+    const cleanupPickMarks = () => s.cdp.send('Runtime.evaluate', {
+      expression: `(() => { for (const el of document.querySelectorAll('[data-ct-pick-seen],[data-ct-picked]')) { el.removeAttribute('data-ct-pick-seen'); el.removeAttribute('data-ct-picked'); } return true; })()`,
+      returnByValue: true,
+    }, 2000).catch(() => {});
     if (body.pick != null && body.pick !== '') {
       await s.cdp.send('Runtime.evaluate', {
         expression: `(() => {
@@ -3197,7 +3208,13 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
       })(${JSON.stringify(sel)}, ${JSON.stringify(text)})`,
       returnByValue: true, awaitPromise: false,
     });
-    if (r.exceptionDetails) throw httpErr(400, r.exceptionDetails.exception?.description || 'fill failed');
+    if (r.exceptionDetails) {
+      // A failed fill must not leave pick markers behind: stale
+      // data-ct-pick-seen on reused suggestion nodes would break the NEXT
+      // genuine pick on this page.
+      if (body.pick != null && body.pick !== '') await cleanupPickMarks();
+      throw httpErr(400, (r.exceptionDetails.exception?.description || 'fill failed').split('\n')[0]);
+    }
     // --pick: the type-then-choose autocomplete pattern in one round-trip.
     // After the value lands, wait for a suggestion matching `pick` to render
     // and click it (exact label match wins over prefix over substring).
@@ -3228,10 +3245,6 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
         }
         return match.label.slice(0, 120);
       })(${JSON.stringify(String(body.pick))}, ${JSON.stringify(sel)})`;
-      const cleanupPickMarks = () => s.cdp.send('Runtime.evaluate', {
-        expression: `(() => { for (const el of document.querySelectorAll('[data-ct-pick-seen],[data-ct-picked]')) { el.removeAttribute('data-ct-pick-seen'); el.removeAttribute('data-ct-picked'); } return true; })()`,
-        returnByValue: true,
-      }, 2000).catch(() => {});
       const pickDeadline = Date.now() + Math.min(Math.max(Number(body.pickTimeoutMs) || 3000, 500), 15000);
       while (Date.now() <= pickDeadline) {
         const pr = await s.cdp.send('Runtime.evaluate', { expression: pickExpression, returnByValue: true }, 5000);

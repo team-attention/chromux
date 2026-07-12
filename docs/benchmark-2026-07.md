@@ -344,7 +344,7 @@ Reading:
 ### Sonnet MiniWoB re-measurement after the perception upgrades (0.18.0)
 
 2026-07-12, same harness, `claude-sonnet-5`, same-run chromux 0.18.0 vs
-`@playwright/cli` (latest at run time), the two MiniWoB tasks at 2 reps each
+`@playwright/cli` 0.1.17, the two MiniWoB tasks at 2 reps each
 (8 sessions, $2.32). One run, published as measured.
 
 | task | chromux 0.18.0 | playwright-cli |
