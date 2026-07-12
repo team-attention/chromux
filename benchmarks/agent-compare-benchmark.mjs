@@ -30,7 +30,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { startFixtureServer, closeFixtureServer, nonBrowserAccess, orderCode, navCode, stepValue, feedStats, inventoryStats, signupCode } from './fixtures.mjs';
+import { startFixtureServer, closeFixtureServer, nonBrowserAccess, orderCode, navCode, stepValue, feedStats, inventoryStats, signupCode, shopProduct, shopCode, slowOrderCode, embedCode } from './fixtures.mjs';
 import { cloneMiniwob, startMiniwobServer, miniwobSucceeded } from './miniwob.mjs';
 
 const MODULE_DIR = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -269,6 +269,44 @@ function buildTasks() {
         const expected = signupCode('agent@example.com');
         const verified = fixture.state.signups.some(s => s.phase === 'verified' && s.code === expected);
         if (!verified) return { ok: false, reason: 'server did not record a successful verification for the expected account' };
+        if (String(answer?.code ?? '').toUpperCase() !== expected) return { ok: false, reason: `reported code ${answer?.code} != ${expected}` };
+        return { ok: true };
+      },
+    },
+    {
+      id: 'shop-cookie-select',
+      kind: 'local',
+      mission: base => `Open ${base}/shop — an online shop with a cookie consent dialog. Dismiss the dialog, then select (click) the product "${shopProduct(4).name}" in the product grid and report the confirmation code that appears in the status line.\nANSWER JSON shape: {"code": "<confirmation code, looks like SHOP-XXXXXXXX>"}`,
+      grade({ answer, fixture }) {
+        const sku = shopProduct(4).sku;
+        const expected = shopCode(sku);
+        const recorded = fixture.state.selections.some(sel => sel.sku === sku);
+        if (!recorded) return { ok: false, reason: 'server did not record a selection of the expected product' };
+        if (String(answer?.code ?? '').toUpperCase() !== expected) return { ok: false, reason: `reported code ${answer?.code} != ${expected}` };
+        return { ok: true };
+      },
+    },
+    {
+      id: 'slow-order',
+      kind: 'local',
+      mission: base => `Open ${base}/order-delay, fill Email with "agent@example.com", and submit the order. The confirmation takes a moment to appear; report the confirmation code once the status line shows it.\nANSWER JSON shape: {"code": "<confirmation code, looks like SLOW-XXXXXXXX>"}`,
+      grade({ answer, fixture }) {
+        const submissions = fixture.state.slowOrders.filter(order => order.email === 'agent@example.com');
+        if (!submissions.length) return { ok: false, reason: 'server did not record the order submission' };
+        if (submissions.length > 1) return { ok: false, reason: `order was submitted ${submissions.length} times (double submit)` };
+        const expected = slowOrderCode('agent@example.com');
+        if (String(answer?.code ?? '').toUpperCase() !== expected) return { ok: false, reason: `reported code ${answer?.code} != ${expected}` };
+        return { ok: true };
+      },
+    },
+    {
+      id: 'iframe-register',
+      kind: 'local',
+      mission: base => `Open ${base}/embedded — a portal page with an embedded partner registration form. Register with the name "Agent Smith" and report the confirmation code shown after registering.\nANSWER JSON shape: {"code": "<confirmation code, looks like EMB-XXXXXXXX>"}`,
+      grade({ answer, fixture }) {
+        const expected = embedCode('Agent Smith');
+        const recorded = fixture.state.embeds.some(entry => entry.name === 'Agent Smith');
+        if (!recorded) return { ok: false, reason: 'server did not record the expected registration' };
         if (String(answer?.code ?? '').toUpperCase() !== expected) return { ok: false, reason: `reported code ${answer?.code} != ${expected}` };
         return { ok: true };
       },

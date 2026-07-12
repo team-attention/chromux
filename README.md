@@ -432,17 +432,31 @@ chromux cdp s Runtime.evaluate '{"expression":"navigator.userAgent","returnByVal
 | `snapshot <session> --interactive` | Only interactive elements (smaller payload) |
 | `snapshot <session> --diff` | Only lines added/removed since the previous snapshot of this session |
 | `snapshot <session> --grep "pattern"` | Only lines matching a case-insensitive regex (literal fallback), plus their ancestor lines for context |
-| `snapshot <session> --clickable` | Force behavior-based clickable detection (`cursor:pointer`/`onclick` divs get `@refs`); auto-enabled on pages with almost no standard interactive elements |
-| `click <session> @<ref>` | Click element by ref. Actions verify by default: the response's `changed` field carries the post-action diff (`--verify MS` tunes the settle wait, `--no-verify` skips; also on `fill`/`type`/`press`; crawl mode skips automatically) |
+| `snapshot <session> --clickable` | Force behavior-based clickable detection (`cursor:pointer`/`onclick` divs get `@refs`); auto-enabled on pages with almost no standard interactive elements, or when behaviorally-clickable candidates are dense relative to the standard controls in the viewport (div-heavy SPAs behind a standard nav) |
+| `click <session> @<ref>` | Click element by ref. Actions verify by default: the response's `changed` field carries the post-action diff (`--verify MS` tunes the settle wait, `--no-verify` skips; also on `fill`/`type`/`press`; crawl mode skips automatically). A click that opens a popup/new tab adopts it automatically and reports it as `newSession` |
 | `click <session> "selector"` | Click by CSS selector |
 | `click <session> --xy X Y` | Click validated viewport coordinates via CDP mouse events |
 | `fill <session> @<ref> "text"` | Fill input field (a native `<select>` matches an option by value or label and fires `change`) |
+| `fill <session> @<ref> --file PATH` | Set a file input for upload via `DOM.setFileInputFiles` (repeat `--file` for multiple files) |
 | `type <session> "text"` | Insert text into the focused field |
 | `press <session> <key>` | Press a supported special key: Enter, Tab, Escape, Backspace, Delete, ArrowUp/Down/Left/Right, Home, End, PageUp, PageDown |
-| `wait-for-text <session> "text" [timeout-ms]` | Wait until page text appears |
-| `wait-for-selector <session> "selector" [timeout-ms]` | Wait until a selector is visible |
+| `download <session> (@ref\|selector\|--url URL) [--to DIR]` | Trigger a download and wait for the completed file; returns the saved path |
+| `wait-for-text <session> "text" [timeout-ms]` | Wait until page text appears (same-origin frame text included) |
+| `wait-for-selector <session> "selector" [timeout-ms]` | Wait until a selector is visible; add `--gone` to wait until it disappears |
 | `screenshot <session> [path]` | Take PNG screenshot |
 | `show <session>` | Open DevTools in browser (inspect live tab, even headless) |
+
+Snapshots, clicks, fills, and waits pierce same-origin iframes and open shadow
+DOM: elements inside them get normal `@refs` and are clicked at their true
+top-viewport coordinates. Cross-origin frames are marked
+`iframe (cross-origin; content not accessible)` in snapshots; closed shadow
+roots stay invisible. Native JS dialogs (`alert`/`confirm`/`prompt`) are
+auto-handled per session policy (`open <s> <url> --dialog accept|dismiss`,
+default dismiss, `beforeunload` always accepted) and reported in the next
+action response's `dialog` field, so a stray alert can no longer brick a
+session. In `run`, `waitFor` additionally supports `{kind: 'gone'}` (element
+disappeared) and `{kind: 'network-idle', idleMs: 500}` (no in-flight page
+requests) for deterministic waits without `sleep()`.
 
 Snapshot `@ref` numbers are stable within a document: re-snapshotting the same
 page keeps existing refs and only assigns new numbers to new elements, so refs
@@ -467,14 +481,14 @@ updates input state through the native value setter and dispatches input/change
 events so common frontend frameworks observe the value.
 
 Known reach limits, stated so agents report instead of blind-retrying:
-clickable auto-detection only triggers on pages with almost no standard
-elements — on real SPAs that mix nav links with div controls, pass
-`--clickable` explicitly. Snapshot value display masks `type=password` only;
-values in plain text fields appear as-is. Snapshots and actions do not enter
-iframes or shadow DOM yet; native JS dialogs block the tab until dismissed;
-file upload/download and popup windows (`target=_blank`) have no first-class
-support — a click that opens a new tab reports no visible change on the old
-tab. These are the current top items on the roadmap.
+snapshot value display masks `type=password` only; values in plain text
+fields appear as-is. Cross-origin iframes and closed shadow roots are not
+reachable (marked in snapshots where detectable). Clickable auto-detection
+evaluates the current viewport — controls far below the fold may need a
+scroll (or `--clickable`) before they get refs. Verify diffs skip the
+per-element CDP listener re-scan: an element revealed by an action whose only
+click affordance is a JS listener (no cursor style, no `onclick`) shows up as
+text without a clickable `@ref` — take a snapshot to get its ref.
 
 ### Watch / Debug
 

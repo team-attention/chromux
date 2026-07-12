@@ -79,7 +79,29 @@ async function main() {
       { name: 'article', url: `${base}/`, mutate: `return await js('const b=document.createElement("button");b.textContent="Comment";document.querySelector("main").appendChild(b);return 1')` },
       { name: 'form', url: `${base}/form`, mutate: `return await js('document.getElementById("status").textContent="Saved";return 1')` },
       { name: 'feed-200', url: `${base}/feed`, findText: 'headline number 153', mutate: `return await js('const a=document.createElement("article");a.innerHTML="<h2><a href=\\'/story/new\\'>Breaking story</a></h2>";document.querySelector("main").prepend(a);return 1')` },
+      // Real-sized page: sticky header, dense nav, div-based product cards
+      // (clickable ratio gate fires), cookie consent dialog (occluder).
+      { name: 'shop', url: `${base}/shop`, findText: 'Linen Notebook', mutate: `return await js('document.getElementById("status").textContent="Selected SHP-00: probe";return 1')` },
     ];
+
+    // Behavior guard on the real-sized fixture (not a payload metric): the
+    // content-covering cookie dialog must be flagged as an overlay, and the
+    // bottom consent-bar variant must NOT be.
+    {
+      const opened = await runChromux(['open', 'tok-occln', `${base}/shop`]);
+      if (!opened.ok) throw new Error(`open shop occlusion probe failed: ${opened.stderr}`);
+      const snap = await runChromux(['snapshot', 'tok-occln']);
+      if (!/overlay \(covers page/.test(snap.stdout)) {
+        throw new Error('regression: shop cookie dialog not flagged as overlay');
+      }
+      const openedBar = await runChromux(['open', 'tok-occln', `${base}/shop?consent=bar`]);
+      if (!openedBar.ok) throw new Error(`open shop consent=bar failed: ${openedBar.stderr}`);
+      const snapBar = await runChromux(['snapshot', 'tok-occln']);
+      if (/overlay \(covers page/.test(snapBar.stdout)) {
+        throw new Error('regression: bottom consent bar wrongly flagged as page-wide overlay');
+      }
+      await runChromux(['close', 'tok-occln']);
+    }
 
     for (const page of pages) {
       const session = `tok-${page.name}`;
@@ -140,6 +162,10 @@ async function main() {
     'feed-200:snapshot --interactive': 7900,
     'feed-200:snapshot --diff after one action': 100,
     'feed-200:snapshot --grep (find one item)': 150,
+    'shop:snapshot (full)': 900,
+    'shop:snapshot --interactive': 640,
+    'shop:snapshot --diff after one action': 100,
+    'shop:snapshot --grep (find one item)': 100,
   };
   const over = [];
   for (const [page, entries] of Object.entries(byPage)) {

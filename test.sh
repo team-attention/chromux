@@ -479,6 +479,161 @@ CHROMUX_PROFILE=$PROFILE node "$CT" close tab-slow 2>/dev/null > /dev/null
 CHROMUX_PROFILE=$PROFILE node "$CT" close tab-noop 2>/dev/null > /dev/null
 CHROMUX_PROFILE=$PROFILE node "$CT" close tab-rich 2>/dev/null > /dev/null
 
+# --- Test 5c.1f: ratio clickable gate and banded occlusion probe ---
+echo ""
+echo "--- Test 5c.1f: Ratio clickable gate and banded occlusion probe ---"
+# Mixed page: plenty of standard links (old absolute gate would stay off) plus
+# dense cursor-pointer tiles — the ratio gate must fire, and a clickable
+# wrapper around a standard link must be deduplicated.
+MIXED_HTML='<title>MixedApp</title><style>.tile{cursor:pointer;height:30px}</style><nav><a href="/1">n1</a> <a href="/2">n2</a> <a href="/3">n3</a> <a href="/4">n4</a> <a href="/5">n5</a> <a href="/6">n6</a> <a href="/7">n7</a> <a href="/8">n8</a> <a href="/9">n9</a> <a href="/10">n10</a> <a href="/11">n11</a> <a href="/12">n12</a></nav><div class="tile" id="t1">Tile one</div><div class="tile" id="t2">Tile two</div><div class="tile" id="t3">Tile three</div><div class="tile" id="t4">Tile four</div><div class="tile" id="t5">Tile five</div><div class="tile" id="t6">Tile six</div><div class="tile" id="t7">Tile seven</div><div class="tile" id="t8">Tile eight</div><div class="tile" id="wrap" style="height:16px"><a href="/inner" style="display:block;height:16px">Inner link</a></div><div class="tile" id="card" style="height:80px">Card nine <button style="width:20px;height:20px" aria-label="Fav"></button></div><p id="log">idle</p>'
+MIXED_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$MIXED_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-mixed "$MIXED_URL" 2>/dev/null > /dev/null
+MIXED_SNAP=$(CHROMUX_PROFILE=$PROFILE node "$CT" snapshot tab-mixed 2>/dev/null)
+check "ratio gate fires on standard-nav + div-control page" 'clickable "Tile one"' "$MIXED_SNAP"
+if echo "$MIXED_SNAP" | grep -q 'clickable "Inner link"'; then
+  echo "  ✗ clickable wrapper duplicating a same-size link was not deduplicated"
+  FAIL=$((FAIL+1))
+else
+  echo "  ✓ clickable wrapper duplicating a same-size link deduplicated"
+  PASS=$((PASS+1))
+fi
+check "card with a small inner button keeps its clickable ref" 'clickable "Card nine' "$MIXED_SNAP"
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-mixed 2>/dev/null > /dev/null
+
+# Verify baselines must be scroll-invariant: an action that only scrolls a
+# clickable-dense page must not produce a "large update" fake diff.
+SCROLL_TILES=$(node -e 'let h="";for(let i=1;i<=100;i++)h+=`<div class=\"tile\" id=\"s${i}\">Scroll tile ${i}</div>`;process.stdout.write(h)')
+SCROLL_HTML='<title>ScrollApp</title><style>.tile{cursor:pointer;height:40px}</style><button id="noop">Noop</button><button id="jump">Jump</button>'"$SCROLL_TILES"'<script>document.getElementById("jump").addEventListener("click",()=>window.scrollTo(0,2400));document.querySelectorAll(".tile").forEach(t=>t.addEventListener("click",()=>{}));</script>'
+SCROLL_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$SCROLL_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-scrollv "$SCROLL_URL" 2>/dev/null > /dev/null
+CHROMUX_PROFILE=$PROFILE node "$CT" click tab-scrollv "#noop" 2>/dev/null > /dev/null
+SCROLL_VERIFY=$(CHROMUX_PROFILE=$PROFILE node "$CT" click tab-scrollv "#jump" 2>/dev/null)
+if echo "$SCROLL_VERIFY" | grep -q "large update"; then
+  echo "  ✗ scroll-only action produced a large fake verify diff"
+  FAIL=$((FAIL+1))
+else
+  echo "  ✓ scroll-only action does not fake a large verify diff"
+  PASS=$((PASS+1))
+fi
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-scrollv 2>/dev/null > /dev/null
+
+# Occlusion: a dialog that spares the header but covers the middle and bottom
+# of the viewport must be flagged; a bottom-fixed consent bar must not be.
+OCCLUDE_LINKS='<div style="position:fixed;top:1vh;left:0"><a href="/h1">h1</a> <a href="/h2">h2</a> <a href="/h3">h3</a> <a href="/h4">h4</a> <a href="/h5">h5</a> <a href="/h6">h6</a> <a href="/h7">h7</a> <a href="/h8">h8</a> <a href="/h9">h9</a> <a href="/h10">h10</a></div><a style="position:fixed;top:40vh;left:2vw" href="/m1">m1</a><a style="position:fixed;top:45vh;left:2vw" href="/m2">m2</a><a style="position:fixed;top:50vh;left:2vw" href="/m3">m3</a><a style="position:fixed;top:55vh;left:2vw" href="/m4">m4</a><a style="position:fixed;top:78vh;left:2vw" href="/b1">b1</a><a style="position:fixed;top:88vh;left:2vw" href="/b2">b2</a>'
+MODAL_HTML="<title>OccludePage</title>$OCCLUDE_LINKS"'<div id="modal" style="position:fixed;top:15vh;left:0;right:0;height:75vh;background:#fff;border:1px solid #000;z-index:9"><p>Subscribe to continue reading</p><button id="close">Close</button></div>'
+MODAL_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$MODAL_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-modal "$MODAL_URL" 2>/dev/null > /dev/null
+MODAL_SNAP=$(CHROMUX_PROFILE=$PROFILE node "$CT" snapshot tab-modal 2>/dev/null)
+check "header-sparing modal flagged as overlay" "overlay (covers page" "$MODAL_SNAP"
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-modal 2>/dev/null > /dev/null
+BAR_HTML="<title>ConsentBarPage</title>$OCCLUDE_LINKS"'<div id="bar" style="position:fixed;bottom:0;left:0;right:0;height:10vh;background:#333;color:#fff;z-index:9">We use cookies <button id="ok">OK</button></div>'
+BAR_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$BAR_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-bar "$BAR_URL" 2>/dev/null > /dev/null
+BAR_SNAP=$(CHROMUX_PROFILE=$PROFILE node "$CT" snapshot tab-bar 2>/dev/null)
+if echo "$BAR_SNAP" | grep -q "overlay (covers page"; then
+  echo "  ✗ bottom consent bar was wrongly flagged as a page-wide overlay"
+  FAIL=$((FAIL+1))
+else
+  echo "  ✓ bottom consent bar not flagged as overlay"
+  PASS=$((PASS+1))
+fi
+check "consent bar button still listed" 'button "OK"' "$BAR_SNAP"
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-bar 2>/dev/null > /dev/null
+
+# Single-band pages (all controls in the header) must not promote a small
+# ribbon covering them to a page-wide overlay directive.
+RIBBON_HTML='<title>RibbonPage</title><div style="position:fixed;top:2vh;left:0"><a href="/h1">h1</a> <a href="/h2">h2</a> <a href="/h3">h3</a> <a href="/h4">h4</a> <a href="/h5">h5</a> <a href="/h6">h6</a> <a href="/h7">h7</a> <a href="/h8">h8</a> <a href="/h9">h9</a> <a href="/h10">h10</a></div><div id="ribbon" style="position:fixed;top:0;left:0;right:0;height:6vh;background:gold;z-index:9">Promo ribbon</div>'
+RIBBON_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$RIBBON_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-ribbon "$RIBBON_URL" 2>/dev/null > /dev/null
+RIBBON_SNAP=$(CHROMUX_PROFILE=$PROFILE node "$CT" snapshot tab-ribbon 2>/dev/null)
+if echo "$RIBBON_SNAP" | grep -q "overlay (covers page"; then
+  echo "  ✗ small ribbon on a single-band page was promoted to page-wide overlay"
+  FAIL=$((FAIL+1))
+else
+  echo "  ✓ small ribbon on a single-band page not promoted to overlay"
+  PASS=$((PASS+1))
+fi
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-ribbon 2>/dev/null > /dev/null
+
+# --- Test 5c.1g: iframe/shadow reach, dialogs, popups, upload/download, waits ---
+echo ""
+echo "--- Test 5c.1g: iframe/shadow reach, dialogs, popups, upload/download, waits ---"
+IFRAME_HTML='<title>FramePage</title><p>Host page</p><iframe title="Embedded form" srcdoc="<input id=&quot;fi&quot; aria-label=&quot;Frame input&quot;><button id=&quot;fb&quot; onclick=&quot;fs.textContent=42&quot;>Frame Go</button><p id=&quot;fs&quot;>idle</p>"></iframe>'
+IFRAME_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$IFRAME_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-frame "$IFRAME_URL" 2>/dev/null > /dev/null
+FRAME_SNAP=$(CHROMUX_PROFILE=$PROFILE node "$CT" snapshot tab-frame 2>/dev/null)
+check "snapshot pierces same-origin iframe" "Frame input" "$FRAME_SNAP"
+CHROMUX_PROFILE=$PROFILE node "$CT" fill tab-frame "#fi" "frame text" 2>/dev/null > /dev/null
+FRAME_VALUE=$(CHROMUX_PROFILE=$PROFILE node "$CT" run tab-frame "return await js('document.querySelector(\"iframe\").contentDocument.getElementById(\"fi\").value')" 2>/dev/null)
+check "fill reaches into iframe" "frame text" "$FRAME_VALUE"
+FRAME_CLICK=$(CHROMUX_PROFILE=$PROFILE node "$CT" click tab-frame "#fb" 2>/dev/null)
+check "click reaches into iframe" "42" "$FRAME_CLICK"
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-frame 2>/dev/null > /dev/null
+
+SHADOW_HTML='<title>ShadowPage</title><div id="host"></div><p id="out">idle</p><script>const r=document.getElementById("host").attachShadow({mode:"open"});r.innerHTML="<button id=\"sbtn\">Shadow button</button>";r.getElementById("sbtn").addEventListener("click",()=>{document.getElementById("out").textContent="shadow clicked"});</script>'
+SHADOW_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$SHADOW_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-shadow "$SHADOW_URL" 2>/dev/null > /dev/null
+SHADOW_SNAP=$(CHROMUX_PROFILE=$PROFILE node "$CT" snapshot tab-shadow 2>/dev/null)
+check "snapshot pierces open shadow DOM" "Shadow button" "$SHADOW_SNAP"
+SHADOW_REF=$(echo "$SHADOW_SNAP" | grep "Shadow button" | grep -o '@[0-9]*' | head -1)
+SHADOW_CLICK=$(CHROMUX_PROFILE=$PROFILE node "$CT" click tab-shadow "$SHADOW_REF" 2>/dev/null)
+check "click reaches into shadow DOM" "shadow clicked" "$SHADOW_CLICK"
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-shadow 2>/dev/null > /dev/null
+
+DIALOG_HTML='<title>DialogPage</title><button id="warn">Warn</button><p id="r">idle</p><a href="/x">x</a><a href="/y">y</a><a href="/z">z</a><script>document.getElementById("warn").addEventListener("click",()=>{const ok=confirm("Really do it?");document.getElementById("r").textContent=ok?"confirmed":"declined"});</script>'
+DIALOG_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$DIALOG_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-dialog "$DIALOG_URL" 2>/dev/null > /dev/null
+DIALOG_CLICK=$(CHROMUX_PROFILE=$PROFILE node "$CT" click tab-dialog "#warn" 2>/dev/null)
+check "JS dialog auto-handled with note" "dialog auto-dismissed" "$DIALOG_CLICK"
+check "dialog message surfaced" "Really do it?" "$DIALOG_CLICK"
+DIALOG_ALIVE=$(CHROMUX_PROFILE=$PROFILE node "$CT" run tab-dialog "return await js('1+1')" 2>/dev/null)
+check "session alive after dialog" "2" "$DIALOG_ALIVE"
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-dialog 2>/dev/null > /dev/null
+
+POPUP_HTML='<title>PopupPage</title><a id="ext" href="https://example.com" target="_blank">Open externally</a><a href="/y">y</a><a href="/z">z</a>'
+POPUP_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$POPUP_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-popup "$POPUP_URL" 2>/dev/null > /dev/null
+POPUP_CLICK=$(CHROMUX_PROFILE=$PROFILE node "$CT" click tab-popup "#ext" 2>/dev/null)
+check "popup click adopts new session" "newSession" "$POPUP_CLICK"
+check "adopted session is named" "tab-popup-popup" "$POPUP_CLICK"
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-popup-popup 2>/dev/null > /dev/null
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-popup 2>/dev/null > /dev/null
+
+UPLOAD_FILE="/tmp/chromux-upload-$$.txt"
+printf 'hello upload' > "$UPLOAD_FILE"
+UPLOAD_HTML='<title>UploadPage</title><input type="file" id="up" aria-label="Attachment"><p id="uname">none</p><a href="/x">x</a><a href="/y">y</a><a href="/z">z</a><script>document.getElementById("up").addEventListener("change",(e)=>{document.getElementById("uname").textContent="got "+e.target.files[0].name});</script>'
+UPLOAD_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$UPLOAD_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-upload "$UPLOAD_URL" 2>/dev/null > /dev/null
+UPLOAD_OUT=$(CHROMUX_PROFILE=$PROFILE node "$CT" fill tab-upload "#up" --file "$UPLOAD_FILE" 2>/dev/null)
+check "fill --file uploads into file input" "got chromux-upload-$$.txt" "$UPLOAD_OUT"
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-upload 2>/dev/null > /dev/null
+rm -f "$UPLOAD_FILE"
+
+DOWNLOAD_HTML='<title>DownloadPage</title><a id="dl" href="data:text/plain;charset=utf-8,download-payload" download="chromux-report.txt">Download report</a><a href="/y">y</a><a href="/z">z</a>'
+DOWNLOAD_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$DOWNLOAD_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-download "$DOWNLOAD_URL" 2>/dev/null > /dev/null
+DOWNLOAD_OUT=$(CHROMUX_PROFILE=$PROFILE node "$CT" download tab-download "#dl" --to /tmp 2>/dev/null)
+check "download completes with file path" '"downloaded": "chromux-report' "$DOWNLOAD_OUT"
+DOWNLOAD_PATH=$(echo "$DOWNLOAD_OUT" | grep -o '"path": "[^"]*"' | cut -d'"' -f4)
+if [ -n "$DOWNLOAD_PATH" ] && grep -q "download-payload" "$DOWNLOAD_PATH" 2>/dev/null; then
+  echo "  ✓ downloaded file has expected content"
+  PASS=$((PASS+1))
+else
+  echo "  ✗ downloaded file missing or wrong content ($DOWNLOAD_PATH)"
+  FAIL=$((FAIL+1))
+fi
+rm -f "$DOWNLOAD_PATH"
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-download 2>/dev/null > /dev/null
+
+GONE_HTML='<title>GonePage</title><div id="spinner">Loading...</div><a href="/x">x</a><a href="/y">y</a><a href="/z">z</a><script>setTimeout(()=>document.getElementById("spinner").remove(),400);</script>'
+GONE_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$GONE_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-gone "$GONE_URL" 2>/dev/null > /dev/null
+GONE_OUT=$(CHROMUX_PROFILE=$PROFILE node "$CT" wait-for-selector tab-gone "#spinner" 3000 --gone 2>/dev/null)
+check "wait-for-selector --gone resolves after removal" "goneSelector" "$GONE_OUT"
+IDLE_OUT=$(CHROMUX_PROFILE=$PROFILE node "$CT" run tab-gone "return await waitFor(null, { kind: 'network-idle', timeoutMs: 5000, idleMs: 300 })" 2>/dev/null)
+check "run waitFor network-idle resolves on quiet page" '"kind": "network-idle"' "$IDLE_OUT"
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-gone 2>/dev/null > /dev/null
+
 # --- Test 5c.2: click target validation ---
 echo ""
 echo "--- Test 5c.2: Click target validation ---"

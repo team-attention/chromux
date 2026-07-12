@@ -103,22 +103,34 @@ snapshot. Navigation resets refs; in-page changes keep them stable.
 2. `chromux snapshot exp-ab12` — accessibility tree with stable `@ref` handles.
    `--interactive` returns only actionable elements; `--grep` filters by
    pattern. Lines show live state: input values, selected option, `[checkbox
-   checked]`, `(disabled)`. Pages built from bare clickable `div`s (no roles
-   or labels) are detected and marked `clickable` with `@refs` — but the
-   automatic trigger only fires when a page shows almost no standard
-   elements. On real SPAs that mix nav links with div-based controls, pass
-   `--clickable` explicitly when the snapshot looks emptier than the page.
-   Note: value masking covers `type=password` only — values typed into
-   plain text fields (card numbers, tokens) appear in snapshots as-is.
+   checked]`, `(disabled)`. Snapshots pierce same-origin iframes and open
+   shadow DOM (cross-origin frames are marked unreachable). Pages built from
+   bare clickable `div`s are detected and marked `clickable` with `@refs`;
+   the automatic trigger fires on nearly-dead pages and on SPAs whose
+   viewport mixes a standard nav with div-based controls. If a snapshot still
+   looks emptier than the page (e.g. controls far below the fold), pass
+   `--clickable` explicitly. Note: value masking covers `type=password`
+   only — values typed into plain text fields (card numbers, tokens) appear
+   in snapshots as-is.
 3. Act by ref: `click exp-ab12 @<N>`, `fill exp-ab12 @<N> "text"`,
    `type exp-ab12 "text"` (focused field), `press exp-ab12 Enter` (also Tab,
    Escape, Backspace, Delete, arrows, Home, End, PageUp, PageDown — arrows
-   drive dropdowns). `fill` on a native `<select>` matches an option by value
-   or label and fires `change`; never `type` into a select. Custom dropdowns
-   (divs styled as comboboxes) are not `<select>` — use `click` + arrow keys.
+   drive dropdowns). Refs inside same-origin iframes and open shadow DOM work
+   like any other ref. `fill` on a native `<select>` matches an option by
+   value or label and fires `change`; never `type` into a select. Custom
+   dropdowns (divs styled as comboboxes) are not `<select>` — use `click` +
+   arrow keys. File inputs: `fill exp-ab12 @<N> --file /path/report.pdf`.
+   Downloads: `download exp-ab12 @<N> --to DIR` waits for the completed file
+   and returns its path.
 4. Verify: read the `changed` diff in the action's own response; for slower
    UIs use `--verify 1000`, or `wait-for-text exp-ab12 "Saved"` /
-   `wait-for-selector exp-ab12 ".toast"` for readiness.
+   `wait-for-selector exp-ab12 ".toast"` for readiness
+   (`wait-for-selector ... --gone` waits for disappearance; in `run`,
+   `waitFor(null, {kind: 'network-idle'})` waits out XHR bursts). If a click
+   opened a new tab, the response's `newSession` names the adopted session —
+   continue there. If a JS dialog fired, the response's `dialog` field says
+   what it asked and how it was auto-handled (`open ... --dialog accept` to
+   change the policy).
 5. `chromux close exp-ab12` when done — batch it with your last command
    (`chromux run … && chromux close exp-ab12`) so cleanup does not cost an
    extra round-trip. Batch any commands that don't need each other's output.
@@ -216,9 +228,8 @@ credentials, cookies, pixel coordinates, one-off task narration, stale facts.
   profile cleanup (also clears stale singleton locks).
 - Older aliases (`eval`, `scroll`, `wait`, `console`, `network`, `scroll-until`)
   exist for compatibility; prefer `run`, `cdp`, and `watch`.
-- Known reach limits (report these instead of retrying blindly): snapshots and
-  actions do not enter iframes (embedded payment/captcha widgets) or shadow
-  DOM; native JS dialogs (`alert`/`confirm`) block the tab until dismissed by
-  a human; file upload/download and popup windows (`target=_blank`) have no
-  first-class support yet — a click that opens a new tab reports "no visible
-  change" on the old tab.
+- Known reach limits (report these instead of retrying blindly): cross-origin
+  iframes (many payment/captcha widgets) and closed shadow roots are not
+  reachable — snapshots mark cross-origin frames explicitly. Verify diffs may
+  show a newly revealed listener-only element as text without a clickable
+  `@ref`; take a snapshot to get its ref.

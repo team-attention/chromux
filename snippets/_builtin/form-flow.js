@@ -10,6 +10,26 @@
 // Single-field form: --arg selector=... --arg value=...
 // Values are summarized in the returned receipt shape, not logged raw.
 const cssOf = (sel) => /^@\d+$/.test(sel) ? `[data-ct-ref="${sel.slice(1)}"]` : sel;
+// Page-side deep query: plain querySelector first, then open shadow roots and
+// same-origin iframes — mirrors how chromux click/fill resolve selectors.
+const DEEP_QUERY = `function deepQuery(sel) {
+  const search = (root) => {
+    let el = null;
+    try { el = root.querySelector(sel); } catch (e) { throw new Error('Bad selector: ' + sel); }
+    if (el) return el;
+    for (const host of root.querySelectorAll('*')) {
+      if (host.shadowRoot) { const found = search(host.shadowRoot); if (found) return found; }
+    }
+    for (const frame of root.querySelectorAll('iframe,frame')) {
+      let innerDoc = null;
+      try { innerDoc = frame.contentDocument; } catch {}
+      if (innerDoc) { const found = search(innerDoc); if (found) return found; }
+    }
+    return null;
+  };
+  const el = document.querySelector(sel);
+  return el || search(document);
+}`;
 const fields = (args.fields && typeof args.fields === 'object') ? args.fields : null;
 const selector = args.selector || globalThis.selector || 'input, textarea';
 const value = String(args.value ?? globalThis.value ?? 'chromux test value');
@@ -25,20 +45,24 @@ const filled = [];
 for (const [sel, val] of entries) {
   await waitFor(sel, { kind: 'selector', timeoutMs: 5000 });
   const r = await js(`((sel, txt) => {
-    const el = document.querySelector(sel);
+    ${DEEP_QUERY}
+    const el = deepQuery(sel);
     if (!el) throw new Error('Missing form field: ' + sel);
     el.focus();
-    if (el instanceof HTMLSelectElement) {
+    // Realm-safe: elements inside same-origin iframes have their own
+    // constructors and prototypes.
+    const view = el.ownerDocument.defaultView || window;
+    if (el.tagName === 'SELECT') {
       const opts = Array.from(el.options);
       const match = opts.find(o => o.value === txt)
         || opts.find(o => o.textContent.trim() === txt)
         || opts.find(o => o.textContent.trim().toLowerCase() === txt.toLowerCase());
       if (!match) throw new Error('No option matching "' + txt + '" in ' + sel);
-      const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set;
+      const setter = Object.getOwnPropertyDescriptor(view.HTMLSelectElement.prototype, 'value')?.set;
       if (setter) setter.call(el, match.value);
       else el.value = match.value;
-      el.dispatchEvent(new Event('input', { bubbles: true }));
-      el.dispatchEvent(new Event('change', { bubbles: true }));
+      el.dispatchEvent(new view.Event('input', { bubbles: true }));
+      el.dispatchEvent(new view.Event('change', { bubbles: true }));
       return { tag: 'select', id: el.id || '', value: el.value };
     }
     if (!('value' in el)) {
@@ -50,15 +74,16 @@ for (const [sel, val] of entries) {
     const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
     if (setter) setter.call(el, txt);
     else el.value = txt;
-    el.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: txt }));
-    el.dispatchEvent(new Event('change', { bubbles: true }));
+    el.dispatchEvent(new view.InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: txt }));
+    el.dispatchEvent(new view.Event('change', { bubbles: true }));
     return { tag: el.tagName.toLowerCase(), id: el.id || '', name: el.getAttribute('name') || '' };
   })(${JSON.stringify(sel)}, ${JSON.stringify(String(val))})`);
   filled.push({ selector: sel, ...r, valueLength: String(val).length });
 }
 
 const submit = await js(`((sel) => {
-  const el = document.querySelector(sel);
+  ${DEEP_QUERY}
+  const el = deepQuery(sel);
   if (!el) return null;
   el.scrollIntoView({ block: 'center', inline: 'center' });
   el.click();
@@ -74,20 +99,31 @@ else if (readySelector) readiness = await waitFor(readySelector, { kind: 'select
 let report = null;
 if (reportSelector) {
   report = await js(`((sel) => {
-    const el = document.querySelector(sel);
+    ${DEEP_QUERY}
+    const el = deepQuery(sel);
     return el ? (el.innerText || el.textContent || '').trim().slice(0, 500) : null;
   })(${JSON.stringify(cssOf(reportSelector))})`);
 } else if (readyText && readiness) {
   report = await js(`((needle) => {
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-    let node;
-    while ((node = walker.nextNode())) {
-      if (node.textContent.includes(needle)) {
-        const el = node.parentElement;
-        return (el ? (el.innerText || el.textContent) : node.textContent).trim().slice(0, 500);
+    const scan = (doc) => {
+      if (!doc || !doc.body) return null;
+      const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+      let node;
+      while ((node = walker.nextNode())) {
+        if (node.textContent.includes(needle)) {
+          const el = node.parentElement;
+          return (el ? (el.innerText || el.textContent) : node.textContent).trim().slice(0, 500);
+        }
       }
-    }
-    return null;
+      for (const frame of doc.querySelectorAll('iframe,frame')) {
+        try {
+          const found = scan(frame.contentDocument);
+          if (found) return found;
+        } catch {}
+      }
+      return null;
+    };
+    return scan(document);
   })(${JSON.stringify(readyText)})`);
 }
 const state = await page('({url:location.href,title:document.title})');
