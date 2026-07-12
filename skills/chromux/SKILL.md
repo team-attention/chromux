@@ -104,8 +104,12 @@ snapshot. Navigation resets refs; in-page changes keep them stable.
    `--interactive` returns only actionable elements; `--grep` filters by
    pattern. Lines show live state: input values, selected option, `[checkbox
    checked]`, `(disabled)`. Pages built from bare clickable `div`s (no roles
-   or labels) are detected automatically and marked `clickable` with `@refs`;
-   force this with `--clickable`.
+   or labels) are detected and marked `clickable` with `@refs` — but the
+   automatic trigger only fires when a page shows almost no standard
+   elements. On real SPAs that mix nav links with div-based controls, pass
+   `--clickable` explicitly when the snapshot looks emptier than the page.
+   Note: value masking covers `type=password` only — values typed into
+   plain text fields (card numbers, tokens) appear in snapshots as-is.
 3. Act by ref: `click exp-ab12 @<N>`, `fill exp-ab12 @<N> "text"`,
    `type exp-ab12 "text"` (focused field), `press exp-ab12 Enter` (also Tab,
    Escape, Backspace, Delete, arrows, Home, End, PageUp, PageDown — arrows
@@ -212,3 +216,9 @@ credentials, cookies, pixel coordinates, one-off task narration, stale facts.
   profile cleanup (also clears stale singleton locks).
 - Older aliases (`eval`, `scroll`, `wait`, `console`, `network`, `scroll-until`)
   exist for compatibility; prefer `run`, `cdp`, and `watch`.
+- Known reach limits (report these instead of retrying blindly): snapshots and
+  actions do not enter iframes (embedded payment/captcha widgets) or shadow
+  DOM; native JS dialogs (`alert`/`confirm`) block the tab until dismissed by
+  a human; file upload/download and popup windows (`target=_blank`) have no
+  first-class support yet — a click that opens a new tab reports "no visible
+  change" on the old tab.

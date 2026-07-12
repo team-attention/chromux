@@ -41,14 +41,17 @@ for (const [sel, val] of entries) {
       el.dispatchEvent(new Event('change', { bubbles: true }));
       return { tag: 'select', id: el.id || '', value: el.value };
     }
-    if ('value' in el) {
-      const proto = Object.getPrototypeOf(el);
-      const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
-      if (setter) setter.call(el, txt);
-      else el.value = txt;
-      el.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: txt }));
-      el.dispatchEvent(new Event('change', { bubbles: true }));
+    if (!('value' in el)) {
+      throw new Error('Field is not fillable via value: ' + sel + ' (' + el.tagName.toLowerCase()
+        + (el.isContentEditable ? ', contenteditable' : '')
+        + ') — use click + type for custom widgets/rich editors');
     }
+    const proto = Object.getPrototypeOf(el);
+    const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+    if (setter) setter.call(el, txt);
+    else el.value = txt;
+    el.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: txt }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
     return { tag: el.tagName.toLowerCase(), id: el.id || '', name: el.getAttribute('name') || '' };
   })(${JSON.stringify(sel)}, ${JSON.stringify(String(val))})`);
   filled.push({ selector: sel, ...r, valueLength: String(val).length });

@@ -1750,6 +1750,21 @@ async function captureVerifyDiff(s, waitMs, actedSelector) {
       const again = await capture();
       if (again != null) text = again;
     }
+    // Slow async UIs (server round-trips) land seconds later. Back off once
+    // more, and if the page still shows nothing, say so in time-qualified
+    // terms — a bare "no changes" reads as "the action failed" and pushes
+    // agents into dangerous retries (double submits).
+    const noChangeYet = () => !renderSnapshotDiff(previous, text).split('\n')
+      .some(line => line.startsWith('+ ') || line.startsWith('- '));
+    if (!changedLines.length && noChangeYet()) {
+      await sleep(1200);
+      const late = await capture();
+      if (late != null) text = late;
+      if (noChangeYet()) {
+        s.snapshotBaselines.verify = text;
+        return '# verify: no visible change detected within ~2s — the action was dispatched, but the UI may still be updating or the result may be in a new tab/dialog; confirm with wait-for-text or snapshot --diff BEFORE retrying the action';
+      }
+    }
   }
   s.snapshotBaselines.verify = text;
   if (previous == null && text.length > 2000) {

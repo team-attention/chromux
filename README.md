@@ -440,6 +440,16 @@ Coordinate clicks validate that `X,Y` are inside the current viewport. `fill`
 updates input state through the native value setter and dispatches input/change
 events so common frontend frameworks observe the value.
 
+Known reach limits, stated so agents report instead of blind-retrying:
+clickable auto-detection only triggers on pages with almost no standard
+elements — on real SPAs that mix nav links with div controls, pass
+`--clickable` explicitly. Snapshot value display masks `type=password` only;
+values in plain text fields appear as-is. Snapshots and actions do not enter
+iframes or shadow DOM yet; native JS dialogs block the tab until dismissed;
+file upload/download and popup windows (`target=_blank`) have no first-class
+support — a click that opens a new tab reports no visible change on the old
+tab. These are the current top items on the roadmap.
+
 ### Watch / Debug
 
 | Command | Description |

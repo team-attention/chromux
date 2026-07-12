@@ -446,6 +446,39 @@ else
 fi
 CHROMUX_PROFILE=$PROFILE node "$CT" close tab-state 2>/dev/null > /dev/null
 
+# --- Test 5c.1e: slow-UI verify backoff + form-flow unfillable field ---
+echo ""
+echo "--- Test 5c.1e: Slow-UI verify backoff and unfillable-field error ---"
+# The first verify of a session only primes the baseline, so each scenario
+# clicks a primer button once before the click under test.
+SLOW_HTML='<title>SlowPage</title><button id="prime">Prime</button><button id="go">Save</button><p id="out">idle</p><a href="/a">a</a><a href="/b">b</a><a href="/c">c</a><script>document.getElementById("go").addEventListener("click",function(){setTimeout(function(){document.getElementById("out").textContent="saved after wait"},1600)})</script>'
+SLOW_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$SLOW_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-slow "$SLOW_URL" 2>/dev/null > /dev/null
+CHROMUX_PROFILE=$PROFILE node "$CT" click tab-slow "#prime" 2>/dev/null > /dev/null
+SLOW_VERIFY=$(CHROMUX_PROFILE=$PROFILE node "$CT" click tab-slow "#go" 2>/dev/null)
+check "verify backoff catches slow async update" "saved after wait" "$SLOW_VERIFY"
+STATIC_HTML='<title>StaticPage</title><button id="noop">Noop</button><a href="/a">a</a><a href="/b">b</a><a href="/c">c</a>'
+STATIC_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$STATIC_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-noop "$STATIC_URL" 2>/dev/null > /dev/null
+CHROMUX_PROFILE=$PROFILE node "$CT" click tab-noop "#noop" 2>/dev/null > /dev/null
+NOOP_VERIFY=$(CHROMUX_PROFILE=$PROFILE node "$CT" click tab-noop "#noop" 2>/dev/null)
+check "no-change verify is time-qualified, not definitive" "may still be updating" "$NOOP_VERIFY"
+check "no-change verify warns before retrying" "BEFORE retrying" "$NOOP_VERIFY"
+RICH_HTML='<title>RichPage</title><div id="rich" contenteditable="true" aria-label="Editor">edit me</div><button id="s" type="button">Send</button>'
+RICH_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$RICH_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-rich "$RICH_URL" 2>/dev/null > /dev/null
+if CHROMUX_PROFILE=$PROFILE node "$CT" run tab-rich --file "$(dirname "$0")/snippets/_builtin/form-flow.js" --arg fields='{"#rich":"hello"}' --arg submit='#s' >/tmp/chromux-rich-out-$$.txt 2>&1; then
+  echo "  ✗ form-flow silently accepted an unfillable contenteditable field"
+  FAIL=$((FAIL+1))
+else
+  RICH_ERR=$(cat /tmp/chromux-rich-out-$$.txt)
+  check "form-flow fails loudly on unfillable field" "not fillable via value" "$RICH_ERR"
+fi
+rm -f /tmp/chromux-rich-out-$$.txt
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-slow 2>/dev/null > /dev/null
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-noop 2>/dev/null > /dev/null
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-rich 2>/dev/null > /dev/null
+
 # --- Test 5c.2: click target validation ---
 echo ""
 echo "--- Test 5c.2: Click target validation ---"
