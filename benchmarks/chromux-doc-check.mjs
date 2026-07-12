@@ -58,7 +58,14 @@ assertContains(checks, 'README agent cross-tool benchmark', docs.readme, 'agent-
 assertContains(checks, 'README deterministic cross-tool benchmark', docs.readme, 'compare-benchmark.mjs');
 assertContains(checks, 'README benchmark doc link', docs.readme, 'docs/benchmark-2026-07.md');
 assertContains(checks, 'README miniwob tasks', docs.readme, 'MiniWoB++');
+assertContains(checks, 'README macos app install', docs.readme, 'install-app.sh');
+assertContains(checks, 'README launch at login', docs.readme, 'Launch at Login');
+assertContains(checks, 'README profile disk usage', docs.readme, 'per-profile disk usage');
 assertContains(checks, 'install troubleshooting batch', docs.install, '--host-backoff-ms');
+assertContains(checks, 'install macos app install', docs.install, 'install-app.sh');
+assertContains(checks, 'install macos app ask first', docs.install, 'macOS App (ask the user first)');
+assertContains(checks, 'install launch at login', docs.install, 'Launch at Login');
+assertContains(checks, 'install profile disk usage', docs.install, 'per-profile disk usage');
 assertContains(checks, 'chromux skill receipt', docs.chromuxSkill, '--receipt');
 assertContains(checks, 'chromux skill snippets', docs.chromuxSkill, 'network-errors.js');
 assertContains(checks, 'chromux skill snapshot diff', docs.chromuxSkill, '--diff');

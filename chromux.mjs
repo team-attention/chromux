@@ -1140,6 +1140,38 @@ function profileFileInfo(profileName) {
   }
 }
 
+function directorySizeBytes(dir) {
+  let total = 0;
+  let entries;
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return total;
+  }
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    try {
+      if (entry.isSymbolicLink()) continue;
+      if (entry.isDirectory()) total += directorySizeBytes(full);
+      else if (entry.isFile()) total += fs.statSync(full).size;
+    } catch {
+      // files can vanish mid-walk while Chrome runs; skip them
+    }
+  }
+  return total;
+}
+
+const PROFILE_DISK_USAGE_TTL_MS = 60_000;
+const profileDiskUsageCache = new Map();
+
+function profileDiskUsageBytes(profileName) {
+  const cached = profileDiskUsageCache.get(profileName);
+  if (cached && Date.now() - cached.computedAt < PROFILE_DISK_USAGE_TTL_MS) return cached.bytes;
+  const bytes = directorySizeBytes(profileDir(profileName));
+  profileDiskUsageCache.set(profileName, { bytes, computedAt: Date.now() });
+  return bytes;
+}
+
 async function readDaemonSnapshot(endpoint) {
   if (!endpoint) {
     return { status: 'idle', sessions: null, mode: null, paused: false, resources: null };
@@ -1192,6 +1224,7 @@ async function profileInventoryItem(profileName) {
     source: runtime?.source || null,
     userDataDir: runtime?.userDataDir || fileInfo.userDataDir,
     modifiedAt: fileInfo.modifiedAt,
+    diskUsageBytes: profileDiskUsageBytes(profileName),
     daemon,
     activeTabs,
     paused,
@@ -4888,6 +4921,7 @@ async function runStatusAppSelfTest() {
   fs.mkdirSync(profileDir('alpha'), { recursive: true });
   const inventory = await collectProfileInventory();
   assertSelfTest(inventory.some(profile => profile.name === 'alpha') && inventory.some(profile => profile.name === 'beta'), 'profile inventory lists known local profiles', checks);
+  assertSelfTest(inventory.every(profile => Number.isInteger(profile.diskUsageBytes) && profile.diskUsageBytes >= 0), 'profile inventory reports per-profile disk usage bytes', checks);
   const sortedSample = [
     { name: 'stopped-profile', status: 'stopped', activeTabs: null, daemon: { status: 'idle' } },
     { name: 'active-profile', status: 'running', activeTabs: 1, daemon: { status: 'ok' } },

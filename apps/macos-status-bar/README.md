@@ -19,6 +19,30 @@ Node from `CHROMUX_NODE`, common Homebrew/system paths, and then `PATH`.
 open "apps/macos-status-bar/dist/chromux.app"
 ```
 
+## Install From Checkout
+
+Build and install the app to `/Applications` so Spotlight and Launchpad can
+find and launch it:
+
+```bash
+./apps/macos-status-bar/install-app.sh
+```
+
+The installer asks before building; pass `--yes` for non-interactive installs
+and `--no-open` to skip launching the app afterwards. If `/Applications` is not
+writable, it falls back to `~/Applications/chromux.app`. Building requires the
+Xcode Command Line Tools (`swiftc`).
+
+## App Icon
+
+The bundle ships `assets/chromux.icns`, generated from
+`assets/logo/chromux-app-icon.svg` at the repo root. Regenerate it after icon
+changes (requires local Google Chrome for the SVG render):
+
+```bash
+./apps/macos-status-bar/make-icon.sh
+```
+
 ## Release Package
 
 Build a zipped app bundle for GitHub Releases from macOS:
@@ -58,10 +82,27 @@ from a checkout when you want terminal or agent usage.
 
 - Adds a `cx` item to the macOS status bar.
 - Starts `chromux app --host 127.0.0.1 --port 0`.
-- Opens the local dashboard in a native WebKit window.
-- Shows currently active profiles in the `cx` menu when it opens.
-- Supports active-first sorting, filtering, bulk profile selection, and deletion
-  through the dashboard.
+- Opens the local dashboard in a native WebKit window with dark chrome
+  (window background and titlebar match the dashboard canvas color).
+- Shows currently active profiles in the `cx` menu when it opens, including
+  each profile's disk usage; clicking an active profile entry opens the
+  dashboard window.
+- Supports active-first sorting, search, status filtering, per-profile disk
+  usage, bulk profile selection, and deletion through the dashboard. Bulk
+  actions appear only while at least one profile is selected.
 - Provides menu items for opening the dashboard, opening the URL in a browser,
   restarting the local server, and quitting.
+- Provides a "Launch at Login" toggle (macOS 13+ `SMAppService`) so the menu
+  bar item is always present after login.
 - Stops the local server process on quit.
+
+## Design
+
+The dashboard UI in `status-app/` follows `status-app/DESIGN.md` (dark token
+system). UI work in this folder and in `status-app/` must follow the AGENTS.md
+guides next to those files.
+
+For window-chrome QA without the OS Screen Recording permission, run the app
+binary with `CHROMUX_STATUS_WINDOW_SNAPSHOT=<path-prefix>`; after the dashboard
+loads it writes `<prefix>-chrome.png` (window frame including titlebar) and
+`<prefix>-content.png` (rendered dashboard).

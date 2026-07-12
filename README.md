@@ -1,49 +1,75 @@
-# chromux
+<p align="center">
+  <img src="assets/logo/chromux-logo.svg" alt="chromux logo" width="760">
+</p>
 
-> **tmux for Chrome tabs.** Turn the Chrome you already use — logins, cookies, history and all — into a fleet of parallel, agent-driveable browser sessions. Raw CDP, zero dependencies, zero model calls to replay.
+<p align="center">
+  <b>tmux for Chrome tabs — the best browser tool for agents.</b><br>
+  Your real Chrome, logged in everywhere, split into a fleet of parallel agent sessions<br>
+  that verify actions in ~47 tokens, learn every site they touch, and replay proven flows with zero model calls.
+</p>
 
-![node](https://img.shields.io/badge/node-%3E%3D22-brightgreen)
-![dependencies](https://img.shields.io/badge/runtime_deps-0-blue)
-![license](https://img.shields.io/badge/license-MIT-black)
+<p align="center">
+  <img alt="node" src="https://img.shields.io/badge/node-%3E%3D22-brightgreen">
+  <img alt="dependencies" src="https://img.shields.io/badge/runtime_deps-0-blue">
+  <img alt="license" src="https://img.shields.io/badge/license-MIT-black">
+</p>
 
 ```bash
 git clone https://github.com/team-attention/chromux && cd chromux && npm install -g .
 
-chromux open inbox https://mail.example.com     # your real Chrome — already logged in
-chromux snapshot inbox --interactive            # page structure with @refs, ~36 tokens
-chromux click inbox @3                          # act on a ref…
-chromux snapshot inbox --diff                   # …verify what changed for ~47 tokens
+# three agents, one logged-in Chrome — separate tabs, zero collisions
+chromux open inbox    https://mail.example.com &
+chromux open research https://news.ycombinator.com &
+chromux open docs     https://developer.mozilla.org &
+wait
+
+chromux snapshot inbox --interactive    # page structure with @refs, ~36 tokens
+chromux click inbox @3                  # act on a ref…
+chromux snapshot inbox --diff           # …verify what changed for ~47 tokens
+
+# freeze a working flow once — every later run replays it with zero model calls
+chromux script save mail.example.com/triage --file triage.js
+chromux run inbox --script mail.example.com/triage
+
+# or point 10 worker tabs at a URL queue
+chromux batch --file urls.txt --workers 10 --out results.jsonl
 ```
 
-## Why people get hooked
+## Why this is the best browser tool for agents
 
-- **Your logins already work.** No cloud browser to re-authenticate, no
-  extension bridge to babysit, no bundled Chromium with a bot-shaped
-  fingerprint. chromux drives real, persistent Chrome profiles over raw CDP —
-  log in once, run unattended forever, on macOS, Linux, native Windows, WSL,
-  servers, and CI.
-- **Agents read hundreds of times less.** Observation payloads are the
-  product: on a measured 200-story feed page, full HTML is ~22,400 tokens,
-  `snapshot --interactive` is ~7,200 — and verifying an action with
-  `snapshot --diff` is **~45 tokens**, where re-snapshotting costs
-  agent-browser ~10.9K and playwright-cli ~28.4K on the same page. Reproduce
-  it yourself with the checked-in benchmarks (tables below).
-- **Flows become assets, not costs.** Derive a working flow once, freeze it
-  with `chromux script save`, and every later run replays it with **zero
-  model calls** — `open` even tells the next agent the script exists. When a
-  site changes, the failed replay hands your agent the script path and a
-  repair hint: fix once, replay forever. Extraction results can be held to a
-  JSON-schema contract with `--schema`, so drift fails loudly instead of
-  silently corrupting your pipeline.
-- **Parallel by design.** One daemon per profile, N independent tab sessions:
-  ten agents can browse concurrently in the same logged-in profile without
-  stepping on each other. `batch` pools workers over URL queues with retries
-  and per-host backoff; `pause`/`resume` is the one-command kill switch for a
-  whole wave.
-- **Zero dependencies. Zero LLM. Zero cloud.** One file on Node.js ≥ 22
-  built-ins. chromux is the deterministic hand; your coding agent is the
-  brain — no per-step token bills, no vendor lock-in, no data leaving your
-  machine.
+Most "AI browser" tools hand your agent a stranger's browser: a bundled
+Chromium with a bot-shaped fingerprint, logged into nothing, reading
+20,000-token page dumps, rediscovering every flow from scratch — and paying
+for a model call at every step. Your agent deserves better. chromux hands it
+**your** browser, and five design bets do the rest:
+
+1. **Your real Chrome, your real logins.** No cloud browser to
+   re-authenticate, no extension bridge to babysit, no fingerprint that
+   screams "bot". chromux drives real, persistent Chrome profiles over raw
+   CDP — log in once, run unattended forever, on macOS, Linux, native
+   Windows, WSL, servers, and CI.
+2. **Parallel by architecture, not by luck.** One daemon per profile, N
+   isolated tab sessions: ten agents browse the same logged-in profile
+   concurrently without stepping on each other. `batch` pools workers over
+   URL queues with retries and per-host backoff; `pause`/`resume` is the
+   one-command kill switch for a whole wave.
+3. **It gets smarter every run.** Site notes (`chromux note`) remember
+   selectors, quirks, and wait behavior per host and surface automatically on
+   the next visit. Working flows freeze with `chromux script save` and replay
+   with **zero model calls** — `open` even tells the next agent the script
+   exists. When a site changes, the failed replay hands back the script path
+   and a repair hint: fix once, replay forever. Most tools start every
+   session from zero; chromux compounds.
+4. **~47 tokens to verify an action.** Observation payloads are the product:
+   on a measured 200-story feed page, full HTML is ~20,400 tokens,
+   `snapshot --interactive` is ~7,200 — and checking what an action changed
+   with `snapshot --diff` is **~47 tokens**. Extractions can be held to a
+   JSON-schema contract with `--schema`, so drift fails loudly. Reproduce it
+   all with the checked-in token benchmark (table below).
+5. **Zero dependencies. Zero LLM. Zero cloud.** One file on Node.js ≥ 22
+   built-ins. chromux is the deterministic hand; your coding agent is the
+   brain — no per-step token bills, no vendor lock-in, no data leaving your
+   machine.
 
 ## How it compares
 
@@ -145,9 +171,9 @@ CHROMUX_TASK=research-pass chromux open agent-d https://example.com
 # Open the local profile/activity companion app
 chromux app --open
 
-# Build and launch the native macOS app from a checkout (macOS only)
-./apps/macos-status-bar/build.sh
-open "apps/macos-status-bar/dist/chromux.app"
+# Build and install the native macOS app into /Applications (macOS only),
+# so Spotlight and Launchpad can find it
+./apps/macos-status-bar/install-app.sh
 
 # Each operates independently
 chromux snapshot agent-a
@@ -774,10 +800,11 @@ chromux app --port 9341 --open
 ```
 
 The app lists known profiles, selected profile state, daemon/session counts when
-available, active-first profile sorting, search/status filters, bulk profile
-selection/deletion, raw command events, Task-first timeline groups, fallback
-session windows, and site knowledge note paths under
-`~/.chromux/skills/<host>/*.md`. V1 does not read Chrome History.
+available, per-profile disk usage (plus the total across profiles), active-first
+profile sorting, search/status filters, bulk profile selection/deletion, raw
+command events, Task-first timeline groups, fallback session windows, and site
+knowledge note paths under `~/.chromux/skills/<host>/*.md`. V1 does not read
+Chrome History.
 
 On macOS, use the GitHub Release asset when you want a real menu bar app instead
 of a browser tab. The release zip contains `chromux.app`; unzip it, move it to
@@ -794,11 +821,21 @@ with the local `node` binary, looking at `CHROMUX_NODE`, common Homebrew/system
 paths, and then `PATH`. If macOS blocks an unsigned download on first launch,
 use Control-click > Open or approve it in System Settings > Privacy & Security.
 
-The one-pass installer in `install.md` asks macOS users whether to download the
-latest release app, copy it to `/Applications/chromux.app`, and launch it. If
-`/Applications` is not writable, it falls back to `~/Applications/chromux.app`.
+The one-pass setup in `install.md` has agents ask macOS users whether to also
+install the menu bar app, then builds it from the checkout (or downloads the
+latest release app without the Xcode Command Line Tools), copies it to
+`/Applications/chromux.app`, and launches it. If `/Applications` is not
+writable, it falls back to `~/Applications/chromux.app`.
 
-From a repo checkout, build and launch the same native wrapper locally:
+From a repo checkout, build and install the same native wrapper into
+`/Applications` so Spotlight and Launchpad can find it (requires the Xcode
+Command Line Tools):
+
+```bash
+./apps/macos-status-bar/install-app.sh
+```
+
+For a quick dev loop without installing, build and launch from `dist/`:
 
 ```bash
 ./apps/macos-status-bar/build.sh
@@ -814,8 +851,8 @@ ls apps/macos-status-bar/release/
 
 The wrapper adds a `cx` item to the macOS status bar, starts the same local
 dashboard server, and exposes menu actions for opening the dashboard, opening it
-in a browser, restarting the server, and quitting. The `cx` menu also refreshes
-and shows currently active profiles when it opens.
+in a browser, restarting the server, toggling Launch at Login, and quitting.
+The `cx` menu also refreshes and shows currently active profiles when it opens.
 
 ## License
 

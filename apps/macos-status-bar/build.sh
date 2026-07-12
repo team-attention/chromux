@@ -18,8 +18,10 @@ swiftc \
   "$ROOT/apps/macos-status-bar/src/ChromuxStatusBar/main.swift" \
   -o "$MACOS/$APP_NAME" \
   -framework AppKit \
-  -framework WebKit
+  -framework WebKit \
+  -framework ServiceManagement
 
+cp "$ROOT/apps/macos-status-bar/assets/chromux.icns" "$RESOURCES/chromux.icns"
 cp "$ROOT/chromux.mjs" "$RESOURCES/chromux.mjs"
 cp "$ROOT/status-app/index.html" "$RESOURCES/status-app/index.html"
 cp "$ROOT/status-app/app.js" "$RESOURCES/status-app/app.js"
@@ -41,6 +43,8 @@ cat > "$CONTENTS/Info.plist" <<PLIST
   <string>$APP_NAME</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
+  <key>CFBundleIconFile</key>
+  <string>chromux</string>
   <key>CFBundleShortVersionString</key>
   <string>$VERSION</string>
   <key>CFBundleVersion</key>
