@@ -132,4 +132,17 @@ assertContains(checks, 'work skill script save', docs.workSkill, 'chromux script
 assertContains(checks, 'work skill snapshot diff', docs.workSkill, '--diff');
 assertContains(checks, 'work skill injection hygiene', docs.workSkill, 'lethal trifecta');
 
+// Cross-file constant sync: the pick-candidate selector exists in the daemon
+// (fill --pick) and in the standalone search-and-pick snippet; drift between
+// them must fail validation.
+{
+  const src = read('chromux.mjs');
+  const snippet = read('snippets/_builtin/search-and-pick.js');
+  const daemonSel = src.match(/const PICK_CANDIDATE_SEL = '([^']+)'/)?.[1];
+  const snippetSel = snippet.match(/const PICK_SEL = '([^']+)'/)?.[1];
+  const ok = Boolean(daemonSel) && daemonSel === snippetSel;
+  checks.push({ label: 'pick selector in sync with search-and-pick snippet', needle: daemonSel || '(missing)', ok });
+  if (!ok) throw new Error(`pick candidate selector drift: daemon=${daemonSel} snippet=${snippetSel}`);
+}
+
 console.log(JSON.stringify({ ok: true, checks }, null, 2));

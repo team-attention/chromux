@@ -23,6 +23,8 @@ for (const [index, step] of steps.entries()) {
 }
 const reportSelector = args.report || '';
 
+// Mirrors the realm-safe setter + events idiom of chromux.mjs /fill and
+// form-flow.js; keep the three in sync.
 const fillOne = async (sel, val) => js(`((sel, txt) => {
   const el = document.querySelector(sel);
   if (!el) throw new Error('Missing wizard field: ' + sel);

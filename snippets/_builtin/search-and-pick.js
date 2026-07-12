@@ -7,6 +7,9 @@
 //     --arg input='#search' --arg query='seo' --arg pick='Seoul' \
 //     [--arg submit='#go'] [--arg readyText='Results'] [--arg report='#summary']
 const cssOf = (sel) => /^@\d+$/.test(sel) ? `[data-ct-ref="${sel.slice(1)}"]` : sel;
+// Mirrors PICK_CANDIDATE_SEL in chromux.mjs (fill --pick); doc-check asserts
+// the two stay identical.
+const PICK_SEL = '[role="option"],[role="menuitem"],li,[class*="suggest"] *,[class*="autocomplete"] *,[class*="option"]';
 const inputSel = cssOf(args.input || '');
 const query = String(args.query ?? '');
 const pick = String(args.pick ?? '');
@@ -20,7 +23,7 @@ await waitFor(inputSel, { kind: 'selector', timeoutMs: 8000 });
 // in sync): mark candidates visible BEFORE typing so a static nav/list item
 // matching the pick text can never win the race against the real popup.
 await js(`(() => {
-  for (const el of document.querySelectorAll('[role="option"],[role="menuitem"],li,[class*="suggest"] *,[class*="autocomplete"] *,[class*="option"]')) {
+  for (const el of document.querySelectorAll(${JSON.stringify(PICK_SEL)})) {
     const rect = el.getBoundingClientRect();
     if (rect.width > 0 && rect.height > 0) el.setAttribute('data-ct-pick-seen', '1');
   }
@@ -52,7 +55,7 @@ while (Date.now() <= deadline && picked == null) {
       return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
     };
     const candidates = [];
-    for (const el of document.querySelectorAll('[role="option"],[role="menuitem"],li,[class*="suggest"] *,[class*="autocomplete"] *,[class*="option"]')) {
+    for (const el of document.querySelectorAll(${JSON.stringify(PICK_SEL)})) {
       if (el.hasAttribute('data-ct-pick-seen')) continue;
       if (input && (el === input || el.contains(input) || input.contains(el))) continue;
       if (!visible(el)) continue;

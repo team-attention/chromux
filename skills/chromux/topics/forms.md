@@ -25,7 +25,7 @@ The universal "type a few letters, wait for the popup, choose the matching
 suggestion" pattern is one command:
 
 ```bash
-chromux fill <s> @4 "seo" --pick "Seoul (SEL)"
+chromux fill <s> @4 "par" --pick "Paris (CDG)"
 ```
 
 The response's `picked` field is the label actually chosen (exact match wins

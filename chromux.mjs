@@ -1941,32 +1941,41 @@ async function markListenerClickables(s, force = false) {
   } catch {}
 }
 
+// Verify baselines are ALWAYS captured in this shape: full filter, 'stable'
+// clickable capping (document order — a viewport-dependent cap would turn
+// every scroll into a large fake diff). One capture function keeps the three
+// baseline writers (verify itself, open-time priming, snapshot advance) from
+// ever drifting in shape.
+// Tradeoff, deliberate: the per-candidate CDP listener re-scan
+// (markListenerClickables force=true) is skipped on this path. It cost up to
+// 400 serial getEventListeners round-trips per capture (and verify captures
+// up to three times per action). The cost: on standard-rich pages where
+// open/snapshot never stamped data-ct-listener, an element revealed by an
+// action whose only click affordance is a JS listener (no cursor style, no
+// onclick) appears in the diff as text without a clickable @ref; take a
+// snapshot to get its ref.
+async function captureStableSnapshot(s, timeoutMs = 5000) {
+  const r = await s.cdp.send('Runtime.evaluate', {
+    expression: `(${SNAPSHOT_JS})(null, 'stable')`,
+    returnByValue: true,
+  }, timeoutMs);
+  const text = r?.result?.value;
+  return typeof text === 'string' ? text : null;
+}
+
+async function primeVerifyBaseline(s, timeoutMs = 3000) {
+  const text = await captureStableSnapshot(s, timeoutMs).catch(() => null);
+  if (text == null) return;
+  if (!s.snapshotBaselines) s.snapshotBaselines = {};
+  s.snapshotBaselines.verify = text;
+}
+
 // Act-and-verify in one round-trip: wait for the UI to settle, snapshot
-// (interactive filter, clickable auto-detection), diff against the session
+// (full filter, stable clickable capping), diff against the session
 // baseline, and advance the baseline. Used by click/fill/type/press when the
 // caller passes `verify`.
 async function captureVerifyDiff(s, waitMs, actedSelector) {
-  const capture = async () => {
-    // Full filter + clickable 'stable': the verify output is a diff, so
-    // steady-state clickable noise cancels out between baseline and current —
-    // only what the action revealed (popups, menus, panels) survives. The
-    // 'stable' mode caps candidates in document order: a viewport-dependent
-    // cap would turn every scroll into a large fake diff.
-    // Tradeoff, deliberate: the per-candidate CDP listener re-scan
-    // (markListenerClickables force=true) is skipped here. It cost up to 400
-    // serial getEventListeners round-trips per capture (and verify captures
-    // up to three times per action). The cost: on standard-rich pages where
-    // open/snapshot never stamped data-ct-listener, an element revealed by
-    // the action whose only click affordance is a JS listener (no cursor
-    // style, no onclick) appears in the diff as text without a clickable
-    // @ref; take a snapshot to get its ref.
-    const r = await s.cdp.send('Runtime.evaluate', {
-      expression: `(${SNAPSHOT_JS})(null, 'stable')`,
-      returnByValue: true,
-    }, 5000);
-    const text = r.result?.value;
-    return typeof text === 'string' ? text : null;
-  };
+  const capture = () => captureStableSnapshot(s, 5000);
   await sleep(Math.min(Math.max(Number(waitMs) || 300, 0), 10000));
   let text = await capture();
   if (text == null) return null;
@@ -2039,6 +2048,26 @@ function attachDialogHandler(s) {
       at: Date.now(),
     };
   });
+}
+
+// Session-wide verify policy for click/fill/type/press: explicit ms wins,
+// `--no-verify` disables, crawl mode skips, everything else settles 300ms.
+function resolveVerifyMs(body, settings) {
+  if (body.verify === false) return null;
+  if (typeof body.verify === 'number') return body.verify;
+  return settings.mode === 'crawl' ? null : 300;
+}
+
+// Shared action epilogue for click/press: adopt any popup the action opened
+// and attach the dialog note. The action's start time is captured when the
+// finisher is created.
+function actionFinisher(port, sessions, session, s, browserState, settings) {
+  const since = Date.now();
+  return async (result) => {
+    const popup = await adoptPopup(port, sessions, session, s, since, browserState, settings);
+    if (popup) result.newSession = popup;
+    return withDialogNote(s, since, result);
+  };
 }
 
 // Attach a note about any JS dialog auto-handled since `since` to an action
@@ -2424,12 +2453,9 @@ function selectorVisibleExpression(selector) {
 }
 
 // Inverse probe: true when the selector matches nothing visible anywhere.
+// Defined as the exact negation of "visible" so the two can never drift.
 function selectorGoneExpression(selector) {
-  return `((sel) => {
-    ${DEEP_QUERY_JS}
-    const el = deepQuery(sel);
-    return !el || !deepVisible(el);
-  })(${JSON.stringify(String(selector))})`;
+  return `!(${selectorVisibleExpression(selector)})`;
 }
 
 // First candidate that matches wins: selectors must resolve to a visible
@@ -2679,14 +2705,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
         // Prime the verify baseline at navigation time so the FIRST action on
         // a page gets a real diff instead of "first observation of a large
         // page". Local capture only — nothing is added to the response.
-        const primer = await s.cdp.send('Runtime.evaluate', {
-          expression: `(${SNAPSHOT_JS})(null, 'stable')`,
-          returnByValue: true,
-        }, 3000);
-        if (typeof primer?.result?.value === 'string') {
-          if (!s.snapshotBaselines) s.snapshotBaselines = {};
-          s.snapshotBaselines.verify = primer.result.value;
-        }
+        await primeVerifyBaseline(s);
       } catch {}
     }
     // Surface host-specific hint files from ~/.chromux/skills/<host>/*.md,
@@ -2732,11 +2751,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     // agent last saw instead of the open-time primer. Without this, an
     // action that removes late-rendered UI (dismissing a cookie dialog that
     // appeared after load) would falsely report "no visible change".
-    const vb = await s.cdp.send('Runtime.evaluate', {
-      expression: `(${SNAPSHOT_JS})(null, 'stable')`,
-      returnByValue: true,
-    }, 3000).catch(() => null);
-    if (typeof vb?.result?.value === 'string') s.snapshotBaselines.verify = vb.result.value;
+    await primeVerifyBaseline(s);
     if (grep != null && grep !== '') return renderSnapshotGrep(text, grep);
     return wantDiff ? renderSnapshotDiff(previous, text) : text;
   }
@@ -2915,12 +2930,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     if (!session) throw httpErr(400, 'session required');
     const s = getSession(sessions, session);
     touchSession(s);
-    const actionStart = Date.now();
-    const finishClick = async (result) => {
-      const popup = await adoptPopup(port, sessions, session, s, actionStart, browserState, settings);
-      if (popup) result.newSession = popup;
-      return withDialogNote(s, actionStart, result);
-    };
+    const finishClick = actionFinisher(port, sessions, session, s, browserState, settings);
     if (xy) {
       const [x, y] = xy.map(Number);
       if (!Number.isFinite(x) || !Number.isFinite(y)) throw httpErr(400, 'xy must contain numeric x/y');
@@ -2941,8 +2951,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
         type: 'mouseReleased', x, y, button, clickCount,
       });
       await sleep(100);
-      const xyVerifyMs = body.verify === false ? null
-        : (typeof body.verify === 'number' ? body.verify : (settings.mode === 'crawl' ? null : 300));
+      const xyVerifyMs = resolveVerifyMs(body, settings);
       if (xyVerifyMs != null) {
         const changed = await captureVerifyDiff(s, xyVerifyMs);
         if (changed != null) return finishClick({ clicked: { xy: [x, y], button, clicks: clickCount }, changed });
@@ -3094,8 +3103,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     }
     await sleep(500);
     const clickedValue = selector || { text: body.text };
-    const verifyMs = body.verify === false ? null
-      : (typeof body.verify === 'number' ? body.verify : (settings.mode === 'crawl' ? null : 300));
+    const verifyMs = resolveVerifyMs(body, settings);
     if (verifyMs != null) {
       const changed = await captureVerifyDiff(s, verifyMs);
       if (changed != null) return finishClick({ clicked: clickedValue, changed });
@@ -3135,8 +3143,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
         }`,
       }, 3000).catch(() => {});
       const names = files.map(f => path.basename(f));
-      const verifyUploadMs = body.verify === false ? null
-        : (typeof body.verify === 'number' ? body.verify : (settings.mode === 'crawl' ? null : 300));
+      const verifyUploadMs = resolveVerifyMs(body, settings);
       if (verifyUploadMs != null) {
         const changed = await captureVerifyDiff(s, verifyUploadMs, selector);
         if (changed != null) return withDialogNote(s, actionStart, { filled: selector, files: names, changed });
@@ -3278,8 +3285,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
       pickEffect = eff?.result?.value || null;
       await cleanupPickMarks();
     }
-    const verifyMs = body.verify === false ? null
-      : (typeof body.verify === 'number' ? body.verify : (settings.mode === 'crawl' ? null : 300));
+    const verifyMs = resolveVerifyMs(body, settings);
     const buildResult = (extra) => {
       const result = { filled: selector, text, ...extra };
       if (picked != null) {
@@ -3302,8 +3308,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     touchSession(s);
     await s.cdp.send('Page.bringToFront', {});
     await s.cdp.send('Input.insertText', { text });
-    const verifyMs = body.verify === false ? null
-      : (typeof body.verify === 'number' ? body.verify : (settings.mode === 'crawl' ? null : 300));
+    const verifyMs = resolveVerifyMs(body, settings);
     if (verifyMs != null) {
       const changed = await captureVerifyDiff(s, verifyMs);
       if (changed != null) return { typed: text, changed };
@@ -3316,15 +3321,9 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     if (!session || !key) throw httpErr(400, 'session and key required');
     const s = getSession(sessions, session);
     touchSession(s);
-    const actionStart = Date.now();
+    const finishPress = actionFinisher(port, sessions, session, s, browserState, settings);
     await pressKey(s.cdp, key);
-    const finishPress = async (result) => {
-      const popup = await adoptPopup(port, sessions, session, s, actionStart, browserState, settings);
-      if (popup) result.newSession = popup;
-      return withDialogNote(s, actionStart, result);
-    };
-    const verifyMs = body.verify === false ? null
-      : (typeof body.verify === 'number' ? body.verify : (settings.mode === 'crawl' ? null : 300));
+    const verifyMs = resolveVerifyMs(body, settings);
     if (verifyMs != null) {
       const changed = await captureVerifyDiff(s, verifyMs);
       if (changed != null) return finishPress({ pressed: key, changed });
@@ -3651,6 +3650,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
       // instead of reading a frozen counter.
       delete s._inflightOn;
       delete s._inflight;
+      delete s._lastNetActivity;
       return { network: 'disabled', session };
     }
 

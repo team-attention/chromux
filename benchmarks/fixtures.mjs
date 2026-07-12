@@ -58,10 +58,11 @@ export function inventoryStats(pages = 5, perPage = 8) {
   return { topSku: top.sku, topPrice: top.price, above50, pages, perPage };
 }
 
-// --- Real-sized page fixtures (2026-07 audit follow-up) ---
-// The original suite had no page with a sticky header, a consent overlay, a
-// slow server round-trip, or an iframe — the audits traced every gate/probe
-// bias back to that gap. These three pages exist to keep it closed.
+// --- Real-sized page fixtures ---
+// Coverage invariant: the suite must always include a page with a sticky
+// header + dense nav + consent overlay, a silent slow server round-trip, and
+// a same-origin iframe form. Perception gates/probes tuned only on the small
+// synthetic pages overfit to them — these pages keep that bias measurable.
 
 const SHOP_PRODUCT_NAMES = [
   'Aurora Desk Lamp', 'Granite Mug', 'Cedar Bookend', 'Brass Compass',
