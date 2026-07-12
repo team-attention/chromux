@@ -1,12 +1,12 @@
 // Builtin helper example for `chromux run`.
 // Usage:
-//   chromux run <session> --file snippets/_builtin/scroll-until.js
+//   chromux run <s> --file snippets/_builtin/scroll-until.js --arg selector='li.item' --arg count=50
 //
-// Override these before running by copying this file or editing a local variant.
-const selector = globalThis.selector || 'li';
-const targetCount = Number(globalThis.count || 10);
-const maxScrolls = Number(globalThis.maxScrolls || 30);
-const delayMs = Number(globalThis.delayMs || 800);
+// Defaults below apply when no --arg overrides are passed.
+const selector = args.selector || globalThis.selector || 'li';
+const targetCount = Number(args.count || globalThis.count || 10);
+const maxScrolls = Number(args.maxScrolls || globalThis.maxScrolls || 30);
+const delayMs = Number(args.delayMs || globalThis.delayMs || 800);
 
 for (let i = 0; i < maxScrolls; i++) {
   const info = await js(`(() => {

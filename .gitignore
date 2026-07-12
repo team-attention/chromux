@@ -1,4 +1,5 @@
 artifacts/
+.playwright-cli/
 apps/macos-status-bar/dist/
 apps/macos-status-bar/release/
 .hoyeon/implement/

@@ -1434,8 +1434,185 @@ async function closeInitialTabs(port) {
 // Adding JS patches via Page.addScriptToEvaluateOnNewDocument is ITSELF detectable.
 // The best stealth is minimizing CDP footprint — remove calls, don't add patches.
 
-const SNAPSHOT_JS = `((FILTER) => {
+const SNAPSHOT_JS = `((FILTER, CLICKABLE) => {
   const INTERACTIVE_ONLY = FILTER === 'interactive';
+  // Behavior-based clickable detection ('auto' | 'on' | 'off'). Many SPAs and
+  // micro-UIs build their controls from bare divs with click handlers — no
+  // roles, no semantic tags — which makes an accessibility snapshot blind.
+  // 'auto' turns detection on when the page is nearly dead (almost no
+  // standard interactive elements) OR when behaviorally-clickable candidates
+  // are dense relative to standard controls (div-heavy content behind a
+  // standard nav). Ordinary link/button pages pay zero extra payload.
+  const STANDARD_SEL = 'a[href],button,input,select,textarea,[role="button"],[role="link"],[role="tab"],[role="menuitem"]';
+  const standardCount = [...document.querySelectorAll(STANDARD_SEL)]
+    .filter(el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; }).length;
+  function inViewport(rect) {
+    return rect.bottom > 0 && rect.top < window.innerHeight && rect.right > 0 && rect.left < window.innerWidth;
+  }
+  function sameGeometry(a, b) {
+    return Math.abs(a.left - b.left) < 2 && Math.abs(a.top - b.top) < 2
+      && Math.abs(a.width - b.width) < 2 && Math.abs(a.height - b.height) < 2;
+  }
+  function isClickableBoundary(el, style) {
+    // data-ct-listener is stamped by the daemon via CDP getEventListeners on
+    // low-signal pages: it marks elements with real click handlers that have
+    // no styling affordance at all (common in benchmark UIs and React apps).
+    const hasHandler = el.hasAttribute('onclick') || el.hasAttribute('data-ct-listener');
+    if (!hasHandler) {
+      if (style.cursor !== 'pointer') return false;
+      const parent = el.parentElement;
+      if (parent && parent !== document.body) {
+        try { if (getComputedStyle(parent).cursor === 'pointer') return false; } catch {}
+      }
+    } else {
+      // A handler-bearing element whose clickable parent (handler or pointer
+      // cursor) has the same geometry is the same control bound twice
+      // (delegation patterns); keep only the outer one. Distinct nested
+      // controls (a star icon inside a clickable row) differ in geometry
+      // and stay visible.
+      const p = el.parentElement;
+      if (p) {
+        let parentClickable = p.hasAttribute('onclick') || p.hasAttribute('data-ct-listener');
+        if (!parentClickable) {
+          try { parentClickable = getComputedStyle(p).cursor === 'pointer'; } catch {}
+        }
+        if (parentClickable && sameGeometry(el.getBoundingClientRect(), p.getBoundingClientRect())) return false;
+      }
+    }
+    // A clickable wrapper is redundant only when a standard control inside it
+    // covers roughly the same area — a product card with a small wishlist
+    // button is still its own control and must keep its ref.
+    const inner = el.querySelector(STANDARD_SEL);
+    if (inner) {
+      const r = el.getBoundingClientRect();
+      const ir = inner.getBoundingClientRect();
+      if (ir.width * ir.height >= r.width * r.height * 0.5) return false;
+    }
+    return true;
+  }
+  // Scroll-invariant capping for verify diff baselines ('stable'): a viewport
+  // dependent candidate set would make every scroll look like a page change.
+  const CLICK_STABLE = CLICKABLE === 'stable';
+  let CLICK_ON = CLICKABLE === 'on' || CLICK_STABLE;
+  if (!CLICK_ON && CLICKABLE !== 'off') {
+    if (standardCount < 3) {
+      CLICK_ON = true;
+    } else {
+      // Ratio gate, viewport-scoped: probe visible-in-viewport container-ish
+      // elements for non-redundant clickable candidates and compare against
+      // the standard controls currently in the viewport. Offscreen content
+      // does not vote — scrolling re-evaluates the gate for what is now
+      // visible. Bounded so mega-DOM pages pay a fixed cost.
+      let inViewStandard = 0;
+      for (const el of document.querySelectorAll(STANDARD_SEL)) {
+        const r = el.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0 && inViewport(r)) inViewStandard++;
+      }
+      let candidates = 0;
+      let styleChecked = 0;
+      let iterated = 0;
+      const enough = () => candidates >= 4 && candidates * 8 >= inViewStandard;
+      for (const el of document.querySelectorAll('div,span,li,td,img,i,b,p,label,section,article')) {
+        if (iterated++ >= 5000 || styleChecked >= 400 || enough()) break;
+        const r = el.getBoundingClientRect();
+        if (r.width < 8 || r.height < 8 || !inViewport(r)) continue;
+        styleChecked++;
+        try { if (isClickableBoundary(el, getComputedStyle(el))) candidates++; } catch {}
+      }
+      CLICK_ON = enough();
+    }
+  }
+  // Snapshot caps are viewport-first: what the user can see must never be
+  // starved of clickable refs by document-order-earlier offscreen candidates.
+  // Verify baselines instead use a document-order cap so the set does not
+  // flap with scroll position.
+  const CLICK_CAP_VIEWPORT = 40;
+  const CLICK_CAP_OFFSCREEN = 10;
+  const CLICK_CAP_STABLE = 50;
+  let clickInView = 0;
+  let clickOffscreen = 0;
+  let clickStable = 0;
+  function takeClickSlot(el) {
+    if (CLICK_STABLE) {
+      if (clickStable >= CLICK_CAP_STABLE) return false;
+      clickStable++;
+      return true;
+    }
+    if (inViewport(el.getBoundingClientRect())) {
+      if (clickInView >= CLICK_CAP_VIEWPORT) return false;
+      clickInView++;
+      return true;
+    }
+    if (clickOffscreen >= CLICK_CAP_OFFSCREEN) return false;
+    clickOffscreen++;
+    return true;
+  }
+  // Occlusion probe: if one element sits on top of most of the page's
+  // standard controls (sync covers, cookie walls, modals, loading scrims),
+  // it is the thing the agent must deal with first — surface it prominently
+  // even on pages where clickable detection stays off.
+  let OCCLUDER = null;
+  (() => {
+    // Probe standard controls whose center sits inside the viewport
+    // (offscreen controls are excluded, not clamped), sampled across
+    // top/middle/bottom bands so a header-sparing modal is caught and a
+    // bottom-only consent bar is not mistaken for a page-wide overlay.
+    const probes = [];
+    for (const el of document.querySelectorAll('a[href],button,input,select,textarea')) {
+      const r = el.getBoundingClientRect();
+      if (r.width < 2 || r.height < 2) continue;
+      const x = r.left + r.width / 2;
+      const y = r.top + r.height / 2;
+      if (x < 0 || y < 0 || x >= window.innerWidth || y >= window.innerHeight) continue;
+      probes.push({ el, x, y });
+      if (probes.length >= 60) break;
+    }
+    if (probes.length < 2) return;
+    const bands = [[], [], []];
+    for (const p of probes) {
+      const bandIndex = Math.min(2, Math.floor(p.y * 3 / window.innerHeight));
+      p.band = bandIndex;
+      bands[bandIndex].push(p);
+    }
+    const sample = [];
+    for (const band of bands) {
+      const step = Math.max(1, Math.floor(band.length / 4));
+      for (let i = 0, taken = 0; i < band.length && taken < 4; i += step, taken++) sample.push(band[i]);
+    }
+    const hits = new Map();
+    for (const p of sample) {
+      const top = document.elementFromPoint(p.x, p.y);
+      if (!top || top === p.el || p.el.contains(top) || top.contains(p.el)) continue;
+      // Attribute the hit to the outermost covering ancestor that still does
+      // not contain the probed control, so one dialog's many children tally
+      // as a single occluder instead of splitting the count.
+      let node = top;
+      while (node.parentElement && !node.parentElement.contains(p.el)) node = node.parentElement;
+      const entry = hits.get(node) || { count: 0, bands: new Set() };
+      entry.count += 1;
+      entry.bands.add(p.band);
+      hits.set(node, entry);
+    }
+    let best = null;
+    let bestEntry = null;
+    for (const [el, entry] of hits) {
+      if (!bestEntry || entry.count > bestEntry.count) { best = el; bestEntry = entry; }
+    }
+    if (!best || bestEntry.count < Math.max(2, Math.ceil(sample.length * 0.5))) return;
+    // "Covers page" is a strong directive: when all probes live in one band
+    // (header-only pages), demand that the covering element itself is
+    // page-sized before promoting a local strip/ribbon to a page-wide
+    // overlay.
+    if (bestEntry.bands.size < 2) {
+      let area = 0;
+      try {
+        const r = best.getBoundingClientRect();
+        area = r.width * r.height;
+      } catch {}
+      if (area < window.innerWidth * window.innerHeight * 0.4) return;
+    }
+    OCCLUDER = best;
+  })();
   // Refs are stable within a document: an element keeps its data-ct-ref across
   // re-snapshots, and new elements continue from the persisted counter. A
   // navigation replaces the document, so refs naturally reset to @1.
@@ -1462,41 +1639,91 @@ const SNAPSHOT_JS = `((FILTER) => {
     if (el.getAttribute('tabindex') !== null && el.getAttribute('tabindex') !== '-1') return true;
     return false;
   }
-  function getLabel(el) {
+  // Never leak typed secrets into snapshot text. Password inputs are always
+  // masked; card numbers, CVCs, OTPs, and national IDs usually arrive as
+  // type=text|tel, so mask by autocomplete/name/id heuristics too.
+  function isSensitiveInput(el) {
+    if (el.type === 'password') return true;
+    // Normalize separators so otp_code / otpCode-ish spellings hit the same
+    // word boundaries as otp-code.
+    const hints = ((el.getAttribute('autocomplete') || '') + ' ' + (el.name || '') + ' ' + (el.id || ''))
+      .toLowerCase().replace(/[_\\s]+/g, '-');
+    return /cc-number|cc-csc|cc-exp|card-?(number|no)|cardnumber|cvv|cvc|one-?time-?code|\\botp\\b|otpcode|verification-?code|ssn|social-?security|\\bpin\\b|pincode|passport|routing-?number|iban/.test(hints);
+  }
+  function getLabel(el, clickable) {
     const tag = el.tagName.toLowerCase();
     const aria = el.getAttribute('aria-label');
+    if ((tag === 'input' || tag === 'textarea' || tag === 'select') && isSensitiveInput(el)) {
+      return aria || el.placeholder || '';
+    }
     if (aria) return aria;
-    // Never leak typed secrets into snapshot text.
-    if (tag === 'input' && el.type === 'password') return el.placeholder || '';
     if (tag === 'input' || tag === 'textarea') return el.value || el.placeholder || '';
+    if (tag === 'select') return el.selectedOptions && el.selectedOptions[0] ? el.selectedOptions[0].textContent.trim() : '';
     if (tag === 'img') return el.alt || '';
+    if (tag === 'iframe' || tag === 'frame') return el.title || '';
     let text = '';
     for (const n of el.childNodes) { if (n.nodeType === 3) text += n.textContent; }
     text = text.trim();
-    // Links/buttons often wrap their text in spans; fall back to rendered
-    // innerText so snapshot lines stay identifiable without a follow-up js().
-    if (!text && (tag === 'a' || tag === 'button')) {
+    // Links/buttons (and behaviorally-clickable containers) often wrap their
+    // text in child elements; fall back to rendered innerText so snapshot
+    // lines stay identifiable without a follow-up js().
+    if (!text && (tag === 'a' || tag === 'button' || clickable)) {
       text = (el.innerText || '').trim().split('\\n').map(s => s.trim()).filter(Boolean).join(' / ');
     }
     return text.substring(0, 100);
   }
   function walk(el, depth) {
     if (!el || el.nodeType !== 1) return '';
+    let style;
     try {
-      const s = getComputedStyle(el);
-      if (s.display === 'none' || s.visibility === 'hidden' || el.hidden) return '';
+      // Elements inside same-origin iframes must be styled by their own
+      // window, not the top one.
+      style = (el.ownerDocument.defaultView || window).getComputedStyle(el);
+      if (style.display === 'none' || style.visibility === 'hidden' || el.hidden) return '';
     } catch { return ''; }
     if (el.getAttribute('aria-hidden') === 'true') return '';
     const tag = el.tagName.toLowerCase();
     if (['script','style','noscript','br','hr','svg','path'].includes(tag)) return '';
     const role = getRole(el);
-    const interactive = isInteractive(el);
-    const label = getLabel(el);
+    let interactive = isInteractive(el);
+    let clickable = false;
+    let overlay = false;
+    if (!interactive && el === OCCLUDER) {
+      interactive = true;
+      clickable = true;
+      overlay = true;
+    }
+    if (!interactive && CLICK_ON && isClickableBoundary(el, style) && takeClickSlot(el)) {
+      interactive = true;
+      clickable = true;
+    }
+    const label = getLabel(el, clickable);
     const has = role || interactive || label;
     const keep = INTERACTIVE_ONLY ? interactive : has;
     const cd = keep ? depth + 1 : depth;
     let children = '';
-    for (const c of el.children) children += walk(c, cd);
+    if (tag === 'iframe' || tag === 'frame') {
+      // Same-origin frames are walked like page content; cross-origin frames
+      // are marked so the agent knows the blind spot instead of guessing.
+      let innerDoc = null;
+      try { innerDoc = el.contentDocument; } catch {}
+      if (innerDoc && innerDoc.body) {
+        children = walk(innerDoc.body, cd);
+      } else if (!INTERACTIVE_ONLY) {
+        children = '  '.repeat(cd) + 'iframe (cross-origin; content not accessible)\\n';
+      }
+    } else if (el.shadowRoot) {
+      // Flattened-tree walk: an open shadow root replaces the host's light
+      // children; slotted light content re-enters through <slot> below.
+      // Closed shadow roots stay invisible (no API to reach them).
+      for (const c of el.shadowRoot.children) children += walk(c, cd);
+    } else if (tag === 'slot') {
+      let assigned = [];
+      try { assigned = el.assignedElements(); } catch {}
+      for (const c of assigned) children += walk(c, cd);
+    } else {
+      for (const c of el.children) children += walk(c, cd);
+    }
     if (!keep && !children) return '';
     if (!keep) return children;
     const indent = '  '.repeat(depth);
@@ -1511,9 +1738,26 @@ const SNAPSHOT_JS = `((FILTER) => {
       }
       line += '@' + ref + ' ';
     }
-    line += role || tag;
+    line += overlay ? 'overlay (covers page; interact or dismiss first)'
+      : clickable ? (role ? role + ' (clickable)' : 'clickable') : (role || tag);
     if (label) line += ' "' + label.replace(/"/g, '\\\\"') + '"';
-    if (tag === 'input') line += ' [' + (el.type || 'text') + ']';
+    else if (clickable) {
+      // Icon-only clickables: developer-facing id/class names are the best
+      // available handle ("#close-email", ".star.clicked" — state included).
+      if (el.id) line += ' #' + el.id;
+      else if (typeof el.className === 'string' && el.className.trim()) {
+        line += ' ' + el.className.trim().split(/\\s+/).filter(c => c !== 'data-ct-listener').slice(0, 2).map(c => '.' + c).join('');
+      }
+    }
+    if (tag === 'input') {
+      const checkish = el.type === 'checkbox' || el.type === 'radio';
+      line += ' [' + (el.type || 'text') + (checkish && el.checked ? ' checked' : '') + ']';
+    }
+    if (tag === 'select' && el.selectedOptions && el.selectedOptions[0] && !isSensitiveInput(el)) {
+      const sel = el.selectedOptions[0].textContent.trim().substring(0, 40);
+      if (sel && sel !== label) line += ' = "' + sel.replace(/"/g, '') + '"';
+    }
+    if (el.disabled) line += ' (disabled)';
     if (tag === 'a' && el.href) {
       const href = el.getAttribute('href');
       if (href && !href.startsWith('javascript:') && !href.startsWith('#'))
@@ -1521,7 +1765,20 @@ const SNAPSHOT_JS = `((FILTER) => {
     }
     return line + '\\n' + children;
   }
-  const out = '# ' + document.title + '\\n# ' + location.href + '\\n\\n' + walk(document.body, 0);
+  // Cap the URL line: data:/blob: URLs can be tens of KB and would drown the
+  // snapshot (and every diff computed from it) in address noise. A short hash
+  // of the FULL URL keeps diff navigation detection exact for long URLs that
+  // share a 300-char prefix.
+  let urlLine = location.href;
+  if (urlLine.length > 300) {
+    let hash = 0x811c9dc5;
+    for (let i = 0; i < location.href.length; i++) {
+      hash ^= location.href.charCodeAt(i);
+      hash = Math.imul(hash, 0x01000193) >>> 0;
+    }
+    urlLine = urlLine.substring(0, 300) + '…#' + hash.toString(16);
+  }
+  const out = '# ' + document.title + '\\n# ' + urlLine + '\\n\\n' + walk(document.body, 0);
   document.documentElement.setAttribute('data-ct-ref-max', String(refMax));
   return out;
 })`;
@@ -1574,6 +1831,420 @@ function renderSnapshotDiff(previousText, currentText) {
   return `${current.title}\n${current.url}\n${summary}\n\n${diffLines.join('\n')}\n`;
 }
 
+// Filter a snapshot down to lines matching a pattern, keeping each match's
+// ancestor lines so the tree context (which form, which section) survives.
+// The pattern is tried as a case-insensitive regex first; if that matches
+// nothing (or fails to compile) it is retried as a literal substring, so
+// text like "Price (USD)" or "$50" still greps verbatim.
+function renderSnapshotGrep(text, pattern) {
+  if (typeof text !== 'string') return text;
+  const { title, url, body } = parseSnapshotText(text);
+  const MAX_MATCHES = 100;
+  const indentOf = (line) => (line.match(/^ */) || [''])[0].length;
+  const collect = (re) => {
+    const keep = new Set();
+    const matchedIdx = new Set();
+    let matches = 0;
+    for (let i = 0; i < body.length; i++) {
+      if (!re.test(body[i])) continue;
+      matches++;
+      matchedIdx.add(i);
+      if (matches > MAX_MATCHES) continue;
+      keep.add(i);
+      let depth = indentOf(body[i]);
+      for (let j = i - 1; j >= 0 && depth > 0; j--) {
+        const d = indentOf(body[j]);
+        if (d < depth) { keep.add(j); depth = d; }
+      }
+    }
+    return { keep, matches, matchedIdx };
+  };
+  const literalRe = new RegExp(String(pattern).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+  let re = literalRe;
+  try { re = new RegExp(pattern, 'i'); } catch {}
+  let mode = 'regex';
+  let { keep, matches, matchedIdx } = collect(re);
+  let literalNote = '';
+  if (re.source !== literalRe.source) {
+    if (!matches) {
+      ({ keep, matches } = collect(literalRe));
+      if (matches) mode = 'literal';
+    } else {
+      // Silent-wrong guard: a pattern that is a valid regex can match the
+      // WRONG lines (e.g. "price (USD)" as a group) while the literal text
+      // matches different ones. Whenever the literal reading matches any
+      // line this regex result does NOT include, say so loudly instead of
+      // letting the regex result masquerade as the answer.
+      const literal = collect(literalRe);
+      const literalOnly = [...literal.matchedIdx].filter(i => !matchedIdx.has(i)).length;
+      if (literalOnly > 0) {
+        literalNote = `; NOTE: read as literal text this pattern also matches ${literalOnly} line${literalOnly === 1 ? '' : 's'} NOT shown here — escape regex metacharacters if you meant the literal string`;
+      }
+    }
+  }
+  if (!matches) {
+    return `${title}\n${url}\n# grep ${JSON.stringify(pattern)}: 0 of ${body.length} lines matched (regex and literal); broaden the pattern or take a plain snapshot\n`;
+  }
+  const capNote = matches > MAX_MATCHES ? `; first ${MAX_MATCHES} shown` : '';
+  const modeNote = mode === 'literal' ? '; matched literally' : '';
+  const lines = [...keep].sort((a, b) => a - b).map((i) => body[i]);
+  return `${title}\n${url}\n# grep ${JSON.stringify(pattern)}: ${matches} of ${body.length} lines matched (ancestor lines kept for context${modeNote}${capNote}${literalNote})\n\n${lines.join('\n')}\n`;
+}
+
+// Stamp data-ct-listener on elements that have real click handlers but no
+// styling affordance (no cursor, no role, no onclick attribute) — invisible
+// to both the a11y tree and CSS-based clickable detection. Uses CDP
+// DOMDebugger.getEventListeners per candidate, so it only runs on low-signal
+// pages (almost no standard interactive elements) that are small enough.
+async function markListenerClickables(s, force = false) {
+  try {
+    const scan = await s.cdp.send('Runtime.evaluate', {
+      expression: `(() => {
+        const standard = [...document.querySelectorAll(
+          'a[href],button,input,select,textarea,[role="button"],[role="link"],[role="tab"],[role="menuitem"]')]
+          .filter(el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; }).length;
+        if (${force ? 'false' : 'standard >= 3'}) return null;
+        const els = [...document.querySelectorAll('div,span,li,td,img,i,b,p,label')].filter(el => {
+          if (el.hasAttribute('data-ct-listener')) return false;
+          const r = el.getBoundingClientRect();
+          return r.width >= 8 && r.height >= 8;
+        });
+        if (els.length > 400) return null;
+        window.__ctListenerCandidates = els;
+        return els.length;
+      })()`,
+      returnByValue: true,
+    }, 3000);
+    const count = scan.result?.value;
+    if (!count) return;
+    const arr = await s.cdp.send('Runtime.evaluate', {
+      expression: 'window.__ctListenerCandidates', returnByValue: false,
+    }, 3000);
+    const objectId = arr.result?.objectId;
+    if (!objectId) return;
+    const props = await s.cdp.send('Runtime.getProperties', { objectId, ownProperties: true }, 5000);
+    // Queries are independent and CDP multiplexes over one socket, so run
+    // them concurrently: worst case drops from candidates x 1s to ~2s.
+    await Promise.all((props.result || [])
+      .filter(prop => /^\d+$/.test(prop.name) && prop.value?.objectId)
+      .map(async (prop) => {
+        try {
+          const ls = await s.cdp.send('DOMDebugger.getEventListeners', { objectId: prop.value.objectId, depth: 0 }, 1000);
+          if ((ls.listeners || []).some(l => l.type === 'click' || l.type === 'mousedown' || l.type === 'pointerdown')) {
+            await s.cdp.send('Runtime.callFunctionOn', {
+              objectId: prop.value.objectId,
+              functionDeclaration: 'function(){ this.setAttribute("data-ct-listener","1"); }',
+            }, 1000);
+          }
+        } catch {}
+      }));
+    await s.cdp.send('Runtime.evaluate', {
+      expression: 'delete window.__ctListenerCandidates', returnByValue: true,
+    }, 1000).catch(() => {});
+  } catch {}
+}
+
+// Verify baselines are ALWAYS captured in this shape: full filter, 'stable'
+// clickable capping (document order — a viewport-dependent cap would turn
+// every scroll into a large fake diff). One capture function keeps the three
+// baseline writers (verify itself, open-time priming, snapshot advance) from
+// ever drifting in shape.
+// Tradeoff, deliberate: the per-candidate CDP listener re-scan
+// (markListenerClickables force=true) is skipped on this path. It costs up to
+// 400 getEventListeners round-trips per capture (concurrent, but still real
+// CDP traffic, and verify captures up to three times per action). The cost: on standard-rich pages where
+// open/snapshot never stamped data-ct-listener, an element revealed by an
+// action whose only click affordance is a JS listener (no cursor style, no
+// onclick) appears in the diff as text without a clickable @ref; take a
+// snapshot to get its ref.
+async function captureStableSnapshot(s, timeoutMs = 5000) {
+  const r = await s.cdp.send('Runtime.evaluate', {
+    expression: `(${SNAPSHOT_JS})(null, 'stable')`,
+    returnByValue: true,
+  }, timeoutMs);
+  const text = r?.result?.value;
+  return typeof text === 'string' ? text : null;
+}
+
+async function primeVerifyBaseline(s, timeoutMs = 3000) {
+  const text = await captureStableSnapshot(s, timeoutMs).catch(() => null);
+  if (text == null) return;
+  if (!s.snapshotBaselines) s.snapshotBaselines = {};
+  s.snapshotBaselines.verify = text;
+}
+
+// Act-and-verify in one round-trip: wait for the UI to settle, snapshot
+// (full filter, stable clickable capping), diff against the session
+// baseline, and advance the baseline. Used by click/fill/type/press when the
+// caller passes `verify`.
+async function captureVerifyDiff(s, waitMs, actedSelector) {
+  const capture = () => captureStableSnapshot(s, 5000);
+  await sleep(Math.min(Math.max(Number(waitMs) || 300, 0), 10000));
+  let text = await capture();
+  if (text == null) return null;
+  if (!s.snapshotBaselines) s.snapshotBaselines = {};
+  const previous = s.snapshotBaselines.verify;
+  if (previous != null) {
+    // Re-sample once when nothing happened yet, or when the only change is
+    // the acted element echoing its own new value — debounced UIs (searches,
+    // autocompletes, validations) land their real update a beat later.
+    const changedLines = renderSnapshotDiff(previous, text).split('\n')
+      .filter(line => line.startsWith('+ ') || line.startsWith('- '));
+    const refToken = actedSelector && /^@\d+$/.test(actedSelector) ? actedSelector + ' ' : null;
+    const selfEchoOnly = refToken && changedLines.length > 0
+      && changedLines.every(line => line.includes(refToken));
+    if (!changedLines.length || selfEchoOnly) {
+      await sleep(700);
+      const again = await capture();
+      if (again != null) text = again;
+    }
+    // Slow async UIs (server round-trips) land seconds later. Back off once
+    // more, and if the page still shows nothing, say so in time-qualified
+    // terms — a bare "no changes" reads as "the action failed" and pushes
+    // agents into dangerous retries (double submits).
+    const noChangeYet = () => !renderSnapshotDiff(previous, text).split('\n')
+      .some(line => line.startsWith('+ ') || line.startsWith('- '));
+    if (!changedLines.length && noChangeYet()) {
+      await sleep(1200);
+      const late = await capture();
+      if (late != null) text = late;
+      if (noChangeYet()) {
+        s.snapshotBaselines.verify = text;
+        return '# verify: no visible change detected within ~2s — the action was dispatched, but the UI may still be updating or the result may be in a new tab/dialog; confirm with wait-for-text or snapshot --diff BEFORE retrying the action';
+      }
+    }
+  }
+  s.snapshotBaselines.verify = text;
+  if (previous == null && text.length > 2000) {
+    return '# verify: first observation of a large page; showing changes from the next action onward';
+  }
+  const diff = renderSnapshotDiff(previous, text);
+  if (typeof diff !== 'string') return diff;
+  // Verify answers "did my action do the small thing I expected". A huge
+  // diff means navigation or a churning dynamic page — summarize instead of
+  // making every action on such pages expensive to read.
+  const lines = diff.split('\n');
+  const changed = lines.filter(line => line.startsWith('+ ') || line.startsWith('- '));
+  if (changed.length > 40) {
+    return lines.slice(0, 3).join('\n')
+      + '\n' + changed.slice(0, 12).join('\n')
+      + `\n# verify: large update (${changed.length} changed lines — navigation or dynamic page); showing first 12, use snapshot for the rest`;
+  }
+  if (diff.length > 4000) {
+    return diff.slice(0, 4000) + '\n# verify: output truncated; take a full snapshot if needed';
+  }
+  return diff;
+}
+
+// One unhandled alert()/confirm() blocks every later Runtime.evaluate on the
+// tab ("bricked session"). Auto-handle dialogs by session policy (beforeunload
+// is always accepted so navigation can proceed) and record what happened for
+// the next action response.
+function attachDialogHandler(s) {
+  s.cdp.on('Page.javascriptDialogOpening', (params) => {
+    const accept = params.type === 'beforeunload' ? true : s.dialogPolicy === 'accept';
+    s.cdp.send('Page.handleJavaScriptDialog', { accept, promptText: params.defaultPrompt || '' }, 3000).catch(() => {});
+    s.lastDialog = {
+      type: params.type,
+      message: String(params.message || '').slice(0, 300),
+      action: accept ? 'accepted' : 'dismissed',
+      at: Date.now(),
+    };
+  });
+}
+
+// Session-wide verify policy for click/fill/type/press: explicit ms wins,
+// `--no-verify` disables, crawl mode skips, everything else settles 300ms.
+function resolveVerifyMs(body, settings) {
+  if (body.verify === false) return null;
+  if (typeof body.verify === 'number') return body.verify;
+  return settings.mode === 'crawl' ? null : 300;
+}
+
+// ---- fill --pick: the type-then-choose autocomplete pattern ----
+// Correctness invariant: only suggestions that APPEAR after typing count.
+// markPreFillPickCandidates stamps everything visible beforehand;
+// pickSuggestion polls for an unstamped match, chooses it, probes for an
+// observable effect, and always removes its marks on every exit path.
+
+function markPreFillPickCandidates(s) {
+  return s.cdp.send('Runtime.evaluate', {
+    expression: `(() => {
+      ${DEEP_QUERY_JS}
+      for (const el of document.querySelectorAll(${JSON.stringify(PICK_CANDIDATE_SEL)})) {
+        if (deepVisible(el)) el.setAttribute('data-ct-pick-seen', '1');
+      }
+      return true;
+    })()`,
+    returnByValue: true,
+  }, 3000).catch(() => {});
+}
+
+function cleanupPickMarks(s) {
+  return s.cdp.send('Runtime.evaluate', {
+    expression: `(() => { for (const el of document.querySelectorAll('[data-ct-pick-seen],[data-ct-picked]')) { el.removeAttribute('data-ct-pick-seen'); el.removeAttribute('data-ct-picked'); } return true; })()`,
+    returnByValue: true,
+  }, 2000).catch(() => {});
+}
+
+async function pickSuggestion(s, sel, selector, text, body) {
+  const pickExpression = `((needle, inputSel) => {
+    ${DEEP_QUERY_JS}
+    const lower = String(needle).trim().toLowerCase();
+    const labelOf = (el) => ((el.getAttribute && el.getAttribute('aria-label')) || el.innerText || el.textContent || '').trim().replace(/\\s+/g, ' ');
+    const candidates = [];
+    const input = deepQuery(inputSel);
+    for (const el of document.querySelectorAll(${JSON.stringify(PICK_CANDIDATE_SEL)})) {
+      if (el.hasAttribute('data-ct-pick-seen')) continue;
+      if (input && (el === input || el.contains(input) || input.contains(el))) continue;
+      if (!deepVisible(el)) continue;
+      const label = labelOf(el);
+      if (label && label.length <= 200) candidates.push({ el, label });
+    }
+    const match = candidates.find(c => c.label.toLowerCase() === lower)
+      || candidates.find(c => c.label.toLowerCase().startsWith(lower))
+      || candidates.find(c => c.label.toLowerCase().includes(lower));
+    if (!match) return null;
+    match.el.setAttribute('data-ct-picked', '1');
+    const view = match.el.ownerDocument.defaultView || window;
+    for (const type of ['mouseover', 'mousedown', 'mouseup', 'click']) {
+      match.el.dispatchEvent(new view.MouseEvent(type, { bubbles: true, cancelable: true, view }));
+    }
+    return match.label.slice(0, 120);
+  })(${JSON.stringify(String(body.pick))}, ${JSON.stringify(sel)})`;
+  let picked = null;
+  const pickDeadline = Date.now() + Math.min(Math.max(Number(body.pickTimeoutMs) || 3000, 500), 15000);
+  while (Date.now() <= pickDeadline) {
+    const pr = await s.cdp.send('Runtime.evaluate', { expression: pickExpression, returnByValue: true }, 5000);
+    if (pr.exceptionDetails) {
+      await cleanupPickMarks(s);
+      throw httpErr(400, (pr.exceptionDetails.exception?.description || 'pick failed').split('\n')[0]);
+    }
+    if (pr.result?.value) { picked = pr.result.value; break; }
+    await sleep(150);
+  }
+  if (!picked) {
+    await cleanupPickMarks(s);
+    throw httpErr(408, `No suggestion matching "${body.pick}" appeared after typing into ${selector}; the widget may render suggestions outside recognized roles/classes (snapshot --diff to locate them) or need key events (click + type + arrows) instead`);
+  }
+  // JS-dispatched clicks are untrusted events some widgets ignore; report
+  // whether an actual effect was observed so a no-op pick cannot read as
+  // success.
+  await sleep(200);
+  const eff = await s.cdp.send('Runtime.evaluate', {
+    expression: `(() => {
+      ${DEEP_QUERY_JS}
+      const pickedEl = document.querySelector('[data-ct-picked]');
+      let effect = 'unconfirmed — the widget may ignore synthetic clicks';
+      if (!pickedEl || !deepVisible(pickedEl)) effect = 'suggestion-list closed';
+      const input = deepQuery(${JSON.stringify(sel)});
+      if (input && 'value' in input && input.value !== ${JSON.stringify(String(text ?? ''))}) effect = 'input value updated';
+      return effect;
+    })()`,
+    returnByValue: true,
+  }, 3000).catch(() => null);
+  const pickEffect = eff?.result?.value || null;
+  await cleanupPickMarks(s);
+  return { picked, pickEffect };
+}
+
+// Shared action epilogue for click/press: adopt any popup the action opened
+// and attach the dialog note. The action's start time is captured when the
+// finisher is created.
+function actionFinisher(port, sessions, session, s, browserState, settings) {
+  const since = Date.now();
+  return async (result) => {
+    const popup = await adoptPopup(port, sessions, session, s, since, browserState, settings);
+    if (popup) result.newSession = popup;
+    return withDialogNote(s, since, result);
+  };
+}
+
+// Attach a note about any JS dialog auto-handled since `since` to an action
+// result, so the agent learns both that a dialog fired and what it said.
+function withDialogNote(s, since, result) {
+  const d = s.lastDialog;
+  if (!d || d.at < since || !result || typeof result !== 'object') return result;
+  s.lastDialog = null;
+  result.dialog = `${d.type} dialog auto-${d.action}: "${d.message}" (session policy: --dialog ${s.dialogPolicy}; set at open)`;
+  return result;
+}
+
+// Track in-flight page requests for waitFor({kind:'network-idle'}). Long-lived
+// streams (websocket/eventsource) are ignored and stale entries are pruned so
+// a single hung request cannot make a page look busy forever.
+// Stealth note: this enables the Network domain on demand, like watch/network
+// — an observable CDP signal the default snapshot/click paths avoid.
+// `watch network --off` wipes these listeners too (CDPClient.off clears all
+// listeners per event), so that path must also clear _inflightOn to re-arm.
+function ensureNetworkInflightTracking(s) {
+  if (s._inflightOn) return Promise.resolve();
+  s._inflightOn = true;
+  s._inflight = new Map();
+  s._lastNetActivity = Date.now();
+  s.cdp.on('Network.requestWillBeSent', (params) => {
+    if (params.type === 'WebSocket' || params.type === 'EventSource') return;
+    s._inflight.set(params.requestId, Date.now());
+    s._lastNetActivity = Date.now();
+  });
+  const settle = (params) => {
+    if (s._inflight.delete(params.requestId)) s._lastNetActivity = Date.now();
+  };
+  s.cdp.on('Network.loadingFinished', settle);
+  s.cdp.on('Network.loadingFailed', settle);
+  return s.cdp.send('Network.enable');
+}
+
+function inflightCount(s, staleMs = 20000) {
+  if (!s._inflight) return 0;
+  const now = Date.now();
+  for (const [id, at] of s._inflight) {
+    if (now - at > staleMs) s._inflight.delete(id);
+  }
+  return s._inflight.size;
+}
+
+// Adopt a popup/new tab opened by this session's page (target=_blank,
+// window.open) as a first-class session, so "the result is in another tab"
+// stops being a dead end. Discovery events come from the daemon's
+// browser-level CDP connection.
+async function adoptPopup(port, sessions, sessionName, s, since, browserState, settings) {
+  if (!browserState) return null;
+  // Adoption respects the same session cap as /open — popup chains must not
+  // bypass CHROMUX_MAX_SESSIONS_PER_PROFILE (crawl-mode worker pools rely on
+  // it).
+  if (settings?.maxSessions > 0 && sessions.size >= settings.maxSessions) return null;
+  const entry = browserState.popups.find(p => p.openerId === s.targetId && p.at >= since - 100);
+  if (!entry) return null;
+  browserState.popups.splice(browserState.popups.indexOf(entry), 1);
+  let target = null;
+  for (let i = 0; i < 20 && !target; i++) {
+    const targets = await cdpFetch(port, '/json/list').catch(() => []);
+    target = Array.isArray(targets) ? targets.find(t => t.id === entry.targetId && t.webSocketDebuggerUrl) : null;
+    if (!target) await sleep(100);
+  }
+  if (!target) return null;
+  let name = `${sessionName}-popup`;
+  for (let i = 2; sessions.has(name); i++) name = `${sessionName}-popup${i}`;
+  try {
+    const cdp = new CDPClient();
+    await cdp.connect(target.webSocketDebuggerUrl);
+    await cdp.send('Page.enable');
+    const now = Date.now();
+    const popupSession = {
+      targetId: entry.targetId, cdp, createdAt: now, lastUsedAt: now,
+      url: target.url || entry.url || '', title: target.title || '', navigations: 0,
+      dialogPolicy: s.dialogPolicy || 'dismiss',
+    };
+    attachDialogHandler(popupSession);
+    cdp.onDisconnect = () => { sessions.delete(name); };
+    sessions.set(name, popupSession);
+    return { session: name, url: popupSession.url, next: `chromux snapshot ${name}` };
+  } catch {
+    return null;
+  }
+}
+
 // ============================================================
 // Daemon server (per-profile)
 // ============================================================
@@ -1601,6 +2272,68 @@ async function startDaemon(profileName, port, daemonPort) {
   const sessions = new Map();
   const gate = createGate(settings.maxConcurrentOps);
 
+  // Browser-level CDP connection: popup discovery (Target.targetCreated) and
+  // download control (Browser.setDownloadBehavior) are browser-domain
+  // features that per-tab connections never see.
+  const browserState = { client: null, popups: [], downloads: new Map(), downloadPath: null };
+  // Concurrent callers (downloads, popup adoption) must share one in-flight
+  // connection attempt instead of each opening a redundant browser socket.
+  let browserConnectPromise = null;
+  function connectBrowserClient() {
+    if (browserState.client) return Promise.resolve();
+    if (!browserConnectPromise) {
+      browserConnectPromise = connectBrowserClientOnce()
+        .finally(() => { browserConnectPromise = null; });
+    }
+    return browserConnectPromise;
+  }
+  async function connectBrowserClientOnce() {
+    try {
+      const version = await cdpFetch(port, '/json/version');
+      if (!version.webSocketDebuggerUrl) return;
+      const client = new CDPClient();
+      await client.connect(version.webSocketDebuggerUrl);
+      client.on('Target.targetCreated', ({ targetInfo }) => {
+        if (targetInfo.type !== 'page' || !targetInfo.openerId) return;
+        browserState.popups.push({ targetId: targetInfo.targetId, openerId: targetInfo.openerId, url: targetInfo.url, at: Date.now() });
+        if (browserState.popups.length > 20) browserState.popups.shift();
+      });
+      client.on('Target.targetInfoChanged', ({ targetInfo }) => {
+        const entry = browserState.popups.find(p => p.targetId === targetInfo.targetId);
+        if (entry) entry.url = targetInfo.url;
+      });
+      client.on('Browser.downloadWillBegin', (params) => {
+        browserState.downloads.set(params.guid, { suggestedFilename: params.suggestedFilename, url: params.url, state: 'inProgress' });
+      });
+      client.on('Browser.downloadProgress', (params) => {
+        const d = browserState.downloads.get(params.guid);
+        if (d) { d.state = params.state; d.receivedBytes = params.receivedBytes; d.totalBytes = params.totalBytes; }
+      });
+      client.onDisconnect = () => { browserState.client = null; };
+      await client.send('Target.setDiscoverTargets', { discover: true });
+      browserState.client = client;
+    } catch {}
+  }
+  // Browser.setDownloadBehavior applies to the whole Chrome profile (default
+  // browser context) — while a chromux download is in flight, a manual
+  // download in a headed profile would also land in the chromux directory.
+  // The behavior is therefore enabled per download and restored right after.
+  browserState.ensureDownloadBehavior = async () => {
+    if (!browserState.client) await connectBrowserClient();
+    if (!browserState.client) throw httpErr(503, 'Browser-level CDP connection unavailable for downloads');
+    if (browserState.downloadPath) return;
+    const downloadPath = path.join(CHROMUX_HOME, 'downloads', profileName);
+    fs.mkdirSync(downloadPath, { recursive: true });
+    await browserState.client.send('Browser.setDownloadBehavior', { behavior: 'allowAndName', downloadPath, eventsEnabled: true });
+    browserState.downloadPath = downloadPath;
+  };
+  browserState.restoreDownloadBehavior = async () => {
+    if (!browserState.client || !browserState.downloadPath) return;
+    await browserState.client.send('Browser.setDownloadBehavior', { behavior: 'default', eventsEnabled: false }).catch(() => {});
+    browserState.downloadPath = null;
+  };
+  await connectBrowserClient();
+
   const HANDLER_TIMEOUT = 45000; // 45s max per request
 
   const server = http.createServer(async (req, res) => {
@@ -1609,7 +2342,7 @@ async function startDaemon(profileName, port, daemonPort) {
 
     // Wrap handler with timeout to prevent daemon hang
     const handlerPromise = routeWithGate(gate, () =>
-      route(port, req.method, url.pathname + url.search, body, sessions, isHeadless, settings, gate)
+      route(port, req.method, url.pathname + url.search, body, sessions, isHeadless, settings, gate, browserState)
     , url.pathname, settings);
     const timeoutPromise = new Promise((_, reject) =>
       setTimeout(() => reject(new Error('Handler timeout')), HANDLER_TIMEOUT)
@@ -1649,7 +2382,8 @@ async function startDaemon(profileName, port, daemonPort) {
     }
   }, settings.mode === 'crawl' ? 5000 : 30000);
 
-  // Watchdog: verify Chrome CDP is alive every 60s, exit if dead
+  // Watchdog: verify Chrome CDP is alive every 60s, exit if dead. Also
+  // re-establish the browser-level connection if it dropped.
   setInterval(async () => {
     const alive = await checkCDP(port);
     if (!alive) {
@@ -1657,6 +2391,7 @@ async function startDaemon(profileName, port, daemonPort) {
       cleanup();
       process.exit(1);
     }
+    if (!browserState.client) await connectBrowserClient();
   }, 60000);
 
   const cleanup = () => {
@@ -1684,6 +2419,10 @@ function createGate(maxConcurrentOps) {
 function isGatedRoute(routePath) {
   if (routePath === '/health' || routePath === '/list' || routePath === '/stop') return false;
   if (routePath.startsWith('/session/')) return false;
+  // Read-only waits stay available while a profile is paused: the human
+  // handoff loop is pause -> user acts in the browser -> wait for the
+  // logged-in marker -> resume, so the wait itself must not be rejected.
+  if (routePath === '/wait-for-text' || routePath === '/wait-for-selector') return false;
   return true;
 }
 
@@ -1747,20 +2486,77 @@ function refToSelector(selector) {
   return selector.startsWith('@') ? `[data-ct-ref="${selector.slice(1)}"]` : selector;
 }
 
+// Page-side deep-query helpers shared by click/fill/wait expressions. Plain
+// querySelector is the fast path; on a miss the search pierces open shadow
+// roots and same-origin iframes so snapshot @refs assigned inside them stay
+// actionable. Cross-origin frames and closed shadow roots remain out of reach.
+const DEEP_QUERY_JS = `
+  function deepQuery(sel) {
+    const search = (root) => {
+      let el = null;
+      try { el = root.querySelector(sel); } catch (e) { throw new Error('Bad selector: ' + sel + ' (' + e.message + ')'); }
+      if (el) return el;
+      for (const host of root.querySelectorAll('*')) {
+        if (host.shadowRoot) {
+          const found = search(host.shadowRoot);
+          if (found) return found;
+        }
+      }
+      for (const frame of root.querySelectorAll('iframe,frame')) {
+        let innerDoc = null;
+        try { innerDoc = frame.contentDocument; } catch {}
+        if (innerDoc) {
+          const found = search(innerDoc);
+          if (found) return found;
+        }
+      }
+      return null;
+    };
+    try {
+      const el = document.querySelector(sel);
+      if (el) return el;
+    } catch (e) { throw new Error('Bad selector: ' + sel + ' (' + e.message + ')'); }
+    return search(document);
+  }
+  function deepVisible(el) {
+    const view = el.ownerDocument.defaultView || window;
+    const style = view.getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+  }
+  // Rendered text of the page including same-origin frames (innerText already
+  // covers rendered shadow DOM content).
+  function deepText(doc) {
+    let text = doc.body ? doc.body.innerText : '';
+    for (const frame of doc.querySelectorAll('iframe,frame')) {
+      try { if (frame.contentDocument) text += '\\n' + deepText(frame.contentDocument); } catch {}
+    }
+    return text;
+  }
+`;
+
+// Where autocomplete/dropdown suggestions usually render; shared by the
+// daemon fill --pick path (see also snippets/_builtin/search-and-pick.js).
+const PICK_CANDIDATE_SEL = '[role="option"],[role="menuitem"],li,[class*="suggest"] *,[class*="autocomplete"] *,[class*="option"]';
+
 // Shared page-side probe expressions for wait-for-text / wait-for-selector and
 // the run() waitFor helper, so all wait paths agree on what "visible" means.
 function textIncludesExpression(text) {
-  return `document.body ? document.body.innerText.includes(${JSON.stringify(String(text))}) : false`;
+  return `((needle) => { ${DEEP_QUERY_JS} return deepText(document).includes(needle); })(${JSON.stringify(String(text))})`;
 }
 
 function selectorVisibleExpression(selector) {
   return `((sel) => {
-    const el = document.querySelector(sel);
-    if (!el) return false;
-    const style = getComputedStyle(el);
-    const rect = el.getBoundingClientRect();
-    return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+    ${DEEP_QUERY_JS}
+    const el = deepQuery(sel);
+    return el ? deepVisible(el) : false;
   })(${JSON.stringify(String(selector))})`;
+}
+
+// Inverse probe: true when the selector matches nothing visible anywhere.
+// Defined as the exact negation of "visible" so the two can never drift.
+function selectorGoneExpression(selector) {
+  return `!(${selectorVisibleExpression(selector)})`;
 }
 
 // First candidate that matches wins: selectors must resolve to a visible
@@ -1770,20 +2566,28 @@ function firstMatchExpression(kind, candidates) {
   const list = JSON.stringify(candidates.map(String));
   if (kind === 'text') {
     return `((cands) => {
-      if (!document.body) return null;
-      const text = document.body.innerText;
+      ${DEEP_QUERY_JS}
+      const text = deepText(document);
       for (const c of cands) { if (text.includes(c)) return c; }
       return null;
     })(${list})`;
   }
+  if (kind === 'gone') {
+    return `((cands) => {
+      ${DEEP_QUERY_JS}
+      for (const c of cands) {
+        const el = deepQuery(c);
+        if (el && deepVisible(el)) return null;
+      }
+      return cands.join(' | ');
+    })(${list})`;
+  }
   return `((cands) => {
+    ${DEEP_QUERY_JS}
     for (const c of cands) {
       let el = null;
-      try { el = document.querySelector(c); } catch { continue; }
-      if (!el) continue;
-      const style = getComputedStyle(el);
-      const rect = el.getBoundingClientRect();
-      if (rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none') return c;
+      try { el = deepQuery(c); } catch { continue; }
+      if (el && deepVisible(el)) return c;
     }
     return null;
   })(${list})`;
@@ -1856,7 +2660,7 @@ async function readPageInfo(port, targetId, cdp, settings) {
   }
 }
 
-async function route(port, method, routePath, body, sessions, isHeadless = false, settings = modeSettings('default'), gate = null) {
+async function route(port, method, routePath, body, sessions, isHeadless = false, settings = modeSettings('default'), gate = null, browserState = null) {
 
   if (routePath === '/health')
     return {
@@ -1943,8 +2747,11 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
       };
       const now = Date.now();
       s = { targetId: tab.id, cdp, createdAt: now, lastUsedAt: now, url: 'about:blank', title: '', navigations: 0 };
+      s.dialogPolicy = body.dialog === 'accept' ? 'accept' : 'dismiss';
+      attachDialogHandler(s);
       sessions.set(session, s);
     }
+    if (body.dialog === 'accept' || body.dialog === 'dismiss') s.dialogPolicy = body.dialog;
     touchSession(s);
     try {
       await navigateSession(s.cdp, url, settings);
@@ -1975,7 +2782,31 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
         if (typeof n === 'number') {
           result.interactive = n;
           result.next = `chromux snapshot ${session} --interactive`;
+          // Small pages: ship the interactive snapshot inline so the first
+          // observation rides along with navigation instead of costing the
+          // agent another round-trip. Bounded so big pages stay summarized.
+          // n === 0 still runs: behaviorally-clickable detection ('auto')
+          // finds div-based controls that the standard count misses.
+          if (n <= 20) {
+            await markListenerClickables(s);
+            const sr = await s.cdp.send('Runtime.evaluate', {
+              expression: `(${SNAPSHOT_JS})(${JSON.stringify('interactive')}, 'auto')`,
+              returnByValue: true,
+            }, 2000);
+            const text = sr?.result?.value;
+            const body = typeof text === 'string' ? text.split('\n').slice(2).join('\n').trim() : '';
+            if (body && text.length <= 2000) {
+              if (!s.snapshotBaselines) s.snapshotBaselines = {};
+              s.snapshotBaselines.interactive = text;
+              result.elements = body;
+              result.next = `act on @refs, then verify: chromux snapshot ${session} --interactive --diff`;
+            }
+          }
         }
+        // Prime the verify baseline at navigation time so the FIRST action on
+        // a page gets a real diff instead of "first observation of a large
+        // page". Local capture only — nothing is added to the response.
+        await primeVerifyBaseline(s);
       } catch {}
     }
     // Surface host-specific hint files from ~/.chromux/skills/<host>/*.md,
@@ -2001,17 +2832,28 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     const session = decodeURIComponent(u.pathname.split('/')[2]);
     const filter = u.searchParams.get('filter');
     const wantDiff = u.searchParams.get('diff') === '1';
+    const grep = u.searchParams.get('grep');
+    const clickable = u.searchParams.get('clickable') === '1' ? 'on' : 'auto';
     const s = getSession(sessions, session);
     touchSession(s);
-    const expression = `(${SNAPSHOT_JS})(${JSON.stringify(filter)})`;
+    await markListenerClickables(s, clickable === 'on');
+    const expression = `(${SNAPSHOT_JS})(${JSON.stringify(filter)}, ${JSON.stringify(clickable)})`;
     const r = await s.cdp.send('Runtime.evaluate', { expression, returnByValue: true });
     const text = r.result.value;
     if (typeof text !== 'string') return text;
-    // Every snapshot (plain or --diff) becomes the next baseline per filter.
+    // Every snapshot (plain, --diff, or --grep) becomes the next baseline per
+    // filter; grep/diff only change what is rendered, not what is stored.
     const baselineKey = filter || 'full';
     if (!s.snapshotBaselines) s.snapshotBaselines = {};
     const previous = s.snapshotBaselines[baselineKey];
     s.snapshotBaselines[baselineKey] = text;
+    // The agent has now OBSERVED this state — advance the verify baseline
+    // (its own capture shape) too, so the next action diffs against what the
+    // agent last saw instead of the open-time primer. Without this, an
+    // action that removes late-rendered UI (dismissing a cookie dialog that
+    // appeared after load) would falsely report "no visible change".
+    await primeVerifyBaseline(s);
+    if (grep != null && grep !== '') return renderSnapshotGrep(text, grep);
     return wantDiff ? renderSnapshotDiff(previous, text) : text;
   }
 
@@ -2031,10 +2873,13 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
   }
 
   if (routePath === '/run' && method === 'POST') {
-    const { session, code, timeoutMs } = body;
+    const { session, code, timeoutMs, args: runArgs } = body;
     if (!session || code == null) throw httpErr(400, 'session and code required');
     const s = getSession(sessions, session);
     touchSession(s);
+    // Dialogs auto-handled during a run are the run's own business; clearing
+    // here keeps them from being misattributed to the next click/fill/press.
+    s.lastDialog = null;
     const requestedTimeout = (typeof timeoutMs === 'number' && timeoutMs > 0) ? timeoutMs : undefined;
     const defaultCdpTimeout = requestedTimeout ?? (settings.mode === 'crawl' ? 5000 : undefined);
     const defaultJsTimeout = requestedTimeout ?? (settings.mode === 'crawl' ? 3000 : undefined);
@@ -2099,9 +2944,25 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
                 : 'expression'
       );
       const value = options.text ?? options.selector ?? options.expression ?? condition;
+      // Network-idle wait: no in-flight page requests for `idleMs` — the
+      // deterministic replacement for sleep() after XHR-driven SPA updates.
+      if (kind === 'network-idle') {
+        const idleMs = Number.isFinite(Number(options.idleMs)) && Number(options.idleMs) > 0 ? Number(options.idleMs) : 500;
+        await ensureNetworkInflightTracking(s);
+        const idleDeadline = Date.now() + timeout;
+        while (Date.now() <= idleDeadline) {
+          if (inflightCount(s) === 0 && Date.now() - s._lastNetActivity >= idleMs) {
+            const state = await currentPageState();
+            return { kind, idleMs, timeoutMs: timeout, ...state };
+          }
+          await sleep(50);
+        }
+        throw new Error(`waitFor network-idle failed after ${timeout}ms: ${inflightCount(s)} requests still in flight`);
+      }
       // Selector/text waits accept an array of fallback candidates; the first
-      // one that matches wins and is reported back as `matched`.
-      const candidates = (kind === 'selector' || kind === 'text') && Array.isArray(value)
+      // one that matches wins and is reported back as `matched`. For 'gone',
+      // every candidate must be absent/hidden.
+      const candidates = (kind === 'selector' || kind === 'text' || kind === 'gone') && Array.isArray(value)
         ? value.map(String).filter(Boolean)
         : null;
       if (candidates && !candidates.length) {
@@ -2125,7 +2986,9 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
               ? textIncludesExpression(value)
               : kind === 'selector'
                 ? selectorVisibleExpression(value)
-                : String(value);
+                : kind === 'gone'
+                  ? selectorGoneExpression(value)
+                  : String(value);
           lastValue = await evalJs(expression, Math.min(timeout + 1000, 30000));
           const matched = candidates && typeof lastValue === 'string' ? lastValue : null;
           if (matched || lastValue === true || (!candidates && kind === 'expression' && options.truthy !== false && Boolean(lastValue))) {
@@ -2147,8 +3010,8 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
       return { asserted: true, ...state };
     };
     const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
-    const fn = new AsyncFunction('cdp', 'js', 'sleep', 'waitLoad', 'page', 'waitFor', 'assertPage', code);
-    const runPromise = fn(cdp, evalJs, sleep, waitLoad, page, waitFor, assertPage);
+    const fn = new AsyncFunction('cdp', 'js', 'sleep', 'waitLoad', 'page', 'waitFor', 'assertPage', 'args', code);
+    const runPromise = fn(cdp, evalJs, sleep, waitLoad, page, waitFor, assertPage, (runArgs && typeof runArgs === 'object') ? runArgs : {});
     try {
       const result = (typeof timeoutMs === 'number' && timeoutMs > 0)
         ? await withTimeout(runPromise, timeoutMs, 'run timeout')
@@ -2168,6 +3031,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     if (!session) throw httpErr(400, 'session required');
     const s = getSession(sessions, session);
     touchSession(s);
+    const finishClick = actionFinisher(port, sessions, session, s, browserState, settings);
     if (xy) {
       const [x, y] = xy.map(Number);
       if (!Number.isFinite(x) || !Number.isFinite(y)) throw httpErr(400, 'xy must contain numeric x/y');
@@ -2188,13 +3052,66 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
         type: 'mouseReleased', x, y, button, clickCount,
       });
       await sleep(100);
-      return { clicked: { xy: [x, y], button, clicks: clickCount }, next: `chromux snapshot ${session} --diff` };
+      const xyVerifyMs = resolveVerifyMs(body, settings);
+      if (xyVerifyMs != null) {
+        const changed = await captureVerifyDiff(s, xyVerifyMs);
+        if (changed != null) return finishClick({ clicked: { xy: [x, y], button, clicks: clickCount }, changed });
+      }
+      return finishClick({ clicked: { xy: [x, y], button, clicks: clickCount }, next: `chromux snapshot ${session} --diff` });
     }
-    if (!selector) throw httpErr(400, 'selector or xy required');
-    const sel = refToSelector(selector);
+    if (!selector && !body.text) throw httpErr(400, 'selector, text, or xy required');
+    // --text fallback: resolve by visible label when @refs went stale after a
+    // re-render. Ambiguity is an error that lists the candidates.
+    const finderJs = selector
+      ? `
+        const el = deepQuery(${JSON.stringify(refToSelector(selector))});
+        if (!el) throw new Error('Element not found: ' + ${JSON.stringify(refToSelector(selector))});
+        return el;`
+      : `
+        const needle = ${JSON.stringify(String(body.text))}.trim().toLowerCase();
+        const matches = [];
+        let scanned = 0;
+        const labelOf = (node) => {
+          const aria = node.getAttribute && node.getAttribute('aria-label');
+          if (aria) return aria.trim().replace(/\\s+/g, ' ');
+          // input.value is a label only for button-shaped inputs; a text
+          // field whose TYPED value matches must not become a click target.
+          if (node.tagName === 'INPUT') {
+            return /^(button|submit|reset)$/.test(node.type) ? (node.value || '').trim() : (node.getAttribute('aria-label') || '');
+          }
+          return (node.innerText || '').trim().replace(/\\s+/g, ' ');
+        };
+        const collect = (doc) => {
+          for (const node of doc.querySelectorAll('a[href],button,input,select,textarea,[role="button"],[role="link"],[role="tab"],[role="menuitem"],[onclick],[data-ct-listener]')) {
+            if (scanned++ >= 3000 || matches.length > 12) return;
+            if (!deepVisible(node)) continue;
+            const label = labelOf(node).toLowerCase();
+            if (!label) continue;
+            if (label === needle) matches.push({ node, label: labelOf(node), exact: true });
+            else if (label.includes(needle)) matches.push({ node, label: labelOf(node), exact: false });
+          }
+          for (const frame of doc.querySelectorAll('iframe,frame')) {
+            try { if (frame.contentDocument) collect(frame.contentDocument); } catch {}
+          }
+        };
+        collect(document);
+        const exact = matches.filter(m => m.exact);
+        // Substring matches on huge containers (an [onclick] card wrapper
+        // whose section text merely CONTAINS the needle) would center-click
+        // an arbitrary child — keep only tightly-labeled, innermost matches.
+        let pool = exact.length ? exact : matches.filter(m => m.label.length <= 100);
+        pool = pool.filter(m => !pool.some(o => o !== m && m.node.contains(o.node)));
+        if (!pool.length) throw new Error('No clickable element with text ' + JSON.stringify(${JSON.stringify(String(body.text))}) + '; try snapshot --grep to locate it');
+        if (pool.length > 1) {
+          const list = pool.slice(0, 8).map(m => m.node.tagName.toLowerCase() + (m.node.id ? '#' + m.node.id : '') + ' "' + m.label.slice(0, 60) + '"').join('; ');
+          throw new Error('Text matches ' + pool.length + ' elements — use a selector/@ref or a longer text: ' + list);
+        }
+        return pool[0].node;`;
+    const targetLabel = selector || `text:${String(body.text)}`;
     await s.cdp.send('Page.bringToFront', {});
     const r = await s.cdp.send('Runtime.evaluate', {
       expression: `((sel) => {
+        ${DEEP_QUERY_JS}
         function describe(node) {
           if (!node || node.nodeType !== 1) return String(node);
           const id = node.id ? '#' + node.id : '';
@@ -2203,32 +3120,75 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
             : '';
           return node.tagName.toLowerCase() + id + cls;
         }
-        const el = document.querySelector(sel);
-        if (!el) throw new Error('Element not found: ' + sel);
+        const el = (() => { ${finderJs}
+        })();
         el.scrollIntoView?.({ block: 'center', inline: 'center' });
+        const view = el.ownerDocument.defaultView || window;
         const rect = el.getBoundingClientRect();
-        const style = getComputedStyle(el);
-        const visible = rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
-        if (!visible) throw new Error('Click target is not interactable: ' + sel);
-        const x = rect.left + rect.width / 2;
-        const y = rect.top + rect.height / 2;
-        if (x < 0 || y < 0 || x >= window.innerWidth || y >= window.innerHeight) {
+        if (!deepVisible(el)) throw new Error('Click target is not interactable: ' + sel);
+        // Local (own-frame) coordinates for hit-testing…
+        const lx = rect.left + rect.width / 2;
+        const ly = rect.top + rect.height / 2;
+        if (lx < 0 || ly < 0 || lx >= view.innerWidth || ly >= view.innerHeight) {
           throw new Error('Click target outside viewport after scroll: ' + sel);
         }
-        const hit = document.elementFromPoint(x, y);
+        // …tested in the element's own root so shadow content retargets
+        // correctly and frame content is checked against its own document.
+        const rootNode = el.getRootNode();
+        const hitBase = rootNode.elementFromPoint ? rootNode : el.ownerDocument;
+        const hit = hitBase.elementFromPoint(lx, ly);
         if (!hit) throw new Error('Click target has no element at click point: ' + sel);
-        if (hit !== el && !el.contains(hit)) {
+        if (hit !== el && !el.contains(hit) && !hit.contains(el)) {
           throw new Error('Click target is covered: ' + sel + ' hit ' + describe(hit));
+        }
+        // CDP input events use top-viewport coordinates: add each ancestor
+        // frame's offset (border and padding shift the inner viewport) up to
+        // the top window.
+        let x = lx;
+        let y = ly;
+        let w = view;
+        let outermostFrame = null;
+        while (w !== w.parent && w.frameElement) {
+          const frameEl = w.frameElement;
+          const fr = frameEl.getBoundingClientRect();
+          let padLeft = 0;
+          let padTop = 0;
+          try {
+            const fcs = frameEl.ownerDocument.defaultView.getComputedStyle(frameEl);
+            padLeft = parseFloat(fcs.paddingLeft) || 0;
+            padTop = parseFloat(fcs.paddingTop) || 0;
+          } catch {}
+          x += fr.left + frameEl.clientLeft + padLeft;
+          y += fr.top + frameEl.clientTop + padTop;
+          outermostFrame = frameEl;
+          w = w.parent;
+        }
+        if (x < 0 || y < 0 || x >= window.innerWidth || y >= window.innerHeight) {
+          throw new Error('Click target outside top viewport (scroll its frame into view): ' + sel);
+        }
+        // A frame-local hit test cannot see top-document overlays covering
+        // the frame; confirm the top document still exposes the frame at the
+        // final click point.
+        if (outermostFrame) {
+          const topHit = document.elementFromPoint(x, y);
+          if (topHit && topHit !== outermostFrame && !outermostFrame.contains(topHit) && !topHit.contains(outermostFrame)) {
+            throw new Error('Click target is covered by a top-page element: ' + sel + ' hit ' + describe(topHit));
+          }
         }
         return {
           x,
           y,
           hit: describe(hit),
         };
-      })(${JSON.stringify(sel)})`,
+      })(${JSON.stringify(targetLabel)})`,
       returnByValue: true, awaitPromise: false,
     });
-    if (r.exceptionDetails) throw httpErr(400, r.exceptionDetails.exception?.description || 'click failed');
+    if (r.exceptionDetails) {
+      // First line only: page-side finder errors carry a JS stack that is
+      // noise in a CLI error message.
+      const desc = (r.exceptionDetails.exception?.description || 'click failed').split('\n')[0];
+      throw httpErr(400, desc);
+    }
     const point = r.result?.value;
     if (point) {
       const clickCount = Number.isFinite(Number(clicks)) ? Number(clicks) : 1;
@@ -2243,42 +3203,129 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
       });
     }
     await sleep(500);
-    return { clicked: selector, next: `chromux snapshot ${session} --diff` };
+    const clickedValue = selector || { text: body.text };
+    const verifyMs = resolveVerifyMs(body, settings);
+    if (verifyMs != null) {
+      const changed = await captureVerifyDiff(s, verifyMs);
+      if (changed != null) return finishClick({ clicked: clickedValue, changed });
+    }
+    return finishClick({ clicked: clickedValue, next: `chromux snapshot ${session} --diff` });
   }
 
   if (routePath === '/fill' && method === 'POST') {
-    const { session, selector, text } = body;
+    const { session, selector, text, files } = body;
     const s = getSession(sessions, session);
     touchSession(s);
+    const actionStart = Date.now();
     const sel = refToSelector(selector);
+    // File upload path: resolve the input element to an objectId and hand the
+    // local paths to Chrome via DOM.setFileInputFiles (no synthetic dialogs).
+    if (Array.isArray(files) && files.length) {
+      const found = await s.cdp.send('Runtime.evaluate', {
+        expression: `((sel) => {
+          ${DEEP_QUERY_JS}
+          const el = deepQuery(sel);
+          if (!el) throw new Error('Element not found: ' + sel);
+          if (el.tagName !== 'INPUT' || el.type !== 'file') throw new Error('Not a file input: ' + sel + ' (' + el.tagName.toLowerCase() + ')');
+          return el;
+        })(${JSON.stringify(sel)})`,
+        returnByValue: false, awaitPromise: false,
+      });
+      if (found.exceptionDetails) throw httpErr(400, found.exceptionDetails.exception?.description || 'upload target not found');
+      const objectId = found.result?.objectId;
+      if (!objectId) throw httpErr(400, `Upload target did not resolve: ${sel}`);
+      await s.cdp.send('DOM.setFileInputFiles', { files, objectId });
+      // Chrome sets the files without firing framework-visible events.
+      await s.cdp.send('Runtime.callFunctionOn', {
+        objectId,
+        functionDeclaration: `function () {
+          this.dispatchEvent(new Event('input', { bubbles: true }));
+          this.dispatchEvent(new Event('change', { bubbles: true }));
+        }`,
+      }, 3000).catch(() => {});
+      const names = files.map(f => path.basename(f));
+      const verifyUploadMs = resolveVerifyMs(body, settings);
+      if (verifyUploadMs != null) {
+        const changed = await captureVerifyDiff(s, verifyUploadMs, selector);
+        if (changed != null) return withDialogNote(s, actionStart, { filled: selector, files: names, changed });
+      }
+      return withDialogNote(s, actionStart, { filled: selector, files: names, next: `chromux snapshot ${session} --diff` });
+    }
+    const wantsPick = body.pick != null && body.pick !== '';
+    // --pick correctness: a suggestion must have APPEARED after typing. Mark
+    // the candidates already visible now so a static nav/list item whose text
+    // matches the pick can never win the race against the real popup.
+    if (wantsPick) await markPreFillPickCandidates(s);
     const r = await s.cdp.send('Runtime.evaluate', {
       expression: `((sel, txt) => {
-        const el = document.querySelector(sel);
+        ${DEEP_QUERY_JS}
+        const el = deepQuery(sel);
         if (!el) throw new Error('Element not found: ' + sel);
         if (!('value' in el)) throw new Error('Element is not fillable: ' + sel);
         el.focus();
-        const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+        // Constructors and prototypes must come from the element's own realm,
+        // or elements inside same-origin iframes fail instanceof/setter paths.
+        const view = el.ownerDocument.defaultView || window;
+        if (el.tagName === 'SELECT') {
+          const opts = Array.from(el.options);
+          const match = opts.find(o => o.value === txt)
+            || opts.find(o => o.textContent.trim() === txt)
+            || opts.find(o => o.textContent.trim().toLowerCase() === txt.toLowerCase());
+          if (!match) {
+            const known = opts.slice(0, 20).map(o => o.value + ' (' + o.textContent.trim() + ')').join(', ');
+            throw new Error('No option matching "' + txt + '" in ' + sel + '. Options: ' + known);
+          }
+          const selectSetter = Object.getOwnPropertyDescriptor(view.HTMLSelectElement.prototype, 'value')?.set;
+          if (selectSetter) selectSetter.call(el, match.value);
+          else el.value = match.value;
+          el.dispatchEvent(new view.Event('input', { bubbles: true }));
+          el.dispatchEvent(new view.Event('change', { bubbles: true }));
+          return { value: el.value, selectedLabel: match.textContent.trim() };
+        }
+        const proto = el.tagName === 'TEXTAREA' ? view.HTMLTextAreaElement.prototype : view.HTMLInputElement.prototype;
         const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set
           || Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value')?.set;
         if (setter) setter.call(el, txt);
         else el.value = txt;
         try {
-          el.dispatchEvent(new InputEvent('input', {
+          el.dispatchEvent(new view.InputEvent('input', {
             bubbles: true,
             cancelable: true,
             inputType: 'insertText',
             data: txt,
           }));
         } catch {
-          el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+          el.dispatchEvent(new view.Event('input', { bubbles: true, cancelable: true }));
         }
-        el.dispatchEvent(new Event('change', { bubbles: true }));
+        el.dispatchEvent(new view.Event('change', { bubbles: true }));
         return { value: el.value };
       })(${JSON.stringify(sel)}, ${JSON.stringify(text)})`,
       returnByValue: true, awaitPromise: false,
     });
-    if (r.exceptionDetails) throw httpErr(400, r.exceptionDetails.exception?.description || 'fill failed');
-    return { filled: selector, text, next: `chromux snapshot ${session} --diff` };
+    if (r.exceptionDetails) {
+      // A failed fill must not leave pick markers behind: stale
+      // data-ct-pick-seen on reused suggestion nodes would break the NEXT
+      // genuine pick on this page.
+      if (wantsPick) await cleanupPickMarks(s);
+      throw httpErr(400, (r.exceptionDetails.exception?.description || 'fill failed').split('\n')[0]);
+    }
+    let picked = null;
+    let pickEffect = null;
+    if (wantsPick) ({ picked, pickEffect } = await pickSuggestion(s, sel, selector, text, body));
+    const verifyMs = resolveVerifyMs(body, settings);
+    const buildResult = (extra) => {
+      const result = { filled: selector, text, ...extra };
+      if (picked != null) {
+        result.picked = picked;
+        if (pickEffect) result.pickEffect = pickEffect;
+      }
+      return withDialogNote(s, actionStart, result);
+    };
+    if (verifyMs != null) {
+      const changed = await captureVerifyDiff(s, verifyMs, selector);
+      if (changed != null) return buildResult({ changed });
+    }
+    return buildResult({ next: `chromux snapshot ${session} --diff` });
   }
 
   if (routePath === '/type' && method === 'POST') {
@@ -2288,6 +3335,11 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     touchSession(s);
     await s.cdp.send('Page.bringToFront', {});
     await s.cdp.send('Input.insertText', { text });
+    const verifyMs = resolveVerifyMs(body, settings);
+    if (verifyMs != null) {
+      const changed = await captureVerifyDiff(s, verifyMs);
+      if (changed != null) return { typed: text, changed };
+    }
     return { typed: text, next: `chromux snapshot ${session} --diff` };
   }
 
@@ -2296,8 +3348,93 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     if (!session || !key) throw httpErr(400, 'session and key required');
     const s = getSession(sessions, session);
     touchSession(s);
+    const finishPress = actionFinisher(port, sessions, session, s, browserState, settings);
     await pressKey(s.cdp, key);
-    return { pressed: key, next: `chromux snapshot ${session} --diff` };
+    const verifyMs = resolveVerifyMs(body, settings);
+    if (verifyMs != null) {
+      const changed = await captureVerifyDiff(s, verifyMs);
+      if (changed != null) return finishPress({ pressed: key, changed });
+    }
+    return finishPress({ pressed: key, next: `chromux snapshot ${session} --diff` });
+  }
+
+  // First-class download: set browser download behavior, trigger via element
+  // click or direct URL, then wait for Browser.downloadProgress completion.
+  if (routePath === '/download' && method === 'POST') {
+    const { session, selector, url: fileUrl, timeoutMs = 60000, to } = body;
+    if (!session || (!selector && !fileUrl)) throw httpErr(400, 'session and (selector or url) required');
+    const s = getSession(sessions, session);
+    touchSession(s);
+    if (!browserState?.ensureDownloadBehavior) throw httpErr(503, 'Downloads need the daemon browser-level CDP connection');
+    await browserState.ensureDownloadBehavior();
+    const downloadDir = browserState.downloadPath;
+    const before = new Set(browserState.downloads.keys());
+    let guid = null;
+    let record = null;
+    try {
+      if (selector) {
+        const sel = refToSelector(selector);
+        const r = await s.cdp.send('Runtime.evaluate', {
+          expression: `((sel) => {
+            ${DEEP_QUERY_JS}
+            const el = deepQuery(sel);
+            if (!el) throw new Error('Element not found: ' + sel);
+            el.click();
+            return true;
+          })(${JSON.stringify(sel)})`,
+          returnByValue: true, awaitPromise: false,
+        });
+        if (r.exceptionDetails) throw httpErr(400, r.exceptionDetails.exception?.description || 'download trigger failed');
+      } else {
+        // Navigating to a downloadable resource aborts the navigation
+        // (net::ERR_ABORTED) while the download proceeds — that is expected.
+        await s.cdp.send('Page.navigate', { url: fileUrl }).catch(() => {});
+      }
+      const deadline = Date.now() + Math.min(Math.max(Number(timeoutMs) || 60000, 1000), 600000);
+      while (Date.now() <= deadline) {
+        const started = [...browserState.downloads.keys()].filter(g => !before.has(g));
+        if (started.length > 1) {
+          throw httpErr(409, `The trigger started ${started.length} downloads at once — download them one at a time`);
+        }
+        if (started.length === 1) {
+          guid = started[0];
+          record = browserState.downloads.get(guid);
+          if (record.state !== 'inProgress') break;
+        }
+        await sleep(150);
+      }
+    } finally {
+      // Restore profile-wide download behavior as soon as the wait ends so a
+      // headed profile's manual downloads are only redirected while a chromux
+      // download is actually in flight.
+      await browserState.restoreDownloadBehavior();
+    }
+    if (!record) throw httpErr(408, 'No download started before timeout — the click/url may not trigger a download');
+    if (record.state !== 'completed') throw httpErr(408, `Download did not complete (state: ${record.state || 'inProgress'})`);
+    const savedAs = path.join(downloadDir, guid);
+    let destDir = browserState.downloadPath;
+    if (to) {
+      const resolvedTo = path.resolve(to);
+      const allowedBases = ['/tmp', '/private/tmp', os.tmpdir(), os.homedir()];
+      if (!allowedBases.some(base => pathWithinBase(resolvedTo, base))) {
+        throw httpErr(400, `Download path not allowed: ${resolvedTo}`);
+      }
+      fs.mkdirSync(resolvedTo, { recursive: true });
+      destDir = resolvedTo;
+    }
+    const suggested = path.basename(record.suggestedFilename || guid);
+    const ext = path.extname(suggested);
+    const stem = path.basename(suggested, ext);
+    let dest = path.join(destDir, suggested);
+    for (let i = 2; fs.existsSync(dest); i++) dest = path.join(destDir, `${stem}-${i}${ext}`);
+    try {
+      fs.renameSync(savedAs, dest);
+    } catch {
+      fs.copyFileSync(savedAs, dest);
+      fs.unlinkSync(savedAs);
+    }
+    browserState.downloads.delete(guid);
+    return { downloaded: path.basename(dest), path: dest, bytes: fs.statSync(dest).size, url: record.url };
   }
 
   if ((routePath === '/wait-for-text' || routePath === '/wait-for-selector') && method === 'POST') {
@@ -2310,11 +3447,14 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     const isTextWait = routePath === '/wait-for-text';
     const needle = isTextWait ? text : selector;
     if (!needle) throw httpErr(400, isTextWait ? 'text required' : 'selector required');
+    const waitGone = !isTextWait && body.gone === true;
     let lastError = null;
     while (Date.now() <= deadline) {
       const expression = isTextWait
         ? textIncludesExpression(needle)
-        : selectorVisibleExpression(needle);
+        : waitGone
+          ? selectorGoneExpression(needle)
+          : selectorVisibleExpression(needle);
       const r = await s.cdp.send('Runtime.evaluate', {
         expression,
         returnByValue: true,
@@ -2324,13 +3464,15 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
         break;
       }
       if (r.result?.value === true) {
-        return isTextWait
-          ? { foundText: needle, timeoutMs: timeout }
+        if (isTextWait) return { foundText: needle, timeoutMs: timeout };
+        return waitGone
+          ? { goneSelector: needle, timeoutMs: timeout }
           : { foundSelector: needle, timeoutMs: timeout };
       }
       await sleep(100);
     }
     if (lastError) throw httpErr(400, lastError);
+    if (waitGone) throw httpErr(408, `selector still visible after timeout ${timeout}ms: ${needle}`);
     throw httpErr(408, `${isTextWait ? 'text' : 'selector'} not found before timeout ${timeout}ms: ${needle}`);
   }
 
@@ -2524,11 +3666,18 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
       s.cdp.off('Network.requestWillBeSent');
       s.cdp.off('Network.responseReceived');
       s.cdp.off('Network.loadingFailed');
+      s.cdp.off('Network.loadingFinished');
       // Don't disable Network in headless mode (needed for UA override)
       if (!isHeadless) { try { await s.cdp.send('Network.disable'); } catch {} }
       delete s._netBuf;
       delete s._netPending;
       delete s._netOn;
+      // The off() calls above also wiped the network-idle inflight tracker's
+      // listeners; clear its state so the next waitFor network-idle re-arms
+      // instead of reading a frozen counter.
+      delete s._inflightOn;
+      delete s._inflight;
+      delete s._lastNetActivity;
       return { network: 'disabled', session };
     }
 
@@ -2710,7 +3859,9 @@ function defaultCliTimeoutMs() {
 function parseOpenArgs(args) {
   const out = [];
   let background = openBackgroundDefault();
-  for (const arg of args) {
+  let dialog = null;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
     if (arg === '--background' || arg === '--no-focus') {
       background = true;
       continue;
@@ -2719,9 +3870,21 @@ function parseOpenArgs(args) {
       background = false;
       continue;
     }
+    if (arg === '--dialog') {
+      const value = args[i + 1];
+      if (value !== 'accept' && value !== 'dismiss') {
+        console.error('Usage: chromux open <session> <url> [--dialog accept|dismiss]');
+        process.exit(1);
+      }
+      dialog = value;
+      i++;
+      continue;
+    }
     out.push(arg);
   }
-  return { session: out[0], url: out[1], background };
+  const parsed = { session: out[0], url: out[1], background };
+  if (dialog) parsed.dialog = dialog;
+  return parsed;
 }
 
 function chromeLaunchEnv() {
@@ -3391,6 +4554,15 @@ function buildRunReceipt({ session, codeSource, timeoutMs, startedAt, endedAt, r
   };
 }
 
+// Resolve a `--file` path, falling back to the chromux install directory so
+// bundled snippets (e.g. snippets/_builtin/form-flow.js) work from any cwd.
+function resolveRunFilePath(p) {
+  if (fs.existsSync(p)) return path.resolve(p);
+  const bundled = path.join(MODULE_DIR, p);
+  if (!path.isAbsolute(p) && fs.existsSync(bundled)) return bundled;
+  return path.resolve(p);
+}
+
 function readCodeArg(args, usage) {
   const timeoutMs = takeTimeoutFlag(args);
   const receiptPath = takeFlagValue(args, '--receipt', { required: 'a path' });
@@ -3402,8 +4574,9 @@ function readCodeArg(args, usage) {
   if (fIdx >= 0) {
     const p = args[fIdx + 1];
     if (!p) { console.error('--file requires a path'); process.exit(1); }
-    code = fs.readFileSync(p, 'utf8');
-    codeSource = { kind: 'file', path: path.resolve(p) };
+    const resolved = resolveRunFilePath(p);
+    code = fs.readFileSync(resolved, 'utf8');
+    codeSource = { kind: 'file', path: resolved };
   } else if (args[1] === '-') {
     code = fs.readFileSync(0, 'utf8');
     codeSource = { kind: 'stdin' };
@@ -3414,12 +4587,34 @@ function readCodeArg(args, usage) {
   return { session, code, timeoutMs, receiptPath, codeSource };
 }
 
+// Collect repeated `--arg key=value` flags into the object exposed to run
+// code as `args`. Values that parse as JSON (objects, arrays, numbers,
+// booleans, null) are passed structured; everything else stays a string.
+function takeRunArgFlags(args) {
+  const out = {};
+  let i;
+  while ((i = args.indexOf('--arg')) !== -1) {
+    const kv = args[i + 1];
+    const eq = kv ? kv.indexOf('=') : -1;
+    if (eq <= 0) { console.error('--arg requires key=value (repeatable)'); process.exit(1); }
+    args.splice(i, 2);
+    const raw = kv.slice(eq + 1);
+    let value = raw;
+    if (/^(\{|\[|"|-?\d|true$|false$|null$)/.test(raw)) {
+      try { value = JSON.parse(raw); } catch { value = raw; }
+    }
+    out[kv.slice(0, eq)] = value;
+  }
+  return out;
+}
+
 async function cmdRun(args, sock) {
   let session;
   let code;
   let timeoutMs;
   let receiptPath = null;
   let codeSource;
+  const runArgs = takeRunArgFlags(args);
   const schemaPath = takeFlagValue(args, '--schema', { required: 'a JSON schema path' });
   const scriptLabel = takeFlagValue(args, '--script', { required: 'a <host>/<name> script label' });
   if (scriptLabel) {
@@ -3456,7 +4651,7 @@ async function cmdRun(args, sock) {
   };
   let result;
   try {
-    result = await cliReq('POST', '/run', { session, code, timeoutMs }, sock, httpTimeout);
+    result = await cliReq('POST', '/run', { session, code, timeoutMs, args: runArgs }, sock, httpTimeout);
   } catch (error) {
     writeReceipt(null, error);
     decorateScriptReplayError(error, codeSource);
@@ -3816,9 +5011,55 @@ async function cmdCdp(args, sock) {
   return cliReq('POST', '/cdp', { session, method: cdpMethod, params, timeoutMs }, sock, httpTimeout);
 }
 
+// click/fill/type/press verify their own effect by default: the response
+// carries the post-action diff, so acting and verifying is one round-trip.
+// `--verify MS` tunes the settle wait; `--no-verify` opts out entirely.
+// Returns undefined (daemon default), a number, or false (explicitly off).
+function takeVerifyFlag(args) {
+  const noIdx = args.indexOf('--no-verify');
+  if (noIdx !== -1) { args.splice(noIdx, 1); return false; }
+  const i = args.indexOf('--verify');
+  if (i === -1) return undefined;
+  const next = args[i + 1];
+  const ms = next != null && /^\d+$/.test(next) ? Number(next) : null;
+  args.splice(i, ms != null ? 2 : 1);
+  return ms ?? 300;
+}
+
+// On-demand deep guides: the main SKILL.md is paid as input on every agent
+// turn, so topic depth lives here and loads only when a task needs it.
+function cmdSkillTopic(args) {
+  const topicsDir = path.join(MODULE_DIR, 'skills', 'chromux', 'topics');
+  let topics = [];
+  try {
+    topics = fs.readdirSync(topicsDir).filter(f => f.endsWith('.md')).map(f => f.slice(0, -3)).sort();
+  } catch {}
+  const topic = args[0];
+  if (!topic) {
+    console.log(JSON.stringify({
+      topics,
+      usage: 'chromux skill <topic> prints the deep guide for that topic',
+    }, null, 2));
+    return;
+  }
+  const file = path.join(topicsDir, `${path.basename(topic)}.md`);
+  if (!topics.includes(path.basename(topic)) || !fs.existsSync(file)) {
+    console.error(`Unknown skill topic "${topic}". Available: ${topics.join(', ') || '(none found)'}`);
+    process.exit(1);
+  }
+  console.log(fs.readFileSync(file, 'utf8'));
+}
+
 async function cmdClick(args, sock) {
+  const verify = takeVerifyFlag(args);
   const session = args[0];
-  if (!session) { console.error('Usage: chromux click <session> (@ref|selector|--xy X Y)'); process.exit(1); }
+  if (!session) { console.error('Usage: chromux click <session> (@ref|selector|--text "label"|--xy X Y) [--verify [MS]]'); process.exit(1); }
+  const textIdx = args.indexOf('--text');
+  if (textIdx !== -1) {
+    const text = args[textIdx + 1];
+    if (!text) { console.error('Usage: chromux click <session> --text "visible label"'); process.exit(1); }
+    return cliReq('POST', '/click', { session, text, verify }, sock);
+  }
   const xyIdx = args.indexOf('--xy');
   if (xyIdx >= 0) {
     const x = Number(args[xyIdx + 1]);
@@ -3831,30 +5072,50 @@ async function cmdClick(args, sock) {
       xy: [x, y],
       button: buttonIdx >= 0 ? args[buttonIdx + 1] : 'left',
       clicks: clicksIdx >= 0 ? parseInt(args[clicksIdx + 1]) : 1,
+      verify,
     }, sock);
   }
-  return cliReq('POST', '/click', { session, selector: args[1] }, sock);
+  return cliReq('POST', '/click', { session, selector: args[1], verify }, sock);
 }
 
 async function cmdPress(args, sock) {
+  const verify = takeVerifyFlag(args);
   const session = args[0];
   const key = args[1];
-  if (!session || !key) { console.error(`Usage: chromux press <session> <${Object.keys(KEY_DEFS).join('|')}>`); process.exit(1); }
-  return cliReq('POST', '/press', { session, key }, sock);
+  if (!session || !key) { console.error(`Usage: chromux press <session> <${Object.keys(KEY_DEFS).join('|')}> [--verify [MS]]`); process.exit(1); }
+  return cliReq('POST', '/press', { session, key, verify }, sock);
 }
 
 async function cmdWaitFor(args, sock, kind) {
+  const goneIdx = args.indexOf('--gone');
+  const gone = kind === 'selector' && goneIdx !== -1;
+  if (goneIdx !== -1) args.splice(goneIdx, 1);
   const session = args[0];
   const needle = args[1];
   const timeoutMs = args[2] ? Number(args[2]) : 5000;
   if (!session || !needle || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-    console.error(`Usage: chromux wait-for-${kind} <session> <${kind}> [timeout-ms]`);
+    console.error(`Usage: chromux wait-for-${kind} <session> <${kind}> [timeout-ms]${kind === 'selector' ? ' [--gone]' : ''}`);
     process.exit(1);
   }
   const body = kind === 'text'
     ? { session, text: needle, timeoutMs }
-    : { session, selector: needle, timeoutMs };
+    : { session, selector: needle, timeoutMs, gone };
   return cliReq('POST', `/wait-for-${kind}`, body, sock, timeoutMs + 5000);
+}
+
+// download: trigger via element click or direct URL, wait for completion.
+async function cmdDownload(args, sock) {
+  const session = args[0];
+  if (!session) { console.error('Usage: chromux download <session> (@ref|selector|--url URL) [--to DIR] [--timeout MS]'); process.exit(1); }
+  const urlIdx = args.indexOf('--url');
+  const url = urlIdx >= 0 ? args[urlIdx + 1] : null;
+  const toIdx = args.indexOf('--to');
+  const to = toIdx >= 0 ? path.resolve(args[toIdx + 1]) : null;
+  const timeoutIdx = args.indexOf('--timeout');
+  const timeoutMs = timeoutIdx >= 0 ? Number(args[timeoutIdx + 1]) : 60000;
+  const selector = url ? null : args[1];
+  if (!selector && !url) { console.error('Usage: chromux download <session> (@ref|selector|--url URL) [--to DIR] [--timeout MS]'); process.exit(1); }
+  return cliReq('POST', '/download', { session, selector, url, to, timeoutMs }, sock, timeoutMs + 10000);
 }
 
 async function cmdWatch(args, sock) {
@@ -4140,6 +5401,7 @@ async function runCli(cmd, args) {
   }
   if (cmd === 'note') return cmdNote(args);
   if (cmd === 'script') return cmdScript(args);
+  if (cmd === 'skill') return cmdSkillTopic(args);
   if (cmd === 'pause') {
     const profileName = args[0] || getProfile();
     return runLoggedProfileCommand(cmd, args, profileName, () => cmdPause(profileName));
@@ -4154,9 +5416,9 @@ async function runCli(cmd, args) {
   const profile = getProfile();
   const tabCommands = new Set([
     'show', 'open', 'snapshot', 'cdp', 'run', 'batch', 'click', 'fill', 'type',
-    'press', 'wait-for-text', 'wait-for-selector', 'eval', 'scroll-until',
-    'screenshot', 'scroll', 'wait', 'watch', 'console', 'network', 'close',
-    'list', 'stop',
+    'press', 'download', 'wait-for-text', 'wait-for-selector', 'eval',
+    'scroll-until', 'screenshot', 'scroll', 'wait', 'watch', 'console',
+    'network', 'close', 'list', 'stop',
   ]);
   if (!tabCommands.has(cmd)) { console.error(`Unknown: ${cmd}. Run: chromux help`); process.exit(1); }
 
@@ -4185,9 +5447,12 @@ async function runCli(cmd, args) {
       },
       snapshot:   () => {
         const filter = getArgValue(args, '--filter') || (args.includes('--interactive') ? 'interactive' : null);
+        const grep = getArgValue(args, '--grep');
         const params = new URLSearchParams();
         if (filter) params.set('filter', filter);
         if (args.includes('--diff')) params.set('diff', '1');
+        if (grep) params.set('grep', grep);
+        if (args.includes('--clickable')) params.set('clickable', '1');
         const q = params.size ? `?${params}` : '';
         return cliReq('GET', `/snapshot/${args[0]}${q}`, null, sock);
       },
@@ -4195,9 +5460,40 @@ async function runCli(cmd, args) {
       run:        () => cmdRun(args, sock),
       batch:      () => cmdBatch(args, sock),
       click:      () => cmdClick(args, sock),
-      fill:       () => cliReq('POST', '/fill', { session: args[0], selector: args[1], text: args[2] }, sock),
-      type:       () => cliReq('POST', '/type', { session: args[0], text: args[1] }, sock),
+      fill:       () => {
+        const verify = takeVerifyFlag(args);
+        // fill <s> <sel> "text" --pick "label" types then chooses the
+        // matching autocomplete suggestion in the same round-trip.
+        let pick;
+        const pickIdx = args.indexOf('--pick');
+        if (pickIdx !== -1) {
+          pick = args[pickIdx + 1];
+          if (!pick) { console.error('Usage: chromux fill <session> <selector> "text" --pick "suggestion label"'); process.exit(1); }
+          args.splice(pickIdx, 2);
+        }
+        // fill <s> <sel> --file PATH [--file PATH...] sets a file input
+        // through DOM.setFileInputFiles instead of typing a value.
+        const files = [];
+        let fileIdx;
+        while ((fileIdx = args.indexOf('--file')) !== -1) {
+          const file = args[fileIdx + 1];
+          if (!file) { console.error('Usage: chromux fill <session> <selector> (--file PATH [--file PATH...] | <text>)'); process.exit(1); }
+          const resolved = path.resolve(file);
+          if (!fs.existsSync(resolved)) { console.error(`Upload file not found: ${resolved}`); process.exit(1); }
+          files.push(resolved);
+          args.splice(fileIdx, 2);
+        }
+        if (files.length) {
+          return cliReq('POST', '/fill', { session: args[0], selector: args[1], files, verify }, sock);
+        }
+        return cliReq('POST', '/fill', { session: args[0], selector: args[1], text: args[2], pick, verify }, sock);
+      },
+      type:       () => {
+        const verify = takeVerifyFlag(args);
+        return cliReq('POST', '/type', { session: args[0], text: args[1], verify }, sock);
+      },
       press:      () => cmdPress(args, sock),
+      download:   () => cmdDownload(args, sock),
       'wait-for-text': () => cmdWaitFor(args, sock, 'text'),
       'wait-for-selector': () => cmdWaitFor(args, sock, 'selector'),
       eval:       () => cmdEval(args, sock),
@@ -4729,11 +6025,18 @@ function withTimeout(promise, ms, message) {
 const HELP = `chromux — tmux for Chrome tabs
 
 The core surface:
-  chromux open <session> <url>       Create or navigate a tab
+  chromux open <session> <url>       Create or navigate a tab (responses report the
+                                     interactive-element count; small pages inline the
+                                     elements with @refs so no snapshot round-trip is needed)
   chromux open --background <s> <u>  Explicitly create a background tab
+  chromux open <s> <u> --dialog accept|dismiss   JS dialog auto-policy for the session
+                                     (default: dismiss; beforeunload is always accepted;
+                                     handled dialogs surface as "dialog" in action responses)
   chromux run <session> -            Multi-step async JS with cdp/js/page/waitFor/assertPage helpers
                                      (waitFor accepts [fallback, candidates] for selector/text waits)
   chromux run <session> --page-file F  Run a JS file directly in the page (no shell escaping)
+  chromux run <s> --file F --arg k=v Parametrize run code: values arrive as \`args.k\`
+                                     (JSON values parse, e.g. --arg fields='{"#email":"a@b.c"}')
   chromux run <session> --script <host>/<name>  Replay a saved action script (no model calls)
   chromux run <session> ... --schema s.json     Validate the run result against a JSON schema
   chromux run <session> --receipt p  Write a redacted local run receipt
@@ -4760,15 +6063,35 @@ Convenience shortcuts:
   chromux snapshot <session>         Accessibility tree with @ref (refs stay stable per document)
   chromux snapshot <s> --interactive Only interactive elements (smaller payload)
   chromux snapshot <s> --diff        Only lines added/removed since the previous snapshot
+  chromux snapshot <s> --grep "pat"  Only lines matching a pattern (+ ancestors for context)
+  chromux snapshot <s> --clickable   Force behavior-based clickable detection (cursor/onclick
+                                     divs); auto-enabled when a page has no standard elements
+                                     or when clickable candidates are dense relative to them
+  Snapshots, clicks, fills, and waits pierce same-origin iframes and open
+                                     shadow DOM; cross-origin frames are marked as unreachable
   chromux click <session> @<ref>     Click by ref number
   chromux click <session> "selector" Click by CSS selector
+  chromux click <session> --text "label"   Click by visible label when refs went stale
+                                     (ambiguous text fails and lists the candidates)
   chromux click <session> --xy X Y   Click by viewport coordinates
-  chromux fill <session> @<ref> "t"  Fill input field
+  A click that opens a popup/new tab adopts it automatically: the response
+                                     carries "newSession" with the adopted session name
+  click/fill/type/press verify by default: the response carries the post-action
+                                     diff ("changed"). --verify MS tunes the settle wait,
+                                     --no-verify skips it (crawl mode skips automatically)
+  chromux fill <session> @<ref> "t"  Fill input field (native <select>: matches option value/label)
+  chromux fill <s> @<ref> "se" --pick "Seoul"   Type, wait for the autocomplete popup,
+                                     and choose the matching suggestion in one call
+  chromux fill <s> @<ref> --file p   Set a file input for upload (repeat --file for multiple)
   chromux type <session> "text"      Insert text into focused field
   chromux press <session> Enter      Press Enter, Tab, Escape, Backspace, Delete,
                                      arrows, Home, End, PageUp, or PageDown
+  chromux download <s> (@ref|SEL|--url U) [--to DIR]   Trigger a download and wait for the file
   chromux wait-for-text <s> "text"   Wait for visible page text
   chromux wait-for-selector <s> SEL  Wait for visible selector
+  chromux wait-for-selector <s> SEL --gone   Wait until a selector disappears
+  run waitFor also accepts {kind:'gone'} and {kind:'network-idle', idleMs:500}
+                                     for deterministic waits without sleep()
   chromux screenshot <session> [p]   Take PNG screenshot
   chromux show <session>             Open DevTools in browser (inspect live tab)
 
@@ -4798,9 +6121,20 @@ Saved action scripts (observe once, replay deterministically):
 
 Runner snippets:
   snippets/_builtin/page-extract.js      Structured page metadata extraction
-  snippets/_builtin/form-flow.js         Form fill, submit, and readiness proof
+  snippets/_builtin/form-flow.js         Whole form fill + submit + readiness in one call
+                                         (--arg fields='{"#sel":"value"}' --arg submit='#go')
+  snippets/_builtin/table-extract.js     Table -> {headers, rows} without dumping HTML
+  snippets/_builtin/paginate-collect.js  Collect items across paginated pages
+  snippets/_builtin/wizard-flow.js       Multi-step wizard with per-step readiness proof
+  snippets/_builtin/search-and-pick.js   Type -> pick suggestion -> submit -> report
   snippets/_builtin/network-errors.js    Browser-observable resource diagnostics
   snippets/_builtin/page-assert.js       Selector, text, and DOM assertions
+
+Deep guides (on demand, keeps per-turn skill text small):
+  chromux skill                      List available topics
+  chromux skill forms                Forms, autocomplete --pick, uploads, wizards
+  chromux skill extraction           Grep/diff, tables, pagination, saved scripts
+  chromux skill recovery             Stale refs, dialogs, popups, human login handoff
 
 Policy:
   New browser actions should be expressed with run or cdp before adding verbs.

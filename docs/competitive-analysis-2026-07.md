@@ -110,6 +110,16 @@ Key events to track:
   axis has hard public numbers (114K vs 27K vs 200–400). chromux has a
   benchmark harness but no published comparison of `snapshot --interactive`
   payloads vs playwright-mcp/agent-browser on the same pages.
+  *Closed in 0.15.0:* `benchmarks/agent-compare-benchmark.mjs` (one fixed
+  model doing identical missions with chromux / agent-browser /
+  @playwright/cli, measuring time, tokens, turns, machine-graded success) and
+  `benchmarks/compare-benchmark.mjs` (deterministic payload/latency/isolation
+  comparison) with results published in `docs/benchmark-2026-07.md` and the
+  README. Measured note: agent-browser 0.31.1's named sessions isolate
+  correctly, so the earlier "sessions share a tab / parallel broken" claim is
+  stale; the durable chromux edges that survived measurement are real-Chrome
+  bot-check resilience (Google: 100% vs 50%) and `snapshot --diff`
+  incremental observation (~37 vs ~10.9K/28.4K tokens on a 200-story page).
 - **G-5. Skills distribution.** agent-browser installs via `npx skills add`
   and fetches current instructions at runtime (`skills get core`) so docs
   never go stale; chrome-devtools-mcp ships marketplace skills. chromux's
@@ -135,7 +145,15 @@ Key events to track:
 1. **`snapshot --diff`** (G-2) — shipped in 0.13.0: refs are now stable within
    a document (elements keep their `@ref` across re-snapshots; navigation
    resets), and `snapshot --diff` emits only added/removed lines per session
-   with an omitted-unchanged summary.
+   with an omitted-unchanged summary. *Extended in 0.16.0*: `snapshot --grep`
+   (targeted find with ancestor context) and `open` inlining small pages'
+   interactive elements, both driven by the agent-in-the-loop benchmark.
+   *Follow-up shipped in 0.17.0*: behavior-based clickable detection
+   (pointer-cursor boundaries, onclick, CDP `getEventListeners` scan; gated
+   to low-signal pages, `--clickable` to force), occlusion-probe `overlay`
+   surfacing, live state in snapshot lines, and default act-and-verify
+   (`changed` diff on click/fill/type/press) — flipped both MiniWoB++ tasks
+   from a loss to a win with fixture payloads held byte-identical.
 2. **Publish token benchmarks** (G-4) — shipped in 0.14.0:
    `benchmarks/chromux-token-benchmark.mjs` measures agent-visible payloads
    (full HTML vs snapshot vs `--interactive` vs `--diff` vs shaped extract) on

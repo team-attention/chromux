@@ -11,11 +11,11 @@
 // full HTML vs full snapshot vs interactive snapshot vs post-action diff vs
 // schema-shaped extraction.
 
-import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { startFixtureServer } from './fixtures.mjs';
 
 const MODULE_DIR = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const CHROMUX = path.join(MODULE_DIR, 'chromux.mjs');
@@ -27,49 +27,6 @@ function argValue(name, fallback = null) {
 
 function estimateTokens(text) {
   return Math.ceil(String(text).length / 4);
-}
-
-function fixtureHtml(route) {
-  if (route.startsWith('/form')) {
-    return `<!doctype html><title>Token Fixture Form</title>
-      <main>
-        <h1>Checkout</h1>
-        <form>
-          <input id="email" aria-label="Email" placeholder="you@example.com">
-          <input id="coupon" aria-label="Coupon">
-          <select id="country" aria-label="Country"><option>KR</option><option>US</option></select>
-          <button id="submit">Place order</button>
-        </form>
-        <p id="status">Waiting</p>
-      </main>`;
-  }
-  if (route.startsWith('/feed')) {
-    const items = Array.from({ length: 200 }, (_, i) => `
-      <article>
-        <h2><a href="/story/${i}">Story headline number ${i} with some descriptive words</a></h2>
-        <p>Teaser paragraph for story ${i}. ${'Filler sentence for realistic text density. '.repeat(3)}</p>
-        <div><button data-id="${i}">Upvote</button> <a href="/story/${i}#comments">comments</a></div>
-      </article>`).join('\n');
-    return `<!doctype html><title>Token Fixture Feed</title><main><h1>Feed</h1>${items}</main>`;
-  }
-  return `<!doctype html><title>Token Fixture Article</title>
-    <main>
-      <h1>Article</h1>
-      <nav><a href="/">Home</a> <a href="/feed">Feed</a> <a href="/form">Form</a></nav>
-      ${'<p>Body paragraph with enough words to resemble a real article page.</p>'.repeat(40)}
-      <button id="more">Read more</button>
-    </main>`;
-}
-
-function startFixtureServer() {
-  const server = http.createServer((req, res) => {
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
-    res.end(fixtureHtml(req.url || '/'));
-  });
-  return new Promise((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => resolve(server));
-  });
 }
 
 function runChromux(args, timeoutMs = 90_000) {
@@ -109,8 +66,7 @@ async function main() {
     process.exit(1);
   }
   const outPath = argValue('--out');
-  const server = await startFixtureServer();
-  const base = `http://127.0.0.1:${server.address().port}`;
+  const { server, baseUrl: base } = await startFixtureServer();
   const profile = `tokens-${Date.now().toString(36)}`;
   process.env.CHROMUX_PROFILE = profile;
   const rows = [];
@@ -122,8 +78,30 @@ async function main() {
     const pages = [
       { name: 'article', url: `${base}/`, mutate: `return await js('const b=document.createElement("button");b.textContent="Comment";document.querySelector("main").appendChild(b);return 1')` },
       { name: 'form', url: `${base}/form`, mutate: `return await js('document.getElementById("status").textContent="Saved";return 1')` },
-      { name: 'feed-200', url: `${base}/feed`, mutate: `return await js('const a=document.createElement("article");a.innerHTML="<h2><a href=\\'/story/new\\'>Breaking story</a></h2>";document.querySelector("main").prepend(a);return 1')` },
+      { name: 'feed-200', url: `${base}/feed`, findText: 'headline number 153', mutate: `return await js('const a=document.createElement("article");a.innerHTML="<h2><a href=\\'/story/new\\'>Breaking story</a></h2>";document.querySelector("main").prepend(a);return 1')` },
+      // Real-sized page: sticky header, dense nav, div-based product cards
+      // (clickable ratio gate fires), cookie consent dialog (occluder).
+      { name: 'shop', url: `${base}/shop`, findText: 'Linen Notebook', mutate: `return await js('document.getElementById("status").textContent="Selected SHP-00: probe";return 1')` },
     ];
+
+    // Behavior guard on the real-sized fixture (not a payload metric): the
+    // content-covering cookie dialog must be flagged as an overlay, and the
+    // bottom consent-bar variant must NOT be.
+    {
+      const opened = await runChromux(['open', 'tok-occln', `${base}/shop`]);
+      if (!opened.ok) throw new Error(`open shop occlusion probe failed: ${opened.stderr}`);
+      const snap = await runChromux(['snapshot', 'tok-occln']);
+      if (!/overlay \(covers page/.test(snap.stdout)) {
+        throw new Error('regression: shop cookie dialog not flagged as overlay');
+      }
+      const openedBar = await runChromux(['open', 'tok-occln', `${base}/shop?consent=bar`]);
+      if (!openedBar.ok) throw new Error(`open shop consent=bar failed: ${openedBar.stderr}`);
+      const snapBar = await runChromux(['snapshot', 'tok-occln']);
+      if (/overlay \(covers page/.test(snapBar.stdout)) {
+        throw new Error('regression: bottom consent bar wrongly flagged as page-wide overlay');
+      }
+      await runChromux(['close', 'tok-occln']);
+    }
 
     for (const page of pages) {
       const session = `tok-${page.name}`;
@@ -136,6 +114,10 @@ async function main() {
       rows.push(await measure('snapshot --interactive', page.name, ['snapshot', session, '--interactive'], { session }));
       rows.push(await measure('snapshot --diff after one action', page.name,
         ['snapshot', session, '--diff'], { session, mutate: page.mutate }));
+      if (page.findText) {
+        rows.push(await measure('snapshot --grep (find one item)', page.name,
+          ['snapshot', session, '--grep', page.findText], { session }));
+      }
       rows.push(await measure('structured extract (run page meta)', page.name,
         ['run', session, `return await page('({url:location.href,title:document.title,headings:[...document.querySelectorAll("h1,h2")].length,links:[...document.querySelectorAll("a[href]")].length})')`], { session }));
 
@@ -166,6 +148,39 @@ async function main() {
       console.error(`| ${page} | ${entry.label} | ${entry.bytes.toLocaleString('en-US')} | ${entry.estTokens.toLocaleString('en-US')} |`);
     }
   }
+
+  // Regression guard: observation payload size is a first-class metric, so
+  // exceeding these budgets fails the benchmark (and thereby ./test.sh).
+  // Budgets are ~10% above the published Token Footprint numbers — raise them
+  // only for a deliberate, documented trade-off.
+  const BUDGETS = {
+    'article:snapshot (full)': 900,
+    'article:snapshot --interactive': 60,
+    'form:snapshot (full)': 110,
+    'form:snapshot --interactive': 60,
+    'feed-200:snapshot (full)': 15700,
+    'feed-200:snapshot --interactive': 7900,
+    'feed-200:snapshot --diff after one action': 100,
+    'feed-200:snapshot --grep (find one item)': 150,
+    'shop:snapshot (full)': 900,
+    'shop:snapshot --interactive': 640,
+    'shop:snapshot --diff after one action': 100,
+    'shop:snapshot --grep (find one item)': 100,
+  };
+  const over = [];
+  for (const [page, entries] of Object.entries(byPage)) {
+    for (const entry of entries) {
+      const budget = BUDGETS[`${page}:${entry.label}`];
+      if (budget != null && entry.estTokens > budget) {
+        over.push(`${page} / ${entry.label}: ~${entry.estTokens} tokens > budget ${budget}`);
+      }
+    }
+  }
+  if (over.length) {
+    console.error(`\nPayload budget exceeded:\n- ${over.join('\n- ')}`);
+    process.exit(1);
+  }
+  console.error('\nPayload budgets: all within limits.');
 }
 
 main().catch(err => {

@@ -302,7 +302,7 @@ CLICK_URL='data:text/html,%3Cbutton%20style%3D%22position%3Aabsolute%3Bleft%3A0%
 CHROMUX_PROFILE=$PROFILE node "$CT" open tab-click "$CLICK_URL" 2>/dev/null > /dev/null
 XY_CLICK=$(CHROMUX_PROFILE=$PROFILE node "$CT" click tab-click --xy 40 40 2>/dev/null)
 check "click --xy reports success" '"xy"' "$XY_CLICK"
-check "click response suggests snapshot --diff" "snapshot tab-click --diff" "$XY_CLICK"
+check "click response verifies by default" '"changed"' "$XY_CLICK"
 CLICK_TITLE=$(CHROMUX_PROFILE=$PROFILE node "$CT" eval tab-click "document.title" 2>/dev/null)
 check "click --xy changed page state" "clicked" "$CLICK_TITLE"
 if CHROMUX_PROFILE=$PROFILE node "$CT" click tab-click --xy 999999 999999 >/tmp/chromux-xy-out-$$.txt 2>&1; then
@@ -328,7 +328,7 @@ TYPE_STATE=$(CHROMUX_PROFILE=$PROFILE node "$CT" eval tab-input "document.getEle
 check "click then type updates focused input" "Browser Test" "$TYPE_STATE"
 CHROMUX_PROFILE=$PROFILE node "$CT" eval tab-input "window.inputCount=0;window.changeCount=0" 2>/dev/null > /dev/null
 FILL_RESPONSE=$(CHROMUX_PROFILE=$PROFILE node "$CT" fill tab-input @1 "Filled Value" 2>/dev/null)
-check "fill response suggests snapshot --diff" "snapshot tab-input --diff" "$FILL_RESPONSE"
+check "fill response verifies by default" '"changed"' "$FILL_RESPONSE"
 FILL_STATE=$(CHROMUX_PROFILE=$PROFILE node "$CT" eval tab-input "JSON.stringify({value:document.getElementById('name').value,input:window.inputCount,change:window.changeCount})" 2>/dev/null)
 check "fill sets input value" "Filled Value" "$FILL_STATE"
 FILL_CHANGE_OK=$(CHROMUX_PROFILE=$PROFILE node "$CT" eval tab-input "window.changeCount > 0" 2>/dev/null)
@@ -350,6 +350,28 @@ else
 fi
 CHROMUX_PROFILE=$PROFILE node "$CT" close tab-password 2>/dev/null > /dev/null
 
+# Sensitive non-password inputs (card numbers, OTPs) are usually type=text|tel;
+# mask them by autocomplete/name/id heuristics.
+# No aria-labels here on purpose: label-less inputs are the ones whose typed
+# value would otherwise appear in the snapshot.
+SENSITIVE_HTML='<input name="card_number" autocomplete="cc-number" placeholder="Card number"><input id="otp" type="tel" autocomplete="one-time-code" placeholder="Verification code"><input id="city" placeholder="City">'
+SENSITIVE_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$SENSITIVE_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-sensitive "$SENSITIVE_URL" 2>/dev/null > /dev/null
+CHROMUX_PROFILE=$PROFILE node "$CT" fill tab-sensitive "[name=card_number]" "4111111111111111" 2>/dev/null > /dev/null
+CHROMUX_PROFILE=$PROFILE node "$CT" fill tab-sensitive "#otp" "834920" 2>/dev/null > /dev/null
+CHROMUX_PROFILE=$PROFILE node "$CT" fill tab-sensitive "#city" "Seoul" 2>/dev/null > /dev/null
+SENSITIVE_SNAP=$(CHROMUX_PROFILE=$PROFILE node "$CT" snapshot tab-sensitive 2>/dev/null)
+check "sensitive inputs keep their labels" "Card number" "$SENSITIVE_SNAP"
+check "plain inputs still show typed values" "Seoul" "$SENSITIVE_SNAP"
+if echo "$SENSITIVE_SNAP" | grep -qE "4111111111111111|834920"; then
+  echo "  ✗ snapshot leaked a card number or OTP value"
+  FAIL=$((FAIL+1))
+else
+  echo "  ✓ snapshot masks card number and OTP values"
+  PASS=$((PASS+1))
+fi
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-sensitive 2>/dev/null > /dev/null
+
 # --- Test 5c.1b: snapshot --interactive filter ---
 echo ""
 echo "--- Test 5c.1b: snapshot --interactive filter ---"
@@ -367,6 +389,372 @@ else
   echo "  ✓ interactive snapshot drops non-interactive nodes"
   PASS=$((PASS+1))
 fi
+
+# --- Test 5c.1c: fill on native select, snapshot --grep, run --arg ---
+echo ""
+echo "--- Test 5c.1c: select fill, snapshot --grep, run --arg ---"
+SELECT_HTML='<title>SelectPage</title><form><input id="email" aria-label="Email"><select id="country" aria-label="Country"><option value="KR">South Korea</option><option value="US">United States</option></select><button id="go" type="button" aria-label="Go">Go</button></form><p id="out">status (pending)</p><script>window.changeCount=0;document.getElementById("country").addEventListener("change",()=>{window.changeCount+=1});</script>'
+SELECT_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$SELECT_HTML")"
+SELECT_OPEN=$(CHROMUX_PROFILE=$PROFILE node "$CT" open tab-select "$SELECT_URL" 2>/dev/null)
+check "open inlines small-page interactive elements" '"elements"' "$SELECT_OPEN"
+check "open inline elements carry refs" '@1' "$SELECT_OPEN"
+CHROMUX_PROFILE=$PROFILE node "$CT" fill tab-select "#country" "US" 2>/dev/null > /dev/null
+SELECT_STATE=$(CHROMUX_PROFILE=$PROFILE node "$CT" eval tab-select "JSON.stringify({value:document.getElementById('country').value,changes:window.changeCount})" 2>/dev/null)
+check "fill selects option by value" '"value":"US"' "$SELECT_STATE"
+check "fill on select dispatches change" '"changes":1' "$SELECT_STATE"
+CHROMUX_PROFILE=$PROFILE node "$CT" fill tab-select "#country" "South Korea" 2>/dev/null > /dev/null
+SELECT_LABEL=$(CHROMUX_PROFILE=$PROFILE node "$CT" eval tab-select "document.getElementById('country').value" 2>/dev/null)
+check "fill selects option by label" "KR" "$SELECT_LABEL"
+if CHROMUX_PROFILE=$PROFILE node "$CT" fill tab-select "#country" "Mars" >/tmp/chromux-select-out-$$.txt 2>&1; then
+  echo "  ✗ fill with unknown option unexpectedly succeeded"
+  FAIL=$((FAIL+1))
+else
+  SELECT_ERR=$(cat /tmp/chromux-select-out-$$.txt)
+  check "fill with unknown option lists choices" "No option matching" "$SELECT_ERR"
+fi
+rm -f /tmp/chromux-select-out-$$.txt
+GREP_OUT=$(CHROMUX_PROFILE=$PROFILE node "$CT" snapshot tab-select --grep "country" 2>/dev/null)
+check "snapshot --grep keeps matching line" "Country" "$GREP_OUT"
+check "snapshot --grep keeps ancestor context" "form" "$GREP_OUT"
+check "snapshot --grep reports match count" "lines matched" "$GREP_OUT"
+if echo "$GREP_OUT" | grep -q '"Email"'; then
+  echo "  ✗ snapshot --grep leaked non-matching line"
+  FAIL=$((FAIL+1))
+else
+  echo "  ✓ snapshot --grep drops non-matching lines"
+  PASS=$((PASS+1))
+fi
+GREP_NONE=$(CHROMUX_PROFILE=$PROFILE node "$CT" snapshot tab-select --grep "zzz-not-there" 2>/dev/null)
+check "snapshot --grep reports zero matches" "0 of" "$GREP_NONE"
+GREP_LIT=$(CHROMUX_PROFILE=$PROFILE node "$CT" snapshot tab-select --grep "status (pending)" 2>/dev/null)
+check "snapshot --grep retries valid regex literally" "matched literally" "$GREP_LIT"
+check "snapshot --grep literal retry finds the line" "status (pending)" "$GREP_LIT"
+
+# Silent-wrong guard: a valid regex that matches SOME lines while the literal
+# reading matches MORE must say so instead of masquerading as the answer.
+GREPNOTE_HTML='<title>GrepNotePage</title><p>price (USD) 10</p><p>price (USD) 20</p><p>price USD 30</p>'
+GREPNOTE_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$GREPNOTE_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-grepnote "$GREPNOTE_URL" 2>/dev/null > /dev/null
+GREPNOTE_OUT=$(CHROMUX_PROFILE=$PROFILE node "$CT" snapshot tab-grepnote --grep "price (USD)" 2>/dev/null)
+check "grep warns when the literal reading matches lines the regex missed" "read as literal text this pattern also matches 2 lines NOT shown here" "$GREPNOTE_OUT"
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-grepnote 2>/dev/null > /dev/null
+RUN_ARGS_OUT=$(CHROMUX_PROFILE=$PROFILE node "$CT" run tab-select 'return { s: args.label, n: args.count, o: args.fields }' --arg label=hello --arg count=7 --arg fields='{"#email":"a@b.c"}' 2>/dev/null)
+check "run --arg passes string value" '"s": "hello"' "$RUN_ARGS_OUT"
+check "run --arg parses JSON number" '"n": 7' "$RUN_ARGS_OUT"
+check "run --arg parses JSON object" '"#email": "a@b.c"' "$RUN_ARGS_OUT"
+FORM_FLOW_OUT=$(CHROMUX_PROFILE=$PROFILE node "$CT" run tab-select --file "$(dirname "$0")/snippets/_builtin/form-flow.js" --arg fields='{"#email":"agent@example.com","#country":"US"}' --arg submit='#go' 2>/dev/null)
+check "form-flow fills multiple fields" '"submitted": true' "$FORM_FLOW_OUT"
+check "form-flow handles native select" '"value": "US"' "$FORM_FLOW_OUT"
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-select 2>/dev/null > /dev/null
+
+# --- Test 5c.1d: clickable detection, state suffixes, --verify ---
+echo ""
+echo "--- Test 5c.1d: clickable detection, state suffixes, --verify ---"
+CLICKABLE_HTML='<title>DivApp</title><style>.row{cursor:pointer}</style><div class="row" id="r1">Open item one</div><div class="row" id="r2">Open item two</div><p id="log">idle</p><script>document.querySelectorAll(".row").forEach(function(r){r.addEventListener("click",function(){document.getElementById("log").textContent="opened "+r.id})})</script>'
+CLICKABLE_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$CLICKABLE_HTML")"
+CLICKABLE_OPEN=$(CHROMUX_PROFILE=$PROFILE node "$CT" open tab-ckd "$CLICKABLE_URL" 2>/dev/null)
+check "low-signal page inlines clickable divs on open" 'clickable \\"Open item one\\"' "$CLICKABLE_OPEN"
+CLICKABLE_SNAP=$(CHROMUX_PROFILE=$PROFILE node "$CT" snapshot tab-ckd 2>/dev/null)
+check "auto clickable detection assigns refs" '@1 clickable "Open item one"' "$CLICKABLE_SNAP"
+VERIFY_OUT=$(CHROMUX_PROFILE=$PROFILE node "$CT" click tab-ckd @1 --verify 2>/dev/null)
+check "click --verify returns changed diff" '"changed"' "$VERIFY_OUT"
+check "click --verify diff shows the effect" "opened r1" "$VERIFY_OUT"
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-ckd 2>/dev/null > /dev/null
+
+STATE_HTML='<title>StatePage</title><input type="checkbox" id="cb" aria-label="Agree" checked><select id="sel" aria-label="Plan"><option value="a">Basic</option><option value="b" selected>Pro</option></select><button id="btn" disabled>Go</button><a href="/x">x</a><a href="/y">y</a><a href="/z">z</a>'
+STATE_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$STATE_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-state "$STATE_URL" 2>/dev/null > /dev/null
+STATE_SNAP=$(CHROMUX_PROFILE=$PROFILE node "$CT" snapshot tab-state 2>/dev/null)
+check "snapshot shows checkbox checked state" "[checkbox checked]" "$STATE_SNAP"
+check "snapshot shows selected option value" '= "Pro"' "$STATE_SNAP"
+check "snapshot shows disabled state" "(disabled)" "$STATE_SNAP"
+if echo "$STATE_SNAP" | grep -q "clickable"; then
+  echo "  ✗ clickable detection fired on a standard-element page"
+  FAIL=$((FAIL+1))
+else
+  echo "  ✓ clickable detection stays off on standard pages"
+  PASS=$((PASS+1))
+fi
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-state 2>/dev/null > /dev/null
+
+# --- Test 5c.1e: slow-UI verify backoff + form-flow unfillable field ---
+echo ""
+echo "--- Test 5c.1e: Slow-UI verify backoff and unfillable-field error ---"
+# The first verify of a session only primes the baseline, so each scenario
+# clicks a primer button once before the click under test.
+SLOW_HTML='<title>SlowPage</title><button id="prime">Prime</button><button id="go">Save</button><p id="out">idle</p><a href="/a">a</a><a href="/b">b</a><a href="/c">c</a><script>document.getElementById("go").addEventListener("click",function(){setTimeout(function(){document.getElementById("out").textContent="saved after wait"},1600)})</script>'
+SLOW_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$SLOW_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-slow "$SLOW_URL" 2>/dev/null > /dev/null
+CHROMUX_PROFILE=$PROFILE node "$CT" click tab-slow "#prime" 2>/dev/null > /dev/null
+SLOW_VERIFY=$(CHROMUX_PROFILE=$PROFILE node "$CT" click tab-slow "#go" 2>/dev/null)
+check "verify backoff catches slow async update" "saved after wait" "$SLOW_VERIFY"
+STATIC_HTML='<title>StaticPage</title><button id="noop">Noop</button><a href="/a">a</a><a href="/b">b</a><a href="/c">c</a>'
+STATIC_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$STATIC_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-noop "$STATIC_URL" 2>/dev/null > /dev/null
+CHROMUX_PROFILE=$PROFILE node "$CT" click tab-noop "#noop" 2>/dev/null > /dev/null
+NOOP_VERIFY=$(CHROMUX_PROFILE=$PROFILE node "$CT" click tab-noop "#noop" 2>/dev/null)
+check "no-change verify is time-qualified, not definitive" "may still be updating" "$NOOP_VERIFY"
+check "no-change verify warns before retrying" "BEFORE retrying" "$NOOP_VERIFY"
+RICH_HTML='<title>RichPage</title><div id="rich" contenteditable="true" aria-label="Editor">edit me</div><button id="s" type="button">Send</button>'
+RICH_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$RICH_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-rich "$RICH_URL" 2>/dev/null > /dev/null
+if CHROMUX_PROFILE=$PROFILE node "$CT" run tab-rich --file "$(dirname "$0")/snippets/_builtin/form-flow.js" --arg fields='{"#rich":"hello"}' --arg submit='#s' >/tmp/chromux-rich-out-$$.txt 2>&1; then
+  echo "  ✗ form-flow silently accepted an unfillable contenteditable field"
+  FAIL=$((FAIL+1))
+else
+  RICH_ERR=$(cat /tmp/chromux-rich-out-$$.txt)
+  check "form-flow fails loudly on unfillable field" "not fillable via value" "$RICH_ERR"
+fi
+rm -f /tmp/chromux-rich-out-$$.txt
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-slow 2>/dev/null > /dev/null
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-noop 2>/dev/null > /dev/null
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-rich 2>/dev/null > /dev/null
+
+# --- Test 5c.1f: ratio clickable gate and banded occlusion probe ---
+echo ""
+echo "--- Test 5c.1f: Ratio clickable gate and banded occlusion probe ---"
+# Mixed page: plenty of standard links (old absolute gate would stay off) plus
+# dense cursor-pointer tiles — the ratio gate must fire, and a clickable
+# wrapper around a standard link must be deduplicated.
+MIXED_HTML='<title>MixedApp</title><style>.tile{cursor:pointer;height:30px}</style><nav><a href="/1">n1</a> <a href="/2">n2</a> <a href="/3">n3</a> <a href="/4">n4</a> <a href="/5">n5</a> <a href="/6">n6</a> <a href="/7">n7</a> <a href="/8">n8</a> <a href="/9">n9</a> <a href="/10">n10</a> <a href="/11">n11</a> <a href="/12">n12</a></nav><div class="tile" id="t1">Tile one</div><div class="tile" id="t2">Tile two</div><div class="tile" id="t3">Tile three</div><div class="tile" id="t4">Tile four</div><div class="tile" id="t5">Tile five</div><div class="tile" id="t6">Tile six</div><div class="tile" id="t7">Tile seven</div><div class="tile" id="t8">Tile eight</div><div class="tile" id="wrap" style="height:16px"><a href="/inner" style="display:block;height:16px">Inner link</a></div><div class="tile" id="card" style="height:80px">Card nine <button style="width:20px;height:20px" aria-label="Fav"></button></div><p id="log">idle</p>'
+MIXED_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$MIXED_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-mixed "$MIXED_URL" 2>/dev/null > /dev/null
+MIXED_SNAP=$(CHROMUX_PROFILE=$PROFILE node "$CT" snapshot tab-mixed 2>/dev/null)
+check "ratio gate fires on standard-nav + div-control page" 'clickable "Tile one"' "$MIXED_SNAP"
+if echo "$MIXED_SNAP" | grep -q 'clickable "Inner link"'; then
+  echo "  ✗ clickable wrapper duplicating a same-size link was not deduplicated"
+  FAIL=$((FAIL+1))
+else
+  echo "  ✓ clickable wrapper duplicating a same-size link deduplicated"
+  PASS=$((PASS+1))
+fi
+check "card with a small inner button keeps its clickable ref" 'clickable "Card nine' "$MIXED_SNAP"
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-mixed 2>/dev/null > /dev/null
+
+# Verify baselines must be scroll-invariant: an action that only scrolls a
+# clickable-dense page must not produce a "large update" fake diff.
+SCROLL_TILES=$(node -e 'let h="";for(let i=1;i<=100;i++)h+=`<div class=\"tile\" id=\"s${i}\">Scroll tile ${i}</div>`;process.stdout.write(h)')
+SCROLL_HTML='<title>ScrollApp</title><style>.tile{cursor:pointer;height:40px}</style><button id="noop">Noop</button><button id="jump">Jump</button>'"$SCROLL_TILES"'<script>document.getElementById("jump").addEventListener("click",()=>window.scrollTo(0,2400));document.querySelectorAll(".tile").forEach(t=>t.addEventListener("click",()=>{}));</script>'
+SCROLL_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$SCROLL_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-scrollv "$SCROLL_URL" 2>/dev/null > /dev/null
+CHROMUX_PROFILE=$PROFILE node "$CT" click tab-scrollv "#noop" 2>/dev/null > /dev/null
+SCROLL_VERIFY=$(CHROMUX_PROFILE=$PROFILE node "$CT" click tab-scrollv "#jump" 2>/dev/null)
+if echo "$SCROLL_VERIFY" | grep -q "large update"; then
+  echo "  ✗ scroll-only action produced a large fake verify diff"
+  FAIL=$((FAIL+1))
+else
+  echo "  ✓ scroll-only action does not fake a large verify diff"
+  PASS=$((PASS+1))
+fi
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-scrollv 2>/dev/null > /dev/null
+
+# Occlusion: a dialog that spares the header but covers the middle and bottom
+# of the viewport must be flagged; a bottom-fixed consent bar must not be.
+OCCLUDE_LINKS='<div style="position:fixed;top:1vh;left:0"><a href="/h1">h1</a> <a href="/h2">h2</a> <a href="/h3">h3</a> <a href="/h4">h4</a> <a href="/h5">h5</a> <a href="/h6">h6</a> <a href="/h7">h7</a> <a href="/h8">h8</a> <a href="/h9">h9</a> <a href="/h10">h10</a></div><a style="position:fixed;top:40vh;left:2vw" href="/m1">m1</a><a style="position:fixed;top:45vh;left:2vw" href="/m2">m2</a><a style="position:fixed;top:50vh;left:2vw" href="/m3">m3</a><a style="position:fixed;top:55vh;left:2vw" href="/m4">m4</a><a style="position:fixed;top:78vh;left:2vw" href="/b1">b1</a><a style="position:fixed;top:88vh;left:2vw" href="/b2">b2</a>'
+MODAL_HTML="<title>OccludePage</title>$OCCLUDE_LINKS"'<div id="modal" style="position:fixed;top:15vh;left:0;right:0;height:75vh;background:#fff;border:1px solid #000;z-index:9"><p>Subscribe to continue reading</p><button id="close">Close</button></div>'
+MODAL_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$MODAL_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-modal "$MODAL_URL" 2>/dev/null > /dev/null
+MODAL_SNAP=$(CHROMUX_PROFILE=$PROFILE node "$CT" snapshot tab-modal 2>/dev/null)
+check "header-sparing modal flagged as overlay" "overlay (covers page" "$MODAL_SNAP"
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-modal 2>/dev/null > /dev/null
+BAR_HTML="<title>ConsentBarPage</title>$OCCLUDE_LINKS"'<div id="bar" style="position:fixed;bottom:0;left:0;right:0;height:10vh;background:#333;color:#fff;z-index:9">We use cookies <button id="ok">OK</button></div>'
+BAR_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$BAR_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-bar "$BAR_URL" 2>/dev/null > /dev/null
+BAR_SNAP=$(CHROMUX_PROFILE=$PROFILE node "$CT" snapshot tab-bar 2>/dev/null)
+if echo "$BAR_SNAP" | grep -q "overlay (covers page"; then
+  echo "  ✗ bottom consent bar was wrongly flagged as a page-wide overlay"
+  FAIL=$((FAIL+1))
+else
+  echo "  ✓ bottom consent bar not flagged as overlay"
+  PASS=$((PASS+1))
+fi
+check "consent bar button still listed" 'button "OK"' "$BAR_SNAP"
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-bar 2>/dev/null > /dev/null
+
+# Single-band pages (all controls in the header) must not promote a small
+# ribbon covering them to a page-wide overlay directive.
+RIBBON_HTML='<title>RibbonPage</title><div style="position:fixed;top:2vh;left:0"><a href="/h1">h1</a> <a href="/h2">h2</a> <a href="/h3">h3</a> <a href="/h4">h4</a> <a href="/h5">h5</a> <a href="/h6">h6</a> <a href="/h7">h7</a> <a href="/h8">h8</a> <a href="/h9">h9</a> <a href="/h10">h10</a></div><div id="ribbon" style="position:fixed;top:0;left:0;right:0;height:6vh;background:gold;z-index:9">Promo ribbon</div>'
+RIBBON_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$RIBBON_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-ribbon "$RIBBON_URL" 2>/dev/null > /dev/null
+RIBBON_SNAP=$(CHROMUX_PROFILE=$PROFILE node "$CT" snapshot tab-ribbon 2>/dev/null)
+if echo "$RIBBON_SNAP" | grep -q "overlay (covers page"; then
+  echo "  ✗ small ribbon on a single-band page was promoted to page-wide overlay"
+  FAIL=$((FAIL+1))
+else
+  echo "  ✓ small ribbon on a single-band page not promoted to overlay"
+  PASS=$((PASS+1))
+fi
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-ribbon 2>/dev/null > /dev/null
+
+# --- Test 5c.1g: iframe/shadow reach, dialogs, popups, upload/download, waits ---
+echo ""
+echo "--- Test 5c.1g: iframe/shadow reach, dialogs, popups, upload/download, waits ---"
+IFRAME_HTML='<title>FramePage</title><p>Host page</p><iframe title="Embedded form" srcdoc="<input id=&quot;fi&quot; aria-label=&quot;Frame input&quot;><button id=&quot;fb&quot; onclick=&quot;fs.textContent=42&quot;>Frame Go</button><p id=&quot;fs&quot;>idle</p>"></iframe>'
+IFRAME_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$IFRAME_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-frame "$IFRAME_URL" 2>/dev/null > /dev/null
+FRAME_SNAP=$(CHROMUX_PROFILE=$PROFILE node "$CT" snapshot tab-frame 2>/dev/null)
+check "snapshot pierces same-origin iframe" "Frame input" "$FRAME_SNAP"
+CHROMUX_PROFILE=$PROFILE node "$CT" fill tab-frame "#fi" "frame text" 2>/dev/null > /dev/null
+FRAME_VALUE=$(CHROMUX_PROFILE=$PROFILE node "$CT" run tab-frame "return await js('document.querySelector(\"iframe\").contentDocument.getElementById(\"fi\").value')" 2>/dev/null)
+check "fill reaches into iframe" "frame text" "$FRAME_VALUE"
+FRAME_CLICK=$(CHROMUX_PROFILE=$PROFILE node "$CT" click tab-frame "#fb" 2>/dev/null)
+check "click reaches into iframe" "42" "$FRAME_CLICK"
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-frame 2>/dev/null > /dev/null
+
+SHADOW_HTML='<title>ShadowPage</title><div id="host"></div><p id="out">idle</p><script>const r=document.getElementById("host").attachShadow({mode:"open"});r.innerHTML="<button id=\"sbtn\">Shadow button</button>";r.getElementById("sbtn").addEventListener("click",()=>{document.getElementById("out").textContent="shadow clicked"});</script>'
+SHADOW_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$SHADOW_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-shadow "$SHADOW_URL" 2>/dev/null > /dev/null
+SHADOW_SNAP=$(CHROMUX_PROFILE=$PROFILE node "$CT" snapshot tab-shadow 2>/dev/null)
+check "snapshot pierces open shadow DOM" "Shadow button" "$SHADOW_SNAP"
+SHADOW_REF=$(echo "$SHADOW_SNAP" | grep "Shadow button" | grep -o '@[0-9]*' | head -1)
+SHADOW_CLICK=$(CHROMUX_PROFILE=$PROFILE node "$CT" click tab-shadow "$SHADOW_REF" 2>/dev/null)
+check "click reaches into shadow DOM" "shadow clicked" "$SHADOW_CLICK"
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-shadow 2>/dev/null > /dev/null
+
+DIALOG_HTML='<title>DialogPage</title><button id="warn">Warn</button><p id="r">idle</p><a href="/x">x</a><a href="/y">y</a><a href="/z">z</a><script>document.getElementById("warn").addEventListener("click",()=>{const ok=confirm("Really do it?");document.getElementById("r").textContent=ok?"confirmed":"declined"});</script>'
+DIALOG_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$DIALOG_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-dialog "$DIALOG_URL" 2>/dev/null > /dev/null
+DIALOG_CLICK=$(CHROMUX_PROFILE=$PROFILE node "$CT" click tab-dialog "#warn" 2>/dev/null)
+check "JS dialog auto-handled with note" "dialog auto-dismissed" "$DIALOG_CLICK"
+check "dialog message surfaced" "Really do it?" "$DIALOG_CLICK"
+DIALOG_ALIVE=$(CHROMUX_PROFILE=$PROFILE node "$CT" run tab-dialog "return await js('1+1')" 2>/dev/null)
+check "session alive after dialog" "2" "$DIALOG_ALIVE"
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-dialog 2>/dev/null > /dev/null
+
+POPUP_HTML='<title>PopupPage</title><a id="ext" href="https://example.com" target="_blank">Open externally</a><a href="/y">y</a><a href="/z">z</a>'
+POPUP_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$POPUP_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-popup "$POPUP_URL" 2>/dev/null > /dev/null
+POPUP_CLICK=$(CHROMUX_PROFILE=$PROFILE node "$CT" click tab-popup "#ext" 2>/dev/null)
+check "popup click adopts new session" "newSession" "$POPUP_CLICK"
+check "adopted session is named" "tab-popup-popup" "$POPUP_CLICK"
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-popup-popup 2>/dev/null > /dev/null
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-popup 2>/dev/null > /dev/null
+
+UPLOAD_FILE="/tmp/chromux-upload-$$.txt"
+printf 'hello upload' > "$UPLOAD_FILE"
+UPLOAD_HTML='<title>UploadPage</title><input type="file" id="up" aria-label="Attachment"><p id="uname">none</p><a href="/x">x</a><a href="/y">y</a><a href="/z">z</a><script>document.getElementById("up").addEventListener("change",(e)=>{document.getElementById("uname").textContent="got "+e.target.files[0].name});</script>'
+UPLOAD_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$UPLOAD_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-upload "$UPLOAD_URL" 2>/dev/null > /dev/null
+UPLOAD_OUT=$(CHROMUX_PROFILE=$PROFILE node "$CT" fill tab-upload "#up" --file "$UPLOAD_FILE" 2>/dev/null)
+check "fill --file uploads into file input" "got chromux-upload-$$.txt" "$UPLOAD_OUT"
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-upload 2>/dev/null > /dev/null
+rm -f "$UPLOAD_FILE"
+
+DOWNLOAD_HTML='<title>DownloadPage</title><a id="dl" href="data:text/plain;charset=utf-8,download-payload" download="chromux-report.txt">Download report</a><a href="/y">y</a><a href="/z">z</a>'
+DOWNLOAD_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$DOWNLOAD_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-download "$DOWNLOAD_URL" 2>/dev/null > /dev/null
+DOWNLOAD_OUT=$(CHROMUX_PROFILE=$PROFILE node "$CT" download tab-download "#dl" --to /tmp 2>/dev/null)
+check "download completes with file path" '"downloaded": "chromux-report' "$DOWNLOAD_OUT"
+DOWNLOAD_PATH=$(echo "$DOWNLOAD_OUT" | grep -o '"path": "[^"]*"' | cut -d'"' -f4)
+if [ -n "$DOWNLOAD_PATH" ] && grep -q "download-payload" "$DOWNLOAD_PATH" 2>/dev/null; then
+  echo "  ✓ downloaded file has expected content"
+  PASS=$((PASS+1))
+else
+  echo "  ✗ downloaded file missing or wrong content ($DOWNLOAD_PATH)"
+  FAIL=$((FAIL+1))
+fi
+rm -f "$DOWNLOAD_PATH"
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-download 2>/dev/null > /dev/null
+
+GONE_HTML='<title>GonePage</title><div id="spinner">Loading...</div><a href="/x">x</a><a href="/y">y</a><a href="/z">z</a><script>setTimeout(()=>document.getElementById("spinner").remove(),400);</script>'
+GONE_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$GONE_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-gone "$GONE_URL" 2>/dev/null > /dev/null
+GONE_OUT=$(CHROMUX_PROFILE=$PROFILE node "$CT" wait-for-selector tab-gone "#spinner" 3000 --gone 2>/dev/null)
+check "wait-for-selector --gone resolves after removal" "goneSelector" "$GONE_OUT"
+IDLE_OUT=$(CHROMUX_PROFILE=$PROFILE node "$CT" run tab-gone "return await waitFor(null, { kind: 'network-idle', timeoutMs: 5000, idleMs: 300 })" 2>/dev/null)
+check "run waitFor network-idle resolves on quiet page" '"kind": "network-idle"' "$IDLE_OUT"
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-gone 2>/dev/null > /dev/null
+
+# --- Test 5c.1h: autocomplete --pick, click --text, skill topics, verify priming ---
+echo ""
+echo "--- Test 5c.1h: autocomplete --pick, click --text, skill topics, verify priming ---"
+# The static nav <li> "Seoul Guide" is a trap: it is visible BEFORE typing and
+# substring-matches the pick text, so only appeared-after-typing candidate
+# filtering picks the real suggestion.
+PICK_PAGE_HTML='<title>PickPage</title><nav><ul><li><a href="/guide">Seoul Guide</a></li><li><a href="/deals">Deals</a></li></ul></nav><input id="city" aria-label="City"><ul id="sug" hidden></ul><p id="chosen">none</p><a href="/x">x</a><a href="/y">y</a><a href="/z">z</a><script>const SUG={se:["Seattle (SEA)","Seoul (SEL)"],lo:["London (LHR)"]};const input=document.getElementById("city");input.addEventListener("input",()=>{const list=document.getElementById("sug");const opts=SUG[input.value.toLowerCase()]||[];setTimeout(()=>{list.innerHTML=opts.map(o=>`<li role="option">${o}</li>`).join("");list.hidden=!opts.length;},200);});document.getElementById("sug").addEventListener("click",(e)=>{const li=e.target.closest("li");if(!li)return;input.value=li.textContent;document.getElementById("chosen").textContent="chose "+li.textContent;document.getElementById("sug").hidden=true;});</script>'
+PICK_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$PICK_PAGE_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-pick "$PICK_URL" 2>/dev/null > /dev/null
+PICK_OUT=$(CHROMUX_PROFILE=$PROFILE node "$CT" fill tab-pick "#city" "se" --pick "Seoul (SEL)" 2>/dev/null)
+check "fill --pick chooses the matching suggestion" '"picked": "Seoul (SEL)"' "$PICK_OUT"
+check "fill --pick effect visible in verify diff" "chose Seoul (SEL)" "$PICK_OUT"
+PICK_TRAP=$(CHROMUX_PROFILE=$PROFILE node "$CT" fill tab-pick "#city" "se" --pick "Seoul" 2>/dev/null)
+check "fill --pick ignores pre-existing nav items matching the text" '"picked": "Seoul (SEL)"' "$PICK_TRAP"
+check "fill --pick reports its observed effect" '"pickEffect"' "$PICK_TRAP"
+if CHROMUX_PROFILE=$PROFILE node "$CT" fill tab-pick "#city" "zz" --pick "Nowhere" >/tmp/chromux-pick-miss-$$.txt 2>&1; then
+  echo "  ✗ fill --pick with no matching suggestion unexpectedly succeeded"
+  FAIL=$((FAIL+1))
+else
+  PICK_MISS=$(cat /tmp/chromux-pick-miss-$$.txt)
+  check "fill --pick fails with a hint when nothing appears" "No suggestion matching" "$PICK_MISS"
+fi
+rm -f /tmp/chromux-pick-miss-$$.txt
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-pick 2>/dev/null > /dev/null
+
+# The [onclick] wrapper is a trap: its innerText CONTAINS "Save draft" but is a
+# huge section — substring matches must prefer the tightly-labeled inner control.
+TEXTCLICK_HTML='<title>TextClickPage</title><div onclick="document.title=&quot;wrapper clicked&quot;"><p>A long descriptive section about drafts and saving and much more prose that makes this container label huge and unclickworthy as a unit.</p><button id="sv">Save draft</button></div><button>Delete</button><button>Delete</button><a href="/x">x</a><a href="/y">y</a><script>document.getElementById("sv").addEventListener("click",function(e){e.stopPropagation();document.title=this.textContent.trim()});</script>'
+TEXTCLICK_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$TEXTCLICK_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-textclick "$TEXTCLICK_URL" 2>/dev/null > /dev/null
+TEXT_CLICK=$(CHROMUX_PROFILE=$PROFILE node "$CT" click tab-textclick --text "Save draft" 2>/dev/null)
+check "click --text resolves a unique label" '"text": "Save draft"' "$TEXT_CLICK"
+TEXT_TITLE=$(CHROMUX_PROFILE=$PROFILE node "$CT" eval tab-textclick "document.title" 2>/dev/null)
+check "click --text actually clicked" "Save draft" "$TEXT_TITLE"
+if CHROMUX_PROFILE=$PROFILE node "$CT" click tab-textclick --text "Delete" >/tmp/chromux-text-amb-$$.txt 2>&1; then
+  echo "  ✗ ambiguous click --text unexpectedly succeeded"
+  FAIL=$((FAIL+1))
+else
+  TEXT_AMB=$(cat /tmp/chromux-text-amb-$$.txt)
+  check "ambiguous click --text lists candidates" "matches 2 elements" "$TEXT_AMB"
+fi
+rm -f /tmp/chromux-text-amb-$$.txt
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-textclick 2>/dev/null > /dev/null
+
+# Human handoff loop (skill recovery): waits must survive a paused profile.
+HANDOFF_HTML='<title>HandoffPage</title><div id="pending">Waiting for login...</div><a href="/x">x</a><a href="/y">y</a><a href="/z">z</a><script>setTimeout(()=>{const d=document.createElement("div");d.id="authed";d.textContent="Welcome back";document.body.appendChild(d)},600);</script>'
+HANDOFF_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$HANDOFF_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-handoff "$HANDOFF_URL" 2>/dev/null > /dev/null
+CHROMUX_PROFILE=$PROFILE node "$CT" pause 2>/dev/null > /dev/null
+HANDOFF_WAIT=$(CHROMUX_PROFILE=$PROFILE node "$CT" wait-for-selector tab-handoff "#authed" 5000 2>/dev/null)
+check "wait-for-selector works while profile is paused" "foundSelector" "$HANDOFF_WAIT"
+if CHROMUX_PROFILE=$PROFILE node "$CT" click tab-handoff "#authed" >/tmp/chromux-paused-click-$$.txt 2>&1; then
+  echo "  ✗ click unexpectedly succeeded while paused"
+  FAIL=$((FAIL+1))
+else
+  PAUSED_CLICK=$(cat /tmp/chromux-paused-click-$$.txt)
+  check "actions stay blocked while paused" "paused" "$PAUSED_CLICK"
+fi
+rm -f /tmp/chromux-paused-click-$$.txt
+CHROMUX_PROFILE=$PROFILE node "$CT" resume 2>/dev/null > /dev/null
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-handoff 2>/dev/null > /dev/null
+
+SKILL_LIST=$(node "$CT" skill 2>/dev/null)
+check "skill lists topics" '"forms"' "$SKILL_LIST"
+SKILL_TOPIC=$(node "$CT" skill recovery 2>/dev/null)
+check "skill topic prints human handoff recipe" "open --foreground" "$SKILL_TOPIC"
+if node "$CT" skill nope-topic >/tmp/chromux-skill-miss-$$.txt 2>&1; then
+  echo "  ✗ unknown skill topic unexpectedly succeeded"
+  FAIL=$((FAIL+1))
+else
+  SKILL_MISS=$(cat /tmp/chromux-skill-miss-$$.txt)
+  check "unknown skill topic lists available ones" "recovery" "$SKILL_MISS"
+fi
+rm -f /tmp/chromux-skill-miss-$$.txt
+
+# Verify baseline is primed at open: the FIRST action on a large page must
+# return a real diff, not "first observation of a large page".
+PRIMED_HTML='<title>PrimedPage</title><button id="add">Add</button><script>document.getElementById("add").addEventListener("click",()=>{const p=document.createElement("p");p.textContent="added row";document.body.appendChild(p)});</script>'"$(node -e 'let h="";for(let i=0;i<80;i++)h+=`<p>Filler paragraph ${i} with enough words to make the page large.</p>`;process.stdout.write(h)')"
+PRIMED_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$PRIMED_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-primed "$PRIMED_URL" 2>/dev/null > /dev/null
+PRIMED_OUT=$(CHROMUX_PROFILE=$PROFILE node "$CT" click tab-primed "#add" 2>/dev/null)
+check "first action on a large page gets a real verify diff" "added row" "$PRIMED_OUT"
+if echo "$PRIMED_OUT" | grep -q "first observation of a large page"; then
+  echo "  ✗ verify baseline was not primed at open"
+  FAIL=$((FAIL+1))
+else
+  echo "  ✓ verify baseline primed at open"
+  PASS=$((PASS+1))
+fi
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-primed 2>/dev/null > /dev/null
 
 # --- Test 5c.2: click target validation ---
 echo ""

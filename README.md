@@ -73,14 +73,45 @@ for a model call at every step. Your agent deserves better. chromux hands it
 
 ## How it compares
 
-| | Playwright/Puppeteer | agent-browser `--cdp` | chromux |
+Measured head-to-head (2026-07, one fixed model — `claude-opus-4-8` — doing
+identical browser missions with each CLI, each tool introduced by its own
+official skill; full methodology and tables in
+[docs/benchmark-2026-07.md](docs/benchmark-2026-07.md)):
+
+| | @playwright/cli 0.1.17 | agent-browser 0.31.1 | chromux 0.16.0 |
 |---|---|---|---|
-| Browser | Bundled Chromium | Real Chrome | Real Chrome |
-| Bot detection | Often caught | Avoided | Avoided |
-| Tab isolation | Yes | **No** (sessions share tab) | **Yes** |
-| Parallel agents | Yes | **Broken** | **Yes** |
-| Dependencies | 100s of MB | playwright-core | **None** |
-| Profile management | No | No | **Yes** |
+| Browser | Bundled Chromium | Chrome / Chrome for Testing | **Real Chrome, real profiles** |
+| Agent task success (10 tasks x reps) | 100% | 92% | **100%** |
+| Agent tokens, whole suite | 3.18M | 4.32M | **2.16M** (lowest on all 10 tasks) |
+| Agent wall time, whole suite | 14.4min | 23.0min | **13.0min** (fastest on 7/10 tasks) |
+| Agent cost, whole suite | $5.62 | $7.31 | **$4.68** |
+| Google under bot check | passed, but 72s / 11 turns / 248K tokens | **failed both reps (reCAPTCHA)** | **passed, 22.8s / 4 turns / 74K** |
+| Verify one action on a 200-story page | ~28.4K tokens | ~10.9K tokens | **~37 tokens** (`snapshot --diff`) |
+| Find one item on that page | ~163 tokens (`find`) | ~10.9K (no find command) | **~59 tokens** (`snapshot --grep`) |
+| Warm command latency | slowest (nav p50 883ms) | **fastest (48-95ms)** | 163-218ms |
+| Parallel sessions | yes | yes | yes, plus per-profile daemons + `batch` pools |
+| Dependencies | playwright + Chromium download | Rust binary via npm | **none (one file, Node ≥ 22)** |
+| Logged-in real profiles | no | via `--profile` handoff | **first-class, persistent** |
+
+Honest summary: with a frontier model driving, all three CLIs complete
+neutral tasks reliably. On the v2 run chromux is the cheapest and fastest
+overall — the lowest token total on every task — because its first
+observation rides along with `open` on small pages, one-shot parametrized
+snippets replace multi-turn form choreography, and `--grep`/`--diff` keep
+large-page reads targeted. playwright-cli remains faster on some individual
+external tasks; agent-browser has the best raw command latency but degrades
+hardest under bot detection. On two unmodified [MiniWoB++](https://github.com/Farama-Foundation/miniwob-plusplus)
+tasks (email-inbox, book-flight — third-party ground truth graded by the
+benchmark's own reward code) the first run exposed a real chromux gap:
+label-free clickable-`div` micro-UIs defeated accessibility-tree
+observation and playwright-cli won both tasks. The 0.17.0 perception
+upgrade (behavior-based clickable detection incl. a CDP listener scan,
+occlusion-probe overlay surfacing, actions verifying by default, live state
+in snapshot lines) flipped both in a fresh same-day three-tool run —
+email-inbox 36.4s/178K vs playwright-cli 59.3s/348K — with fixture-page
+payloads held byte-identical by a checked-in budget guard. Full history,
+loop disclosure, and a Sonnet 5 cross-model check are in
+[docs/benchmark-2026-07.md](docs/benchmark-2026-07.md).
 
 Design principles, sharpened against the 2026 agent-browser landscape (see
 `docs/competitive-analysis-2026-07.md` in the repo):
@@ -400,16 +431,34 @@ chromux cdp s Runtime.evaluate '{"expression":"navigator.userAgent","returnByVal
 | `snapshot <session>` | Accessibility tree with `@ref` numbers (refs stay stable within a document) |
 | `snapshot <session> --interactive` | Only interactive elements (smaller payload) |
 | `snapshot <session> --diff` | Only lines added/removed since the previous snapshot of this session |
-| `click <session> @<ref>` | Click element by ref |
+| `snapshot <session> --grep "pattern"` | Only lines matching a case-insensitive regex (literal fallback), plus their ancestor lines for context |
+| `snapshot <session> --clickable` | Force behavior-based clickable detection (`cursor:pointer`/`onclick` divs get `@refs`); auto-enabled on pages with almost no standard interactive elements, or when behaviorally-clickable candidates are dense relative to the standard controls in the viewport (div-heavy SPAs behind a standard nav) |
+| `click <session> @<ref>` | Click element by ref. Actions verify by default: the response's `changed` field carries the post-action diff (`--verify MS` tunes the settle wait, `--no-verify` skips; also on `fill`/`type`/`press`; crawl mode skips automatically). A click that opens a popup/new tab adopts it automatically and reports it as `newSession` |
 | `click <session> "selector"` | Click by CSS selector |
+| `click <session> --text "label"` | Click by visible label when refs went stale after a re-render; ambiguous text fails and lists the candidates |
 | `click <session> --xy X Y` | Click validated viewport coordinates via CDP mouse events |
-| `fill <session> @<ref> "text"` | Fill input field |
+| `fill <session> @<ref> "text"` | Fill input field (a native `<select>` matches an option by value or label and fires `change`) |
+| `fill <session> @<ref> "se" --pick "Seoul"` | Type, wait for the autocomplete popup, and choose the matching suggestion in one call. Only suggestions that appeared after typing count; the response's `picked` is the chosen label and `pickEffect` reports the observed effect (an "unconfirmed" pick needs a follow-up check) |
+| `fill <session> @<ref> --file PATH` | Set a file input for upload via `DOM.setFileInputFiles` (repeat `--file` for multiple files) |
 | `type <session> "text"` | Insert text into the focused field |
 | `press <session> <key>` | Press a supported special key: Enter, Tab, Escape, Backspace, Delete, ArrowUp/Down/Left/Right, Home, End, PageUp, PageDown |
-| `wait-for-text <session> "text" [timeout-ms]` | Wait until page text appears |
-| `wait-for-selector <session> "selector" [timeout-ms]` | Wait until a selector is visible |
+| `download <session> (@ref\|selector\|--url URL) [--to DIR]` | Trigger a download and wait for the completed file; returns the saved path |
+| `wait-for-text <session> "text" [timeout-ms]` | Wait until page text appears (same-origin frame text included) |
+| `wait-for-selector <session> "selector" [timeout-ms]` | Wait until a selector is visible; add `--gone` to wait until it disappears |
 | `screenshot <session> [path]` | Take PNG screenshot |
 | `show <session>` | Open DevTools in browser (inspect live tab, even headless) |
+
+Snapshots, clicks, fills, and waits pierce same-origin iframes and open shadow
+DOM: elements inside them get normal `@refs` and are clicked at their true
+top-viewport coordinates. Cross-origin frames are marked
+`iframe (cross-origin; content not accessible)` in snapshots; closed shadow
+roots stay invisible. Native JS dialogs (`alert`/`confirm`/`prompt`) are
+auto-handled per session policy (`open <s> <url> --dialog accept|dismiss`,
+default dismiss, `beforeunload` always accepted) and reported in the next
+action response's `dialog` field, so a stray alert can no longer brick a
+session. In `run`, `waitFor` additionally supports `{kind: 'gone'}` (element
+disappeared) and `{kind: 'network-idle', idleMs: 500}` (no in-flight page
+requests) for deterministic waits without `sleep()`.
 
 Snapshot `@ref` numbers are stable within a document: re-snapshotting the same
 page keeps existing refs and only assigns new numbers to new elements, so refs
@@ -420,12 +469,29 @@ summary of how many unchanged lines were omitted — after several actions on a
 large page this is a fraction of a full snapshot. The first `--diff` call, or
 one after a navigation, falls back to a full snapshot and says why.
 
+`snapshot --grep "pattern"` answers "where is X on this page" without paying
+for the whole tree: it keeps only the lines matching the pattern plus each
+match's ancestor lines, so the agent still sees which form or section a match
+lives in. On a 200-story feed a targeted grep is typically a few dozen tokens
+instead of ~14K.
+
 `click` brings the tab forward before acting. Ref/selector clicks scroll the
 target into view and fail when the element is hidden, zero-size, stale, outside
 the viewport after scroll, or covered by another element at the click point.
 Coordinate clicks validate that `X,Y` are inside the current viewport. `fill`
 updates input state through the native value setter and dispatches input/change
 events so common frontend frameworks observe the value.
+
+Known reach limits, stated so agents report instead of blind-retrying:
+snapshot value display masks `type=password` inputs plus fields that look
+sensitive by autocomplete/name/id heuristics (`cc-number`, `one-time-code`,
+card/CVC/SSN/PIN patterns); values in other plain text fields appear as-is. Cross-origin iframes and closed shadow roots are not
+reachable (marked in snapshots where detectable). Clickable auto-detection
+evaluates the current viewport — controls far below the fold may need a
+scroll (or `--clickable`) before they get refs. Verify diffs skip the
+per-element CDP listener re-scan: an element revealed by an action whose only
+click affordance is a JS listener (no cursor style, no `onclick`) shows up as
+text without a clickable `@ref` — take a snapshot to get its ref.
 
 ### Watch / Debug
 
@@ -456,15 +522,31 @@ They cover common fast paths:
 - `scroll-until.js`: infinite scroll and result growth loops.
 - `page-extract.js`: structured page metadata extraction without full body text
   or HTML dumps.
-- `form-flow.js`: form fill, submit, and readiness proof.
+- `form-flow.js`: whole-form fill (inputs and native selects), submit, and
+  readiness proof in one call.
+- `table-extract.js`: a table as `{headers, rows}` without dumping HTML.
+- `paginate-collect.js`: collect items across paginated pages with per-page
+  field extraction.
+- `wizard-flow.js`: multi-step wizards with per-step readiness proof.
+- `search-and-pick.js`: type → pick suggestion → submit → report.
 - `network-errors.js`: browser-observable broken resource diagnostics.
 - `page-assert.js`: selector, text, and DOM assertion proof.
 
-Run them with `--file`:
+Deeper task-type guides load on demand so the per-turn skill text stays
+small: `chromux skill` lists topics; `chromux skill forms|extraction|recovery`
+prints the guide (autocomplete `--pick` patterns, pagination and table
+extraction, dialog/popup recovery, and the pause → `open --foreground` →
+wait → resume human login handoff).
+
+Run them with `--file`, passing parameters as repeatable `--arg key=value`
+flags — values that parse as JSON arrive structured, everything else stays a
+string, and run code reads them from the `args` object:
 
 ```bash
-chromux run s --file snippets/_builtin/page-extract.js
-chromux run s --file snippets/_builtin/page-assert.js
+chromux run s --file snippets/_builtin/form-flow.js \
+  --arg fields='{"#email":"a@b.c","#country":"US"}' \
+  --arg submit='#submit' --arg readyText='Order confirmed'
+chromux run s --file snippets/_builtin/page-assert.js --arg selector='#done'
 ```
 
 ### Local Benchmarks
@@ -495,25 +577,44 @@ CHROMUX_HOME="$(mktemp -d /tmp/chromux-tokens-XXXXXX)" \
   node benchmarks/chromux-token-benchmark.mjs --out /tmp/chromux-tokens.json
 ```
 
-Representative run (Chromium 141, deterministic fixtures; the feed page has
+Representative run (real Chrome, deterministic fixtures; the feed page has
 200 stories with ~600 interactive elements):
 
 | command | article page | form page | 200-item feed |
 |---|---|---|---|
-| full page HTML (`run` outerHTML) | ~785 tok | ~118 tok | ~20,387 tok |
-| `snapshot` (full) | ~769 tok | ~63 tok | ~13,410 tok |
-| `snapshot --interactive` | ~36 tok | ~38 tok | ~7,154 tok |
-| `snapshot --diff` after one action | ~37 tok | ~39 tok | **~47 tok** |
-| structured extract (`run` + shaped `page(...)`) | ~27 tok | ~27 tok | ~28 tok |
+| full page HTML (`run` outerHTML) | ~790 tok | ~326 tok | ~22,430 tok |
+| `snapshot` (full) | ~775 tok | ~67 tok | ~14,252 tok |
+| `snapshot --interactive` | ~41 tok | ~38 tok | ~7,153 tok |
+| `snapshot --diff` after one action | ~36 tok | ~39 tok | **~45 tok** |
+| `snapshot --grep` (find one item) | — | — | **~59 tok** |
+| structured extract (`run` + shaped `page(...)`) | ~25 tok | ~27 tok | ~27 tok |
 
 The workflow the skills teach — inspect structure with `--interactive`, verify
 each action with `--diff`, extract with a shaped `page(...)` result (optionally
 enforced by `--schema`) — keeps per-step observation payloads roughly constant
-even on large pages, instead of re-reading the whole tree every step. For
-context, published third-party comparisons report ~114K tokens per task
-through Playwright MCP versus ~27K through its CLI, and page snapshots in the
-hundreds of tokens for ref-based CLIs; run the benchmark on your own pages to
-compare like for like.
+even on large pages, instead of re-reading the whole tree every step.
+
+### Cross-Tool Benchmarks
+
+Two checked-in harnesses compare chromux, vercel-labs/agent-browser, and
+@playwright/cli under identical conditions (results summarized in
+[How it compares](#how-it-compares); full methodology, tables, and fairness
+rules in [docs/benchmark-2026-07.md](docs/benchmark-2026-07.md)):
+
+```bash
+# Agent-in-the-loop: one fixed model does identical browser missions with each
+# CLI; measures wall time, tokens, turns, and machine-graded success.
+# Requires an authenticated `claude` CLI. ~78 Opus sessions (~$18) per full run.
+node benchmarks/agent-compare-benchmark.mjs --out /tmp/agent-compare.json
+node benchmarks/agent-compare-benchmark.mjs --smoke   # cheap harness check
+
+# Deterministic (no LLM): payload bytes + warm latency for equivalent
+# observation commands, plus a parallel-session isolation probe.
+node benchmarks/compare-benchmark.mjs --out /tmp/compare.json
+```
+
+Competitor CLIs are installed at their latest versions into a temp prefix at
+run start; nothing is added to chromux's runtime dependencies.
 
 ## Architecture
 
