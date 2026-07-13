@@ -1993,6 +1993,32 @@ async function enableOopifRouting(s) {
   return state;
 }
 
+async function reconcileOopifRouting(s) {
+  const state = s.oopif;
+  if (!state?.enabled || state.children.size === 0) return;
+  const children = [...state.children.values()];
+  await Promise.all(children.map(async (child) => {
+    await child.ready;
+    if (!state.children.has(child.sessionId)) return;
+    const responds = async () => {
+      try {
+        await s.cdp.send('Runtime.evaluate', { expression: 'true' }, 750, child.sessionId);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    if (await responds()) return;
+    await sleep(50);
+    if (!state.children.has(child.sessionId) || await responds()) return;
+    removeOopifTarget(state, {
+      sessionId: child.sessionId,
+      targetId: child.targetId,
+      crashed: true,
+    });
+  }));
+}
+
 function oopifSummary(s) {
   if (!s.oopif?.enabled) return { enabled: false };
   return {
@@ -3338,6 +3364,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
         sessions.delete(id);
         continue;
       }
+      await reconcileOopifRouting(s);
       if (settings.mode === 'crawl') {
         out[id] = { url: s.url || '', title: s.title || '', ageMs: Date.now() - s.createdAt, idleMs: Date.now() - s.lastUsedAt, navigations: s.navigations || 0 };
         if (s.oopif?.enabled) out[id].oopif = oopifSummary(s);
