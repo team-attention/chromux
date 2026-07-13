@@ -150,8 +150,8 @@ assertContains(checks, 'README OOPIF opt-in', docs.readme, 'Target.setAutoAttach
 assertContains(checks, 'README OOPIF close cleanup', docs.readme, 'CDP transport cleanup with zero attached frames');
 assertContains(checks, 'README opaque redaction', docs.readme, 'never includes child paths');
 assertContains(checks, 'README canvas workflow', docs.readme, 'Canvas and other visual-only surfaces');
-assertContains(checks, 'README OOPIF payload', docs.readme, '`open --oopif` / namespaced snapshot | ~226 / ~152 tok');
-assertContains(checks, 'README OOPIF attach payload', docs.readme, 'measured OOPIF attach overhead over default open | ~137 tok');
+assertContains(checks, 'README OOPIF payload', docs.readme, '`open --oopif` / namespaced snapshot | ~236 / ~161 tok');
+assertContains(checks, 'README OOPIF attach payload', docs.readme, 'measured OOPIF attach overhead over default open | ~147 tok');
 assertContains(checks, 'README full screenshot payload', docs.readme, 'full canvas screenshot metadata | ~245 tok');
 assertContains(checks, 'README crop screenshot payload', docs.readme, 'bounded canvas crop metadata | ~323 tok');
 assertContains(checks, 'README WebGames reach tasks', docs.readme, 'webgames-canvas-target,webgames-drag-drop,webgames-slider');

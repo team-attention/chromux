@@ -602,8 +602,8 @@ The PNG remains a separate visual artifact read by the agent when needed.
 | full canvas screenshot metadata | ~245 tok | 300 tok |
 | bounded canvas crop metadata | ~323 tok | 400 tok |
 | default opaque-frame open / snapshot | ~89 / ~47 tok | 500 / 250 tok |
-| `open --oopif` / namespaced snapshot | ~226 / ~152 tok | 650 / 400 tok |
-| measured OOPIF attach overhead over default open | ~137 tok | 200 tok |
+| `open --oopif` / namespaced snapshot | ~236 / ~161 tok | 650 / 400 tok |
+| measured OOPIF attach overhead over default open | ~147 tok | 200 tok |
 
 The screenshot metadata rows include the action-ready mapping for the returned full or cropped PNG.
 
