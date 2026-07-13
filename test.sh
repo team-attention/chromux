@@ -450,6 +450,8 @@ check "pointer drag reports real CDP mode" '"mode": "pointer"' "$POINTER_DRAG"
 check "pointer drag response reports sorted DOM state" "sorted:pointerDest,pointer" "$POINTER_DRAG"
 POINTER_ORDER=$(CHROMUX_PROFILE=$PROFILE node "$CT" eval tab-actions "Array.from(document.querySelectorAll('#pointerSort > *'), el => el.id).join(',')" 2>/dev/null)
 check "pointer drag changes actual sortable DOM order" "pointerDest,pointer" "$POINTER_ORDER"
+POINTER_RELEASE_PROBE=$(node "$(dirname "$CT")/benchmarks/pointer-drag-release-probe.mjs" 2>&1)
+check "pointer drag releases the mouse after an injected movement failure" "cleanup probe passed" "$POINTER_RELEASE_PROBE"
 HTML5_DRAG=$(CHROMUX_PROFILE=$PROFILE node "$CT" drag tab-actions '#htmlsrc' --to '#htmldest' 2>/dev/null)
 check "draggable source auto-selects native HTML5 mode" '"mode": "html5"' "$HTML5_DRAG"
 check "native HTML5 drag changes fixture state" "html5 dropped" "$HTML5_DRAG"
@@ -476,8 +478,27 @@ else
 fi
 DRAG_SCROLL_EVENTS=$(CHROMUX_PROFILE=$PROFILE node "$CT" eval tab-drag-scroll "window.sourceDown" 2>/dev/null)
 check "rejected offscreen drag dispatches no stale source event" "0" "$DRAG_SCROLL_EVENTS"
+CHROMUX_PROFILE=$PROFILE node "$CT" eval tab-drag-scroll "scrollTo(0,0)" 2>/dev/null > /dev/null
+CHROMUX_PROFILE=$PROFILE node "$CT" screenshot tab-drag-scroll /tmp/chromux-drag-mixed-$$.png 2>/dev/null > /dev/null
+if CHROMUX_PROFILE=$PROFILE node "$CT" drag tab-drag-scroll --xy 70 45 --space image --to '#dest' --drag-mode pointer >/tmp/chromux-drag-mixed-image-$$.txt 2>&1; then
+  echo "  ✗ mixed image-coordinate drag scrolled to a stale selector endpoint"
+  FAIL=$((FAIL+1))
+else
+  check "mixed image-coordinate drag rejects an offscreen selector without scrolling" "current viewport" "$(cat /tmp/chromux-drag-mixed-image-$$.txt)"
+fi
+DRAG_MIXED_SCROLL=$(CHROMUX_PROFILE=$PROFILE node "$CT" eval tab-drag-scroll "window.scrollY" 2>/dev/null)
+check "mixed image-coordinate rejection preserves the captured viewport" "0" "$DRAG_MIXED_SCROLL"
+CHROMUX_PROFILE=$PROFILE node "$CT" eval tab-drag-scroll "scrollTo(0,1200)" 2>/dev/null > /dev/null
+if CHROMUX_PROFILE=$PROFILE node "$CT" drag tab-drag-scroll '#source' --to-xy 70 45 --drag-mode pointer >/tmp/chromux-drag-mixed-css-$$.txt 2>&1; then
+  echo "  ✗ mixed selector-coordinate drag scrolled to a stale source endpoint"
+  FAIL=$((FAIL+1))
+else
+  check "mixed selector-coordinate drag rejects an offscreen selector without scrolling" "current viewport" "$(cat /tmp/chromux-drag-mixed-css-$$.txt)"
+fi
+DRAG_MIXED_EVENTS=$(CHROMUX_PROFILE=$PROFILE node "$CT" eval tab-drag-scroll "window.sourceDown" 2>/dev/null)
+check "mixed endpoint rejections dispatch no pointerdown" "0" "$DRAG_MIXED_EVENTS"
 CHROMUX_PROFILE=$PROFILE node "$CT" close tab-drag-scroll 2>/dev/null > /dev/null
-rm -f /tmp/chromux-drag-scroll-$$.txt
+rm -f /tmp/chromux-drag-scroll-$$.txt /tmp/chromux-drag-mixed-$$.png /tmp/chromux-drag-mixed-image-$$.txt /tmp/chromux-drag-mixed-css-$$.txt
 
 # --- Test 5c.1: text input shortcuts ---
 echo ""
@@ -846,6 +867,7 @@ else
   OOPIF_NAV_REF=$(echo "$OOPIF_SNAP" | grep "Navigate child" | grep -o '@[A-Za-z0-9:]*' | head -1)
   OOPIF_SHADOW_BUTTON_REF=$(echo "$OOPIF_SNAP" | grep "Shadow child button" | grep -o '@[A-Za-z0-9:]*' | head -1)
   OOPIF_SHADOW_INPUT_REF=$(echo "$OOPIF_SNAP" | grep "Shadow child field" | grep -o '@[A-Za-z0-9:]*' | head -1)
+  OOPIF_NESTED_BUTTON_REF=$(echo "$OOPIF_SNAP" | grep "Nested frame button" | grep -o '@[A-Za-z0-9:]*' | head -1)
   OOPIF_NESTED_INPUT_REF=$(echo "$OOPIF_SNAP" | grep "Nested frame field" | grep -o '@[A-Za-z0-9:]*' | head -1)
   OOPIF_SELECT_REF=$(echo "$OOPIF_SNAP" | grep "Frame mode" | grep -o '@[A-Za-z0-9:]*' | head -1)
   OOPIF_WAIT_TEXT=$(CHROMUX_PROFILE=$PROFILE node "$CT" wait-for-text tab-oopif "Opaque child ready" 3000 2>/dev/null)
@@ -879,6 +901,14 @@ else
     sleep 0.1
   done
   check "OOPIF namespaced fill pierces child shadow DOM" "shadow:deep value" "$OOPIF_SHADOW_FILL_GRADE"
+  CHROMUX_PROFILE=$PROFILE node "$CT" click tab-oopif "$OOPIF_NESTED_BUTTON_REF" --no-verify 2>/dev/null > /dev/null
+  OOPIF_NESTED_CLICK_GRADE=""
+  for _ in $(seq 1 20); do
+    OOPIF_NESTED_CLICK_GRADE=$(node -e 'fetch(process.argv[1]).then(r=>r.text()).then(console.log)' "$REACH_GRADE" 2>/dev/null || true)
+    if echo "$OOPIF_NESTED_CLICK_GRADE" | grep -q "nested-clicked"; then break; fi
+    sleep 0.1
+  done
+  check "OOPIF namespaced click pierces a child same-origin iframe" "nested-clicked" "$OOPIF_NESTED_CLICK_GRADE"
   CHROMUX_PROFILE=$PROFILE node "$CT" fill tab-oopif "$OOPIF_NESTED_INPUT_REF" "nested value" --no-verify 2>/dev/null > /dev/null
   OOPIF_NESTED_FILL_GRADE=""
   for _ in $(seq 1 20); do
@@ -1678,12 +1708,12 @@ WEBGAMES_POLICY=$(node --input-type=module -e '
     help: webgamesCommandAllowed("help"),
     screenshot: webgamesCommandAllowed("screenshot"),
     eval: webgamesCommandAllowed("eval"),
-    exact: webgamesPasswordMatches("canvas-catch-easy", "EasyCircleMaster2024"),
-    fake: webgamesPasswordMatches("canvas-catch-easy", "anything"),
+    wrong: webgamesPasswordMatches("canvas-catch-easy", "anything"),
+    unknown: webgamesPasswordMatches("not-a-pinned-task", "anything"),
   }));')
 check "WebGames policy allows CLI help and visual screenshot commands" '"help":true,"screenshot":true' "$WEBGAMES_POLICY"
 check "WebGames policy blocks runtime eval commands" '"eval":false' "$WEBGAMES_POLICY"
-check "WebGames machine grade requires the exact pinned password" '"exact":true,"fake":false' "$WEBGAMES_POLICY"
+check "WebGames machine grade rejects wrong and unpinned passwords" '"wrong":false,"unknown":false' "$WEBGAMES_POLICY"
 DOC_CHECK=$(node benchmarks/chromux-doc-check.mjs 2>/dev/null)
 check "doc check passed" '"ok": true' "$DOC_CHECK"
 TOKEN_BENCH_OUT="/tmp/chromux-token-suite-$$.json"

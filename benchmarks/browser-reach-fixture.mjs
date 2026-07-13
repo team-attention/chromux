@@ -116,9 +116,13 @@ const server = http.createServer((req, res) => {
   if (url.pathname === '/frame-nested') {
     return html(res, `<!doctype html>
 <meta charset="utf-8">
-<style>html,body{margin:0}input{box-sizing:border-box;width:100%;height:46px}</style>
+<style>html,body{margin:0}button,input{box-sizing:border-box;width:100%;height:23px}</style>
+<button id="nested-button" type="button">Nested frame button</button>
 <input id="nested-input" aria-label="Nested frame field">
-<script>document.getElementById('nested-input').addEventListener('input', event => fetch('/grade', { method:'POST', body:'nested:' + event.target.value }).catch(() => {}));</script>`);
+<script>
+document.getElementById('nested-button').addEventListener('click', () => fetch('/grade', { method:'POST', body:'nested-clicked' }).catch(() => {}));
+document.getElementById('nested-input').addEventListener('input', event => fetch('/grade', { method:'POST', body:'nested:' + event.target.value }).catch(() => {}));
+</script>`);
   }
   if (url.pathname === '/grade' && req.method === 'POST') {
     let body = '';

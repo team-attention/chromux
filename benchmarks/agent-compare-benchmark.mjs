@@ -545,19 +545,38 @@ async function runAgentSession({ tool, task, rep, model, maxTurns, timeoutMs, sh
   Object.assign(env, tool.env(), { PATH: `${shimDir}:${process.env.PATH}` });
   if (task.kind === 'webgames') env.CHROMUX_BENCH_VISUAL_ONLY = '1';
 
+  const webgamesToolPolicy = task.kind === 'webgames' ? {
+    availableTools: ['Bash', 'Read'],
+    allowedTools: ['Bash(chromux *)', 'Read(/tmp/chromux-*.png)'],
+    permissionMode: 'dontAsk',
+    safeMode: true,
+    sessionPersistence: false,
+  } : null;
   const args = [
     '-p', prompt,
     '--model', model,
     '--output-format', 'json',
+  ];
+  if (webgamesToolPolicy) {
+    args.push(
+      '--tools', webgamesToolPolicy.availableTools.join(','),
+      '--allowedTools', ...webgamesToolPolicy.allowedTools,
+      '--permission-mode', webgamesToolPolicy.permissionMode,
+      '--safe-mode',
+      '--no-session-persistence',
+    );
+  } else {
     // Headless permission model: only Bash is pre-approved; every other tool
     // (WebFetch, WebSearch, MCP, ...) is denied by default in -p mode.
-    '--allowedTools', task.kind === 'webgames' ? 'Bash,Read' : 'Bash',
+    args.push('--allowedTools', 'Bash');
+  }
+  args.push(
     '--max-turns', String(maxTurns),
     '--setting-sources', '',
     '--strict-mcp-config',
     '--disallowedTools', 'WebFetch', 'WebSearch', 'Task',
     '--append-system-prompt', systemAppend(tool, skillText),
-  ];
+  );
   if (Number.isFinite(budgetUsd)) args.push('--max-budget-usd', budgetUsd.toFixed(4));
   const sessionStartedAt = Date.now();
   const session = await run('claude', args, { cwd: workDir, env, timeoutMs });
@@ -587,6 +606,7 @@ async function runAgentSession({ tool, task, rep, model, maxTurns, timeoutMs, sh
     answer: null,
     upstreamTaskId: task.upstreamTaskId || null,
     category: task.category || null,
+    toolPolicy: webgamesToolPolicy,
   };
   if (record.tokens) {
     record.tokens.total = record.tokens.input + record.tokens.output + record.tokens.cacheRead + record.tokens.cacheCreation;

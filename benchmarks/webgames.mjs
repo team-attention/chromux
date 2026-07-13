@@ -6,6 +6,7 @@
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 
 export const WEBGAMES_REPO = 'https://github.com/convergence-ai/webgames.git';
@@ -27,10 +28,10 @@ export const WEBGAMES_VISUAL_COMMANDS = Object.freeze([
   'list',
 ]);
 
-const WEBGAMES_COMPLETION_PASSWORDS = Object.freeze({
-  'canvas-catch-easy': 'EasyCircleMaster2024',
-  'map-panner-easy': 'CARTOGRAPHEREASY2024',
-  'slider-symphony-easy': 'SMOOTHANDEASY',
+const WEBGAMES_COMPLETION_PASSWORD_HASHES = Object.freeze({
+  'canvas-catch-easy': '3e3af3a299f1cb323a69cb4fd892df0056dca4d3ba6e6919d83a6687f3278c89',
+  'map-panner-easy': '1e71a85d68b00608dd9b5207e6572af6ca0fe73def754b3c6b887796586e98ca',
+  'slider-symphony-easy': '8b1c022badb33fb18afc32e4caf305f0502aa4d0c803ede24f8a2dcba65c3a4b',
 });
 
 export const WEBGAMES_BENCHMARK_TASKS = Object.freeze([
@@ -213,6 +214,8 @@ export function webgamesCommandAllowed(command) {
 }
 
 export function webgamesPasswordMatches(upstreamTaskId, password) {
-  const expected = WEBGAMES_COMPLETION_PASSWORDS[upstreamTaskId];
-  return Boolean(expected) && String(password ?? '').trim() === expected;
+  const expected = WEBGAMES_COMPLETION_PASSWORD_HASHES[upstreamTaskId];
+  if (!expected) return false;
+  const actual = crypto.createHash('sha256').update(String(password ?? '').trim()).digest();
+  return crypto.timingSafeEqual(actual, Buffer.from(expected, 'hex'));
 }

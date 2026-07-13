@@ -630,8 +630,9 @@ node benchmarks/agent-compare-benchmark.mjs \
 node benchmarks/agent-compare-benchmark.mjs --smoke   # cheap harness check
 
 # Focused browser-reach proof against a pinned Apache-2.0 WebGames commit.
-# The three non-timed tasks require exact completion passwords and default to
-# a $5 total guard. Visual sessions allow CLI help, screenshots, browser input,
+# The three non-timed tasks hash-grade exact completion passwords and default to
+# a $5 total guard. Visual sessions restrict built-in tools to chromux Bash calls
+# and /tmp/chromux-*.png reads, then allow CLI help, screenshots, browser input,
 # and lifecycle commands; snapshot, fill, eval, run, cdp, network, and watch are blocked.
 node benchmarks/agent-compare-benchmark.mjs \
   --model claude-sonnet-5 --tools chromux \

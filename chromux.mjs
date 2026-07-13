@@ -3161,22 +3161,39 @@ async function resolveActionTarget(cdp, target, action, coordinateSpace = null, 
 }
 
 async function dispatchPointerDrag(cdp, start, end, steps, holdMs) {
-  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: start.x, y: start.y, button: 'none', pointerType: 'mouse' });
-  await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: start.x, y: start.y, button: 'left', buttons: 1, clickCount: 1, pointerType: 'mouse' });
-  if (holdMs > 0) await sleep(holdMs);
-  for (let index = 1; index <= steps; index++) {
-    const progress = index / steps;
-    await cdp.send('Input.dispatchMouseEvent', {
-      type: 'mouseMoved',
-      x: start.x + (end.x - start.x) * progress,
-      y: start.y + (end.y - start.y) * progress,
-      button: 'left',
-      buttons: 1,
-      pointerType: 'mouse',
-    });
-    await sleep(16);
+  let mousePressed = false;
+  let mousePoint = start;
+  try {
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: start.x, y: start.y, button: 'none', pointerType: 'mouse' });
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: start.x, y: start.y, button: 'left', buttons: 1, clickCount: 1, pointerType: 'mouse' });
+    mousePressed = true;
+    if (holdMs > 0) await sleep(holdMs);
+    for (let index = 1; index <= steps; index++) {
+      const progress = index / steps;
+      mousePoint = {
+        x: start.x + (end.x - start.x) * progress,
+        y: start.y + (end.y - start.y) * progress,
+      };
+      await cdp.send('Input.dispatchMouseEvent', {
+        type: 'mouseMoved',
+        x: mousePoint.x,
+        y: mousePoint.y,
+        button: 'left',
+        buttons: 1,
+        pointerType: 'mouse',
+      });
+      await sleep(16);
+    }
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: end.x, y: end.y, button: 'left', buttons: 0, clickCount: 1, pointerType: 'mouse' });
+    mousePressed = false;
+  } finally {
+    if (mousePressed) {
+      await cdp.send('Input.dispatchMouseEvent', {
+        type: 'mouseReleased', x: mousePoint.x, y: mousePoint.y,
+        button: 'left', buttons: 0, clickCount: 1, pointerType: 'mouse',
+      }).catch(() => {});
+    }
   }
-  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: end.x, y: end.y, button: 'left', buttons: 0, clickCount: 1, pointerType: 'mouse' });
 }
 
 async function dispatchHtml5Drag(cdp, start, end, steps, holdMs) {
@@ -3829,8 +3846,10 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     await s.cdp.send('Page.bringToFront', {});
     const usesImageSpace = from?.space === 'image' || to?.space === 'image';
     const coordinateSpace = usesImageSpace ? s.lastImageCoordinateSpace : null;
-    let start = await resolveActionTarget(s.cdp, from, 'Drag source', coordinateSpace);
-    let end = await resolveActionTarget(s.cdp, to, 'Drag destination', start.coordinateSpace);
+    const mixedSelectorCoordinates = Boolean(from?.selector) !== Boolean(to?.selector);
+    const resolveOptions = { scrollIntoView: !mixedSelectorCoordinates };
+    let start = await resolveActionTarget(s.cdp, from, 'Drag source', coordinateSpace, resolveOptions);
+    let end = await resolveActionTarget(s.cdp, to, 'Drag destination', start.coordinateSpace, resolveOptions);
     // Resolving a selector may scroll. Refresh both selector geometries without
     // further scrolling so stale pre-scroll coordinates can never be dispatched.
     if (from?.selector) {
