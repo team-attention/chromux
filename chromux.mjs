@@ -4342,6 +4342,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     const { session, path: savePath, region, ref, space = 'css' } = body;
     const s = getSession(sessions, session);
     touchSession(s);
+    if (isHeadless) await s.cdp.send('Page.bringToFront');
     let captured = null;
     let output = null;
     let crop = null;
@@ -6030,7 +6031,7 @@ async function cmdScreenshot(args, sock) {
     ref,
     region,
     space,
-  }, sock);
+  }, sock, defaultCliTimeoutMs() + 5000);
 }
 
 async function cmdPress(args, sock) {
