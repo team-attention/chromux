@@ -41,6 +41,16 @@ dialog/new tab (both are reported when detected). Escalate in this order:
 console` / `watch <s> network` for silent failures. Never blindly repeat a
 submit-like action.
 
+## Cross-origin frame refs
+
+The default snapshot exposes an opaque frame ref, origin-only identity, and CSS rect without reading child DOM.
+Use the rect for visible pointer actions when that is sufficient.
+
+If reliable child text or DOM actions are required, reopen the page with `chromux open <s> <url> --oopif` and take a fresh snapshot.
+Namespaced refs such as `@f1g1:2` support snapshot, click, fill, and waits.
+Child navigation or detach changes the namespace; a stale-child error means re-snapshot, not retry.
+Keep `--oopif` opt-in because child-target attachment adds payload and browser automation surface.
+
 ## Human handoff: login, 2FA, CAPTCHA, payment
 
 Credential walls are user-owned. The formal handoff loop — the profile is a

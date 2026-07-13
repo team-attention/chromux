@@ -1290,7 +1290,8 @@ class CDPClient {
       }
       if ('method' in msg) {
         for (let i = this.#waiters.length - 1; i >= 0; i--) {
-          if (this.#waiters[i].method === msg.method) {
+          if (this.#waiters[i].method === msg.method
+            && this.#waiters[i].sessionId === (msg.sessionId || null)) {
             clearTimeout(this.#waiters[i].timer);
             this.#waiters[i].resolve(msg.params);
             this.#waiters.splice(i, 1);
@@ -1298,7 +1299,7 @@ class CDPClient {
           }
         }
         const cbs = this.#listeners.get(msg.method);
-        if (cbs) for (const cb of cbs) cb(msg.params);
+        if (cbs) for (const cb of cbs) cb(msg.params, msg.sessionId || null);
       }
     });
   }
@@ -1307,7 +1308,7 @@ class CDPClient {
     return this.#ws?.readyState === WebSocket.OPEN;
   }
 
-  async send(method, params = {}, timeoutMs = 10000) {
+  async send(method, params = {}, timeoutMs = 10000, sessionId = null) {
     if (!this.connected) throw new Error('CDP WebSocket not connected');
     const id = ++this.#seq;
     const msg = await new Promise((resolve, reject) => {
@@ -1320,7 +1321,7 @@ class CDPClient {
         reject: (e) => { clearTimeout(timer); reject(e); },
       });
       try {
-        this.#ws.send(JSON.stringify({ id, method, params }));
+        this.#ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
       } catch (e) {
         clearTimeout(timer);
         this.#pending.delete(id);
@@ -1331,14 +1332,14 @@ class CDPClient {
     return msg.result;
   }
 
-  waitForEvent(method, timeout = 30000) {
+  waitForEvent(method, timeout = 30000, sessionId = null) {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         const i = this.#waiters.findIndex(w => w === entry);
         if (i >= 0) this.#waiters.splice(i, 1);
         reject(new Error(`Timeout waiting for ${method}`));
       }, timeout);
-      const entry = { method, resolve, reject, timer };
+      const entry = { method, sessionId, resolve, reject, timer };
       this.#waiters.push(entry);
     });
   }
@@ -1352,6 +1353,39 @@ class CDPClient {
   /** Remove all listeners for a CDP event method. */
   off(method) {
     this.#listeners.delete(method);
+  }
+
+  diagnostics() {
+    let listenerCount = 0;
+    for (const callbacks of this.#listeners.values()) listenerCount += callbacks.length;
+    return {
+      connected: this.connected,
+      pending: this.#pending.size,
+      waiters: this.#waiters.length,
+      listenerMethods: this.#listeners.size,
+      listeners: listenerCount,
+    };
+  }
+
+  async closeAndWait(timeoutMs = 2000) {
+    const ws = this.#ws;
+    if (!ws || ws.readyState === WebSocket.CLOSED) return this.diagnostics();
+    await new Promise((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        ws.removeEventListener('close', finish);
+        resolve();
+      };
+      const timer = setTimeout(finish, timeoutMs);
+      ws.addEventListener('close', finish, { once: true });
+      if (ws.readyState !== WebSocket.CLOSING) {
+        try { ws.close(); } catch { finish(); }
+      }
+    });
+    return this.diagnostics();
   }
 
   #onDisconnect = null;
@@ -1434,7 +1468,7 @@ async function closeInitialTabs(port) {
 // Adding JS patches via Page.addScriptToEvaluateOnNewDocument is ITSELF detectable.
 // The best stealth is minimizing CDP footprint — remove calls, don't add patches.
 
-const SNAPSHOT_JS = `((FILTER, CLICKABLE) => {
+const SNAPSHOT_JS = `((FILTER, CLICKABLE, REDACT_FIELDS) => {
   const INTERACTIVE_ONLY = FILTER === 'interactive';
   // Behavior-based clickable detection ('auto' | 'on' | 'off'). Many SPAs and
   // micro-UIs build their controls from bare divs with click handlers — no
@@ -1628,11 +1662,17 @@ const SNAPSHOT_JS = `((FILTER, CLICKABLE) => {
     dialog:'dialog', section:'region', aside:'complementary',
   };
   const INTERACTIVE = new Set(['a','button','input','select','textarea']);
+  function isEditableRoot(el) {
+    const value = el.getAttribute('contenteditable');
+    return value !== null && value.toLowerCase() !== 'false';
+  }
   function getRole(el) {
+    if (isEditableRoot(el)) return el.getAttribute('role') || 'textbox';
     return el.getAttribute('role') || ROLES[el.tagName.toLowerCase()] || null;
   }
   function isInteractive(el) {
     const tag = el.tagName.toLowerCase();
+    if (isEditableRoot(el)) return true;
     if (INTERACTIVE.has(tag)) return true;
     const role = el.getAttribute('role');
     if (role === 'button' || role === 'link' || role === 'tab' || role === 'menuitem') return true;
@@ -1653,6 +1693,10 @@ const SNAPSHOT_JS = `((FILTER, CLICKABLE) => {
   function getLabel(el, clickable) {
     const tag = el.tagName.toLowerCase();
     const aria = el.getAttribute('aria-label');
+    if (REDACT_FIELDS && isEditableRoot(el)) return aria || '';
+    if (REDACT_FIELDS && (tag === 'input' || tag === 'textarea' || tag === 'select')) {
+      return aria || el.placeholder || '';
+    }
     if ((tag === 'input' || tag === 'textarea' || tag === 'select') && isSensitiveInput(el)) {
       return aria || el.placeholder || '';
     }
@@ -1688,6 +1732,33 @@ const SNAPSHOT_JS = `((FILTER, CLICKABLE) => {
     let interactive = isInteractive(el);
     let clickable = false;
     let overlay = false;
+    let innerFrameDoc = null;
+    let opaqueFrame = null;
+    if (tag === 'iframe' || tag === 'frame') {
+      try { innerFrameDoc = el.contentDocument; } catch {}
+      if (!innerFrameDoc || !innerFrameDoc.body) {
+        interactive = true;
+        let origin = 'opaque';
+        try {
+          const parsed = new URL(el.getAttribute('src') || '', el.ownerDocument.location.href);
+          if (parsed.origin && parsed.origin !== 'null') origin = parsed.origin;
+        } catch {}
+        const rect = el.getBoundingClientRect();
+        let x = rect.left;
+        let y = rect.top;
+        let view = el.ownerDocument.defaultView || window;
+        while (view !== view.parent && view.frameElement) {
+          const frameRect = view.frameElement.getBoundingClientRect();
+          x += frameRect.left + view.frameElement.clientLeft;
+          y += frameRect.top + view.frameElement.clientTop;
+          view = view.parent;
+        }
+        opaqueFrame = {
+          origin,
+          rect: [x, y, rect.width, rect.height].map(value => Math.round(value * 100) / 100),
+        };
+      }
+    }
     if (!interactive && el === OCCLUDER) {
       interactive = true;
       clickable = true;
@@ -1704,14 +1775,9 @@ const SNAPSHOT_JS = `((FILTER, CLICKABLE) => {
     let children = '';
     if (tag === 'iframe' || tag === 'frame') {
       // Same-origin frames are walked like page content; cross-origin frames
-      // are marked so the agent knows the blind spot instead of guessing.
-      let innerDoc = null;
-      try { innerDoc = el.contentDocument; } catch {}
-      if (innerDoc && innerDoc.body) {
-        children = walk(innerDoc.body, cd);
-      } else if (!INTERACTIVE_ONLY) {
-        children = '  '.repeat(cd) + 'iframe (cross-origin; content not accessible)\\n';
-      }
+      // expose only origin and geometry. Paths, queries, and child field values
+      // stay behind the origin boundary.
+      if (innerFrameDoc && innerFrameDoc.body) children = walk(innerFrameDoc.body, cd);
     } else if (el.shadowRoot) {
       // Flattened-tree walk: an open shadow root replaces the host's light
       // children; slotted light content re-enters through <slot> below.
@@ -1738,7 +1804,9 @@ const SNAPSHOT_JS = `((FILTER, CLICKABLE) => {
       }
       line += '@' + ref + ' ';
     }
-    line += overlay ? 'overlay (covers page; interact or dismiss first)'
+    line += opaqueFrame
+      ? 'iframe (cross-origin opaque)'
+      : overlay ? 'overlay (covers page; interact or dismiss first)'
       : clickable ? (role ? role + ' (clickable)' : 'clickable') : (role || tag);
     if (label) line += ' "' + label.replace(/"/g, '\\\\"') + '"';
     else if (clickable) {
@@ -1753,15 +1821,28 @@ const SNAPSHOT_JS = `((FILTER, CLICKABLE) => {
       const checkish = el.type === 'checkbox' || el.type === 'radio';
       line += ' [' + (el.type || 'text') + (checkish && el.checked ? ' checked' : '') + ']';
     }
-    if (tag === 'select' && el.selectedOptions && el.selectedOptions[0] && !isSensitiveInput(el)) {
+    if (!REDACT_FIELDS && tag === 'select' && el.selectedOptions && el.selectedOptions[0] && !isSensitiveInput(el)) {
       const sel = el.selectedOptions[0].textContent.trim().substring(0, 40);
       if (sel && sel !== label) line += ' = "' + sel.replace(/"/g, '') + '"';
     }
     if (el.disabled) line += ' (disabled)';
+    if (opaqueFrame) {
+      line += ' origin=' + opaqueFrame.origin + ' rect=[' + opaqueFrame.rect.join(',') + '] CSS';
+    }
     if (tag === 'a' && el.href) {
       const href = el.getAttribute('href');
-      if (href && !href.startsWith('javascript:') && !href.startsWith('#'))
-        line += ' -> ' + href.substring(0, 80);
+      if (href && !href.startsWith('javascript:') && !href.startsWith('#')) {
+        let shownHref = href;
+        if (REDACT_FIELDS) {
+          try {
+            const parsed = new URL(href, el.ownerDocument.location.href);
+            shownHref = parsed.origin && parsed.origin !== 'null' ? parsed.origin : 'opaque';
+          } catch {
+            shownHref = 'opaque';
+          }
+        }
+        line += ' -> ' + shownHref.substring(0, 80);
+      }
     }
     return line + '\\n' + children;
   }
@@ -1782,6 +1863,357 @@ const SNAPSHOT_JS = `((FILTER, CLICKABLE) => {
   document.documentElement.setAttribute('data-ct-ref-max', String(refMax));
   return out;
 })`;
+
+function originOnly(rawUrl) {
+  try {
+    const parsed = new URL(rawUrl);
+    return parsed.origin && parsed.origin !== 'null' ? parsed.origin : 'opaque';
+  } catch {
+    return 'opaque';
+  }
+}
+
+function oopifNamespace(child) {
+  return `f${child.slot}g${child.generation}`;
+}
+
+const OOPIF_EVENT_METHODS = [
+  'Target.attachedToTarget',
+  'Target.detachedFromTarget',
+  'Target.targetCrashed',
+  'Target.targetInfoChanged',
+  'Inspector.targetCrashed',
+  'Page.frameNavigated',
+];
+
+function disposeOopifRouting(s) {
+  const state = s.oopif;
+  for (const method of OOPIF_EVENT_METHODS) s.cdp.off(method);
+  if (state) {
+    state.enabled = false;
+    state.children.clear();
+    state.targetSessions.clear();
+    state.detachedTargets.clear();
+    state.crashedTargets.clear();
+    state.pending = 0;
+  }
+  s.oopif = null;
+  return { enabled: false, attachedFrames: 0, pending: 0 };
+}
+
+function removeOopifTarget(state, { sessionId = null, targetId = null, crashed = false } = {}) {
+  const resolvedSessionId = sessionId || (targetId ? state.targetSessions.get(targetId) : null);
+  const child = resolvedSessionId ? state.children.get(resolvedSessionId) : null;
+  const resolvedTargetId = targetId || child?.targetId || null;
+  const knownTarget = Boolean(child || (resolvedTargetId && (
+    state.targetSessions.has(resolvedTargetId)
+    || state.detachedTargets.has(resolvedTargetId)
+    || state.crashedTargets.has(resolvedTargetId)
+  )));
+  if (!knownTarget) return;
+  if (resolvedSessionId) state.children.delete(resolvedSessionId);
+  if (resolvedTargetId) state.targetSessions.delete(resolvedTargetId);
+  if (resolvedTargetId && !state.detachedTargets.has(resolvedTargetId)) {
+    state.detachedTargets.add(resolvedTargetId);
+    state.detachedTotal++;
+  }
+  if (crashed && resolvedTargetId && !state.crashedTargets.has(resolvedTargetId)) {
+    state.crashedTargets.add(resolvedTargetId);
+    state.crashedTotal++;
+  }
+}
+
+async function enableOopifRouting(s) {
+  if (s.oopif?.enabled) return s.oopif;
+  const state = {
+    enabled: true,
+    children: new Map(),
+    nextSlot: 0,
+    attachedTotal: 0,
+    detachedTotal: 0,
+    crashedTotal: 0,
+    pending: 0,
+    enabledAt: Date.now(),
+    targetSessions: new Map(),
+    detachedTargets: new Set(),
+    crashedTargets: new Set(),
+  };
+  s.oopif = state;
+  s.cdp.on('Target.attachedToTarget', (params) => {
+    const info = params.targetInfo || {};
+    if (info.type !== 'iframe') return;
+    const child = {
+      sessionId: params.sessionId,
+      targetId: info.targetId,
+      url: info.url || '',
+      slot: ++state.nextSlot,
+      generation: 1,
+      attachedAt: Date.now(),
+      ready: null,
+    };
+    state.children.set(params.sessionId, child);
+    state.targetSessions.set(info.targetId, params.sessionId);
+    state.attachedTotal++;
+    state.pending++;
+    child.ready = Promise.all([
+      s.cdp.send('Page.enable', {}, 5000, params.sessionId),
+      s.cdp.send('Inspector.enable', {}, 5000, params.sessionId),
+    ])
+      .catch(() => null)
+      .finally(() => { state.pending = Math.max(0, state.pending - 1); });
+  });
+  s.cdp.on('Target.detachedFromTarget', ({ sessionId, targetId }) => {
+    removeOopifTarget(state, { sessionId, targetId });
+  });
+  s.cdp.on('Target.targetCrashed', ({ targetId }) => {
+    removeOopifTarget(state, { targetId, crashed: true });
+  });
+  s.cdp.on('Inspector.targetCrashed', (_, eventSessionId) => {
+    removeOopifTarget(state, { sessionId: eventSessionId, crashed: true });
+  });
+  s.cdp.on('Target.targetInfoChanged', ({ targetInfo }) => {
+    for (const child of state.children.values()) {
+      if (child.targetId === targetInfo?.targetId) child.url = targetInfo.url || child.url;
+    }
+  });
+  s.cdp.on('Page.frameNavigated', ({ frame }, eventSessionId) => {
+    if (!eventSessionId) return;
+    const child = state.children.get(eventSessionId);
+    if (!child || !frame) return;
+    if (frame.id !== child.targetId && child.frameId) return;
+    child.frameId = frame.id;
+    child.url = frame.url || child.url;
+    child.generation++;
+  });
+  try {
+    await s.cdp.send('Target.setAutoAttach', {
+      autoAttach: true,
+      waitForDebuggerOnStart: false,
+      flatten: true,
+      filter: [
+        { type: 'iframe', exclude: false },
+        { exclude: true },
+      ],
+    });
+  } catch (err) {
+    disposeOopifRouting(s);
+    throw httpErr(503, `OOPIF opt-in failed: ${err.message}`);
+  }
+  await sleep(100);
+  return state;
+}
+
+async function reconcileOopifRouting(s) {
+  const state = s.oopif;
+  if (!state?.enabled || state.children.size === 0) return;
+  const children = [...state.children.values()];
+  await Promise.all(children.map(async (child) => {
+    await child.ready;
+    if (!state.children.has(child.sessionId)) return;
+    try {
+      await s.cdp.send('Runtime.evaluate', { expression: 'true' }, 500, child.sessionId);
+      child.unresponsiveSince = null;
+      return;
+    } catch {}
+
+    // A navigation transition, debugger pause, or busy renderer can reject a
+    // short Runtime probe without having crashed. Chrome clears the target URL
+    // after Page.crash, so require that crash-shaped state to persist before
+    // reconciling a missed crash event.
+    let targetInfo;
+    try {
+      ({ targetInfo } = await s.cdp.send('Target.getTargetInfo', { targetId: child.targetId }, 1000));
+    } catch {
+      removeOopifTarget(state, { sessionId: child.sessionId, targetId: child.targetId });
+      return;
+    }
+    if (targetInfo?.type !== 'iframe') {
+      removeOopifTarget(state, { sessionId: child.sessionId, targetId: child.targetId });
+      return;
+    }
+    const now = Date.now();
+    child.unresponsiveSince ||= now;
+    // Linux Chrome can retain the last committed target URL after Page.crash,
+    // while macOS commonly clears it. An empty URL is strong crash evidence;
+    // otherwise require a longer run of failed probes so a navigation or busy
+    // renderer is not mislabeled from one transient timeout.
+    const crashAfterMs = targetInfo.url === '' ? 1500 : 5000;
+    if (now - child.unresponsiveSince < crashAfterMs) return;
+    removeOopifTarget(state, {
+      sessionId: child.sessionId,
+      targetId: child.targetId,
+      crashed: true,
+    });
+  }));
+}
+
+function oopifSummary(s) {
+  if (!s.oopif?.enabled) return { enabled: false };
+  return {
+    enabled: true,
+    attachedFrames: s.oopif.children.size,
+    namespaces: [...s.oopif.children.values()].map(oopifNamespace),
+    attachedTotal: s.oopif.attachedTotal,
+    detachedTotal: s.oopif.detachedTotal,
+    crashedTotal: s.oopif.crashedTotal,
+    pending: s.oopif.pending,
+  };
+}
+
+function resolveOopifRef(s, rawRef) {
+  const match = /^@([a-z]\d+g\d+):(\d+)$/i.exec(String(rawRef || ''));
+  if (!match) return null;
+  const [, namespace, ref] = match;
+  const child = [...(s.oopif?.children.values() || [])]
+    .find(candidate => oopifNamespace(candidate) === namespace);
+  if (!child) {
+    throw httpErr(400, `OOPIF ref ${rawRef} is stale or detached. Take a fresh snapshot; frame navigation changes its namespace.`);
+  }
+  return { child, selector: `[data-ct-ref="${ref}"]`, ref: Number(ref) };
+}
+
+async function captureOopifSnapshot(s, filter = null, clickable = 'auto', timeoutMs = 5000) {
+  if (!s.oopif?.enabled || !s.oopif.children.size) return '';
+  const sections = [];
+  const children = [...s.oopif.children.values()].sort((a, b) => a.slot - b.slot);
+  for (const child of children) {
+    await child.ready;
+    const namespace = oopifNamespace(child);
+    const result = await s.cdp.send('Runtime.evaluate', {
+      expression: `(${SNAPSHOT_JS})(${JSON.stringify(filter)}, ${JSON.stringify(clickable)}, true)`,
+      returnByValue: true,
+    }, timeoutMs, child.sessionId).catch(() => null);
+    const text = result?.result?.value;
+    if (typeof text !== 'string') continue;
+    const body = text.split('\n').slice(2).join('\n').trim()
+      .replace(/^(\s*)@(\d+)\s/gm, `$1@${namespace}:$2 `);
+    if (!body) continue;
+    sections.push(`# OOPIF ${namespace} origin=${originOnly(child.url)}\n${body}`);
+  }
+  return sections.length ? `\n\n${sections.join('\n\n')}\n` : '';
+}
+
+async function captureSessionSnapshot(s, filter = null, clickable = 'auto', timeoutMs = 5000) {
+  const root = await s.cdp.send('Runtime.evaluate', {
+    expression: `(${SNAPSHOT_JS})(${JSON.stringify(filter)}, ${JSON.stringify(clickable)})`,
+    returnByValue: true,
+  }, timeoutMs);
+  const text = root?.result?.value;
+  if (typeof text !== 'string') return text;
+  return text + await captureOopifSnapshot(s, filter, clickable, timeoutMs);
+}
+
+async function resolveOopifActionPoint(s, routed, action) {
+  await routed.child.ready;
+  const geometry = await resolveDeepElementRect(
+    s.cdp,
+    routed.selector,
+    action,
+    routed.child.sessionId,
+  );
+  return { x: geometry.centerX, y: geometry.centerY };
+}
+
+function mouseButtonMask(button) {
+  return { left: 1, right: 2, middle: 4, back: 8, forward: 16 }[button] || 0;
+}
+
+async function clickOopifRef(s, rawRef, routed, button = 'left', clicks = 1) {
+  const point = await resolveOopifActionPoint(s, routed, 'OOPIF click');
+  const clickCount = Number.isFinite(Number(clicks)) ? Number(clicks) : 1;
+  await s.cdp.send('Input.dispatchMouseEvent', {
+    type: 'mouseMoved', x: point.x, y: point.y, button: 'none', pointerType: 'mouse',
+  }, 5000, routed.child.sessionId);
+  await s.cdp.send('Input.dispatchMouseEvent', {
+    type: 'mousePressed', x: point.x, y: point.y, button, buttons: mouseButtonMask(button), clickCount, pointerType: 'mouse',
+  }, 5000, routed.child.sessionId);
+  await s.cdp.send('Input.dispatchMouseEvent', {
+    type: 'mouseReleased', x: point.x, y: point.y, button, buttons: 0, clickCount, pointerType: 'mouse',
+  }, 5000, routed.child.sessionId);
+  return {
+    clicked: rawRef,
+    frame: { namespace: oopifNamespace(routed.child), origin: originOnly(routed.child.url) },
+  };
+}
+
+async function fillOopifRef(s, rawRef, routed, text) {
+  await routed.child.ready;
+  const prepared = await s.cdp.send('Runtime.evaluate', {
+    expression: `((sel, txt) => {
+      ${DEEP_QUERY_JS}
+      const el = deepQuery(sel);
+      if (!el) throw new Error('OOPIF fill target is stale: ' + sel);
+      el.focus();
+      const view = el.ownerDocument.defaultView || window;
+      if (el.isContentEditable) {
+        const selection = view.getSelection();
+        const range = el.ownerDocument.createRange();
+        range.selectNodeContents(el);
+        selection.removeAllRanges();
+        selection.addRange(range);
+        return { contenteditable: true };
+      }
+      if (!('value' in el)) throw new Error('OOPIF target is not fillable: ' + sel);
+      if (el.tagName === 'SELECT') {
+        const opts = Array.from(el.options);
+        const match = opts.find(o => o.value === txt)
+          || opts.find(o => o.textContent.trim() === txt)
+          || opts.find(o => o.textContent.trim().toLowerCase() === txt.toLowerCase());
+        if (!match) {
+          const known = opts.slice(0, 20).map(o => o.value + ' (' + o.textContent.trim() + ')').join(', ');
+          throw new Error('No option matching "' + txt + '" in ' + sel + '. Options: ' + known);
+        }
+        const selectSetter = Object.getOwnPropertyDescriptor(view.HTMLSelectElement.prototype, 'value')?.set;
+        if (selectSetter) selectSetter.call(el, match.value);
+        else el.value = match.value;
+        el.dispatchEvent(new view.Event('input', { bubbles: true }));
+        el.dispatchEvent(new view.Event('change', { bubbles: true }));
+        return { value: el.value, selectedLabel: match.textContent.trim() };
+      }
+      const proto = el.tagName === 'TEXTAREA' ? view.HTMLTextAreaElement.prototype : view.HTMLInputElement.prototype;
+      const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set
+        || Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value')?.set;
+      if (setter) setter.call(el, txt);
+      else el.value = txt;
+      try {
+        el.dispatchEvent(new view.InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: txt }));
+      } catch {
+        el.dispatchEvent(new view.Event('input', { bubbles: true, cancelable: true }));
+      }
+      el.dispatchEvent(new view.Event('change', { bubbles: true }));
+      return { contenteditable: false };
+    })(${JSON.stringify(routed.selector)}, ${JSON.stringify(text)})`,
+    returnByValue: true,
+  }, 5000, routed.child.sessionId);
+  if (prepared.exceptionDetails) {
+    const description = (prepared.exceptionDetails.exception?.description || 'OOPIF fill failed').split('\n')[0];
+    throw httpErr(400, `${description}. Take a fresh OOPIF snapshot.`);
+  }
+  if (prepared.result?.value?.contenteditable) {
+    await s.cdp.send('Input.insertText', { text }, 5000, routed.child.sessionId);
+    const observed = await s.cdp.send('Runtime.evaluate', {
+      expression: `((sel) => {
+        ${DEEP_QUERY_JS}
+        const el = deepQuery(sel);
+        if (!el || !el.isContentEditable) throw new Error('OOPIF contenteditable target changed during fill: ' + sel);
+        return el.innerText;
+      })(${JSON.stringify(routed.selector)})`,
+      returnByValue: true,
+    }, 5000, routed.child.sessionId);
+    if (observed.exceptionDetails) {
+      const description = (observed.exceptionDetails.exception?.description || 'OOPIF contenteditable fill verification failed').split('\n')[0];
+      throw httpErr(400, description);
+    }
+    if (observed.result?.value !== text) {
+      throw httpErr(400, `OOPIF contenteditable fill was rejected: expected ${JSON.stringify(text)}, observed ${JSON.stringify(observed.result?.value ?? '')}`);
+    }
+  }
+  return {
+    filled: rawRef,
+    text,
+    frame: { namespace: oopifNamespace(routed.child), origin: originOnly(routed.child.url) },
+  };
+}
 
 // ---- Snapshot diff (change-only reporting between snapshots) ----
 
@@ -1958,11 +2390,7 @@ async function markListenerClickables(s, force = false) {
 // onclick) appears in the diff as text without a clickable @ref; take a
 // snapshot to get its ref.
 async function captureStableSnapshot(s, timeoutMs = 5000) {
-  const r = await s.cdp.send('Runtime.evaluate', {
-    expression: `(${SNAPSHOT_JS})(null, 'stable')`,
-    returnByValue: true,
-  }, timeoutMs);
-  const text = r?.result?.value;
+  const text = await captureSessionSnapshot(s, null, 'stable', timeoutMs);
   return typeof text === 'string' ? text : null;
 }
 
@@ -2302,6 +2730,11 @@ async function startDaemon(profileName, port, daemonPort) {
         const entry = browserState.popups.find(p => p.targetId === targetInfo.targetId);
         if (entry) entry.url = targetInfo.url;
       });
+      client.on('Target.targetCrashed', ({ targetId }) => {
+        for (const s of sessions.values()) {
+          if (s.oopif?.enabled) removeOopifTarget(s.oopif, { targetId, crashed: true });
+        }
+      });
       client.on('Browser.downloadWillBegin', (params) => {
         browserState.downloads.set(params.guid, { suggestedFilename: params.suggestedFilename, url: params.url, state: 'inProgress' });
       });
@@ -2486,6 +2919,329 @@ function refToSelector(selector) {
   return selector.startsWith('@') ? `[data-ct-ref="${selector.slice(1)}"]` : selector;
 }
 
+function pngDimensions(buffer) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < 24
+    || buffer.toString('ascii', 1, 4) !== 'PNG') {
+    throw new Error('Chrome returned an invalid PNG screenshot');
+  }
+  return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
+}
+
+function mapImageCoordinateSpace(base, image, cssRect, imageSource = 'viewport') {
+  if (!image?.width || !image?.height || !cssRect?.width || !cssRect?.height) {
+    throw httpErr(503, 'Unable to map screenshot image coordinates');
+  }
+  return {
+    ...base,
+    image,
+    imageSource,
+    imageCssRect: cssRect,
+    cssToImage: {
+      scaleX: image.width / cssRect.width,
+      scaleY: image.height / cssRect.height,
+      offsetCssX: cssRect.x,
+      offsetCssY: cssRect.y,
+    },
+    imageToCss: {
+      scaleX: cssRect.width / image.width,
+      scaleY: cssRect.height / image.height,
+      offsetCssX: cssRect.x,
+      offsetCssY: cssRect.y,
+    },
+  };
+}
+
+async function captureCoordinateSpace(cdp) {
+  const viewportResult = await cdp.send('Runtime.evaluate', {
+    expression: `(() => {
+      const vv = window.visualViewport;
+      return {
+        cssViewport: { width: window.innerWidth, height: window.innerHeight },
+        visualViewport: vv ? {
+          offsetLeft: vv.offsetLeft,
+          offsetTop: vv.offsetTop,
+          pageLeft: vv.pageLeft,
+          pageTop: vv.pageTop,
+          width: vv.width,
+          height: vv.height,
+          scale: vv.scale,
+        } : {
+          offsetLeft: 0,
+          offsetTop: 0,
+          pageLeft: window.scrollX,
+          pageTop: window.scrollY,
+          width: window.innerWidth,
+          height: window.innerHeight,
+          scale: 1,
+        },
+        scroll: { x: window.scrollX, y: window.scrollY },
+        devicePixelRatio: window.devicePixelRatio,
+      };
+    })()`,
+    returnByValue: true,
+  });
+  const viewport = viewportResult.result?.value;
+  if (!viewport?.visualViewport?.width || !viewport?.visualViewport?.height) {
+    throw httpErr(503, 'Unable to read viewport coordinate metadata');
+  }
+  const screenshot = await cdp.send('Page.captureScreenshot', {
+    format: 'png',
+  }, 30000);
+  const buffer = Buffer.from(screenshot.data, 'base64');
+  const image = pngDimensions(buffer);
+  const vv = viewport.visualViewport;
+  const base = {
+    cssViewport: viewport.cssViewport,
+    visualViewport: vv,
+    scroll: viewport.scroll,
+    devicePixelRatio: viewport.devicePixelRatio,
+    viewportImage: image,
+  };
+  const coordinateSpace = mapImageCoordinateSpace(base, image, {
+    x: vv.offsetLeft,
+    y: vv.offsetTop,
+    width: vv.width,
+    height: vv.height,
+  });
+  return { buffer, coordinateSpace };
+}
+
+function pointToCss(x, y, space, coordinateSpace) {
+  if (space === 'css') return { x, y };
+  if (space !== 'image') throw httpErr(400, `Unknown coordinate space "${space}"; use css or image`);
+  const image = coordinateSpace.image || coordinateSpace.viewportImage;
+  if (x < 0 || y < 0 || x >= image.width || y >= image.height) {
+    throw httpErr(400, `image coordinates outside screenshot: [${x}, ${y}] not within ${image.width}x${image.height}`);
+  }
+  const map = coordinateSpace.imageToCss;
+  return {
+    x: map.offsetCssX + x * map.scaleX,
+    y: map.offsetCssY + y * map.scaleY,
+  };
+}
+
+async function resolveDeepElementRect(cdp, selector, action = 'Action', sessionId = null, scrollIntoView = true) {
+  const sel = refToSelector(String(selector || ''));
+  const result = await cdp.send('Runtime.evaluate', {
+    expression: `((sel, action, shouldScroll) => {
+      ${DEEP_QUERY_JS}
+      function describe(node) {
+        if (!node) return 'unknown';
+        const id = node.id ? '#' + node.id : '';
+        const cls = node.className && typeof node.className === 'string'
+          ? '.' + node.className.trim().split(/\\s+/).slice(0, 2).join('.')
+          : '';
+        return node.tagName.toLowerCase() + id + cls;
+      }
+      function composedContains(ancestor, node) {
+        let current = node;
+        while (current) {
+          if (current === ancestor) return true;
+          current = current.parentNode || current.host || null;
+        }
+        return false;
+      }
+      const el = deepQuery(sel);
+      if (!el) throw new Error(action + ' target not found or stale: ' + sel);
+      if (shouldScroll) el.scrollIntoView?.({ block: 'center', inline: 'center' });
+      const view = el.ownerDocument.defaultView || window;
+      const rect = el.getBoundingClientRect();
+      if (!deepVisible(el)) throw new Error(action + ' target is hidden: ' + sel);
+      const lx = rect.left + rect.width / 2;
+      const ly = rect.top + rect.height / 2;
+      if (lx < 0 || ly < 0 || lx >= view.innerWidth || ly >= view.innerHeight) {
+        throw new Error(action + ' target outside ' + (shouldScroll ? 'viewport after scroll: ' : 'the current viewport: ') + sel);
+      }
+      const rootNode = el.getRootNode();
+      let shadowHost = rootNode.host || null;
+      while (shadowHost) {
+        const hostRoot = shadowHost.getRootNode();
+        const hostHitBase = hostRoot.elementFromPoint ? hostRoot : shadowHost.ownerDocument;
+        const hostHit = hostHitBase.elementFromPoint(lx, ly);
+        if (!hostHit) throw new Error(action + ' target shadow host has no element at its center: ' + sel);
+        if (!composedContains(shadowHost, hostHit) && !composedContains(hostHit, shadowHost)) {
+          throw new Error(action + ' target shadow host is covered: ' + sel + ' hit ' + describe(hostHit));
+        }
+        shadowHost = hostRoot.host || null;
+      }
+      const hitBase = rootNode.elementFromPoint ? rootNode : el.ownerDocument;
+      const hit = hitBase.elementFromPoint(lx, ly);
+      if (!hit) throw new Error(action + ' target has no element at its center: ' + sel);
+      if (!composedContains(el, hit) && !composedContains(hit, el)) {
+        throw new Error(action + ' target is covered: ' + sel + ' hit ' + describe(hit));
+      }
+      let left = rect.left;
+      let top = rect.top;
+      let w = view;
+      let outermostFrame = null;
+      while (w !== w.parent && w.frameElement) {
+        const frameEl = w.frameElement;
+        const frameRect = frameEl.getBoundingClientRect();
+        let padLeft = 0;
+        let padTop = 0;
+        try {
+          const style = frameEl.ownerDocument.defaultView.getComputedStyle(frameEl);
+          padLeft = parseFloat(style.paddingLeft) || 0;
+          padTop = parseFloat(style.paddingTop) || 0;
+        } catch {}
+        left += frameRect.left + frameEl.clientLeft + padLeft;
+        top += frameRect.top + frameEl.clientTop + padTop;
+        outermostFrame = frameEl;
+        w = w.parent;
+      }
+      const centerX = left + rect.width / 2;
+      const centerY = top + rect.height / 2;
+      if (centerX < 0 || centerY < 0 || centerX >= window.innerWidth || centerY >= window.innerHeight) {
+        throw new Error(action + ' target outside top viewport: ' + sel);
+      }
+      if (outermostFrame) {
+        const topHit = document.elementFromPoint(centerX, centerY);
+        if (topHit && topHit !== outermostFrame && !outermostFrame.contains(topHit) && !topHit.contains(outermostFrame)) {
+          throw new Error(action + ' target is covered by a top-page element: ' + sel + ' hit ' + describe(topHit));
+        }
+      }
+      return {
+        x: left,
+        y: top,
+        width: rect.width,
+        height: rect.height,
+        centerX,
+        centerY,
+        draggable: el.draggable === true,
+      };
+    })(${JSON.stringify(sel)}, ${JSON.stringify(action)}, ${JSON.stringify(scrollIntoView)})`,
+    returnByValue: true,
+  }, 10000, sessionId);
+  if (result.exceptionDetails) {
+    const description = (result.exceptionDetails.exception?.description || `${action} failed`).split('\n')[0];
+    throw httpErr(400, `${description}. Run chromux snapshot again for a fresh ref and inspect overlays.`);
+  }
+  return result.result?.value;
+}
+
+async function resolveActionTarget(cdp, target, action, coordinateSpace = null, { scrollIntoView = true } = {}) {
+  if (target?.selector) {
+    const geometry = await resolveDeepElementRect(cdp, target.selector, action, null, scrollIntoView);
+    return {
+      x: geometry.centerX,
+      y: geometry.centerY,
+      geometry,
+      target: { selector: target.selector },
+      coordinateSpace,
+    };
+  }
+  if (!Array.isArray(target?.xy) || target.xy.length !== 2) {
+    throw httpErr(400, `${action} requires a selector/ref or xy coordinates`);
+  }
+  const [inputX, inputY] = target.xy.map(Number);
+  if (!Number.isFinite(inputX) || !Number.isFinite(inputY)) {
+    throw httpErr(400, `${action} coordinates must be numeric`);
+  }
+  const space = target.space || 'css';
+  if (space === 'image' && !coordinateSpace) {
+    ({ coordinateSpace } = await captureCoordinateSpace(cdp));
+  }
+  let x = inputX;
+  let y = inputY;
+  if (space === 'image') ({ x, y } = pointToCss(inputX, inputY, space, coordinateSpace));
+  else if (space !== 'css') throw httpErr(400, `Unknown coordinate space "${space}"; use css or image`);
+  const viewport = coordinateSpace?.cssViewport || (await cdp.send('Runtime.evaluate', {
+    expression: '({width: window.innerWidth, height: window.innerHeight})',
+    returnByValue: true,
+  })).result?.value;
+  if (x < 0 || y < 0 || x >= viewport.width || y >= viewport.height) {
+    throw httpErr(400, `${action} coordinates outside viewport: [${x}, ${y}] not within ${viewport.width}x${viewport.height}. Inspect a fresh screenshot or snapshot.`);
+  }
+  return {
+    x,
+    y,
+    target: { xy: [inputX, inputY], space, css: [x, y] },
+    coordinateSpace,
+  };
+}
+
+async function dispatchPointerDrag(cdp, start, end, steps, holdMs) {
+  let mousePressed = false;
+  let mousePoint = start;
+  try {
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: start.x, y: start.y, button: 'none', pointerType: 'mouse' });
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: start.x, y: start.y, button: 'left', buttons: 1, clickCount: 1, pointerType: 'mouse' });
+    mousePressed = true;
+    if (holdMs > 0) await sleep(holdMs);
+    for (let index = 1; index <= steps; index++) {
+      const progress = index / steps;
+      mousePoint = {
+        x: start.x + (end.x - start.x) * progress,
+        y: start.y + (end.y - start.y) * progress,
+      };
+      await cdp.send('Input.dispatchMouseEvent', {
+        type: 'mouseMoved',
+        x: mousePoint.x,
+        y: mousePoint.y,
+        button: 'left',
+        buttons: 1,
+        pointerType: 'mouse',
+      });
+      await sleep(16);
+    }
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: end.x, y: end.y, button: 'left', buttons: 0, clickCount: 1, pointerType: 'mouse' });
+    mousePressed = false;
+  } finally {
+    if (mousePressed) {
+      await cdp.send('Input.dispatchMouseEvent', {
+        type: 'mouseReleased', x: mousePoint.x, y: mousePoint.y,
+        button: 'left', buttons: 0, clickCount: 1, pointerType: 'mouse',
+      }).catch(() => {});
+    }
+  }
+}
+
+async function dispatchHtml5Drag(cdp, start, end, steps, holdMs) {
+  await cdp.send('Input.setInterceptDrags', { enabled: true });
+  let mousePressed = false;
+  let mousePoint = start;
+  try {
+    const intercepted = cdp.waitForEvent('Input.dragIntercepted', 3000).catch(() => null);
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: start.x, y: start.y, button: 'none', pointerType: 'mouse' });
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: start.x, y: start.y, button: 'left', buttons: 1, clickCount: 1, pointerType: 'mouse' });
+    mousePressed = true;
+    if (holdMs > 0) await sleep(holdMs);
+    for (let index = 1; index <= steps; index++) {
+      const progress = index / steps;
+      mousePoint = {
+        x: start.x + (end.x - start.x) * progress,
+        y: start.y + (end.y - start.y) * progress,
+      };
+      await cdp.send('Input.dispatchMouseEvent', {
+        type: 'mouseMoved',
+        x: mousePoint.x,
+        y: mousePoint.y,
+        button: 'left',
+        buttons: 1,
+        pointerType: 'mouse',
+      });
+      await sleep(16);
+    }
+    const event = await intercepted;
+    if (!event?.data) {
+      throw httpErr(400, 'Native HTML5 drag did not start. Confirm the source is draggable and visible; no synthetic DragEvent fallback was used.');
+    }
+    await cdp.send('Input.dispatchDragEvent', { type: 'dragEnter', x: end.x, y: end.y, data: event.data });
+    await cdp.send('Input.dispatchDragEvent', { type: 'dragOver', x: end.x, y: end.y, data: event.data });
+    await cdp.send('Input.dispatchDragEvent', { type: 'drop', x: end.x, y: end.y, data: event.data });
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: end.x, y: end.y, button: 'left', buttons: 0, clickCount: 1, pointerType: 'mouse' });
+    mousePressed = false;
+  } finally {
+    if (mousePressed) {
+      await cdp.send('Input.dispatchMouseEvent', {
+        type: 'mouseReleased', x: mousePoint.x, y: mousePoint.y,
+        button: 'left', buttons: 0, clickCount: 1, pointerType: 'mouse',
+      }).catch(() => {});
+    }
+    await cdp.send('Input.setInterceptDrags', { enabled: false }).catch(() => {});
+  }
+}
+
 // Page-side deep-query helpers shared by click/fill/wait expressions. Plain
 // querySelector is the fast path; on a miss the search pierces open shadow
 // roots and same-origin iframes so snapshot @refs assigned inside them stay
@@ -2601,6 +3357,30 @@ async function pressKey(cdp, key) {
   await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', ...def });
 }
 
+async function typeFocusedText(cdp, text) {
+  const focus = await cdp.send('Runtime.evaluate', {
+    expression: `(() => {
+      const el = document.activeElement;
+      if (!el || !/^(IFRAME|FRAME)$/.test(el.tagName)) return { opaqueFrame: false };
+      try {
+        return { opaqueFrame: !el.contentDocument };
+      } catch {
+        return { opaqueFrame: true };
+      }
+    })()`,
+    returnByValue: true,
+  });
+  if (focus.result?.value?.opaqueFrame !== true) {
+    await cdp.send('Input.insertText', { text });
+    return;
+  }
+  // Chrome can acknowledge a cross-renderer click before child focus settles.
+  await sleep(50);
+  for (const char of String(text)) {
+    await cdp.send('Input.dispatchKeyEvent', { type: 'char', text: char });
+  }
+}
+
 function enforceResourceGuard(settings) {
   if (settings.mode !== 'crawl' || !settings.profileName) return;
   const resources = profileResourceSnapshot(settings.profileName);
@@ -2641,6 +3421,44 @@ async function navigateSession(cdp, url, settings) {
   await cdp.send('Page.navigate', { url }, waitMs + 2000);
   await Promise.race([loaded, domReady, timeout]);
   await cdp.send('Page.stopLoading', {}, 2000).catch(() => {});
+}
+
+async function cleanupFailedOpenSession(sessions, session, s, cdp, port, targetId) {
+  sessions.delete(session);
+  if (s) disposeOopifRouting(s);
+  const transport = s?.cdp || cdp;
+  if (transport) {
+    try {
+      await transport.closeAndWait();
+    } catch {
+      try { transport.close(); } catch {}
+    }
+  }
+  if (targetId) await closeTab(port, targetId).catch(() => {});
+}
+
+async function prepareOpenSessionNavigation({
+  sessions,
+  session,
+  s,
+  body,
+  url,
+  settings,
+  port,
+  isNewSession,
+  newTab,
+}) {
+  try {
+    if (body.oopif === true) await enableOopifRouting(s);
+    touchSession(s);
+    s.lastImageCoordinateSpace = null;
+    await navigateSession(s.cdp, url, settings);
+  } catch (err) {
+    if (isNewSession && newTab) {
+      await cleanupFailedOpenSession(sessions, session, s, s.cdp, port, newTab.id);
+    }
+    throw err;
+  }
 }
 
 async function readPageInfo(port, targetId, cdp, settings) {
@@ -2686,13 +3504,16 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
         sessions.delete(id);
         continue;
       }
+      await reconcileOopifRouting(s);
       if (settings.mode === 'crawl') {
         out[id] = { url: s.url || '', title: s.title || '', ageMs: Date.now() - s.createdAt, idleMs: Date.now() - s.lastUsedAt, navigations: s.navigations || 0 };
+        if (s.oopif?.enabled) out[id].oopif = oopifSummary(s);
         continue;
       }
       try {
         const r = await s.cdp.send('Runtime.evaluate', { expression: 'JSON.stringify({url:location.href,title:document.title})', returnByValue: true });
         out[id] = JSON.parse(r.result.value);
+        if (s.oopif?.enabled) out[id].oopif = oopifSummary(s);
       } catch { out[id] = { url: '(closed)', title: '' }; sessions.delete(id); }
     }
     return out;
@@ -2719,56 +3540,63 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
       const tab = await createTab(port, 'about:blank', background);
       newTab = tab;
       const cdp = new CDPClient();
-      await cdp.connect(tab.webSocketDebuggerUrl);
-      await cdp.send('Page.enable');
-      // NOTE: Runtime.enable intentionally NOT called (Patchright technique).
-      // Runtime.enable is the #1 CDP detection signal used by Cloudflare, DataDome, PerimeterX.
-      // Runtime.evaluate works without it — no need for Runtime.executionContextCreated events.
-      if (isHeadless) {
-        // Override User-Agent to remove "HeadlessChrome" signature
-        await cdp.send('Network.enable');
-        const r = await cdp.send('Runtime.evaluate', {
-          expression: 'navigator.userAgent', returnByValue: true,
-        });
-        const cleanUA = (r.result?.value || '').replace(/HeadlessChrome/g, 'Chrome');
-        if (cleanUA) await cdp.send('Network.setUserAgentOverride', { userAgent: cleanUA });
-        // Emulate OS-level focus so headless window appears focused (anti-detection)
-        await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true });
-        // NOTE: Page.addScriptToEvaluateOnNewDocument intentionally NOT called.
-        // Real Chrome already has correct webdriver/plugins/languages/chrome.runtime.
-        // The CDP call itself is a detectable signal — removing it is better stealth.
+      try {
+        await cdp.connect(tab.webSocketDebuggerUrl);
+        await cdp.send('Page.enable');
+        // NOTE: Runtime.enable intentionally NOT called (Patchright technique).
+        // Runtime.enable is the #1 CDP detection signal used by Cloudflare, DataDome, PerimeterX.
+        // Runtime.evaluate works without it - no need for Runtime.executionContextCreated events.
+        if (isHeadless) {
+          // Override User-Agent to remove "HeadlessChrome" signature
+          await cdp.send('Network.enable');
+          const r = await cdp.send('Runtime.evaluate', {
+            expression: 'navigator.userAgent', returnByValue: true,
+          });
+          const cleanUA = (r.result?.value || '').replace(/HeadlessChrome/g, 'Chrome');
+          if (cleanUA) await cdp.send('Network.setUserAgentOverride', { userAgent: cleanUA });
+          // Emulate OS-level focus so headless window appears focused (anti-detection)
+          await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true });
+          // NOTE: Page.addScriptToEvaluateOnNewDocument intentionally NOT called.
+          // Real Chrome already has correct webdriver/plugins/languages/chrome.runtime.
+          // The CDP call itself is a detectable signal - removing it is better stealth.
+        }
+        if (settings.mode === 'crawl' && settings.resourceBlocking) {
+          await cdp.send('Network.enable');
+          await cdp.send('Network.setBlockedURLs', { urls: CRAWL_BLOCK_URLS });
+        }
+        cdp.onDisconnect = (reason) => {
+          if (s) disposeOopifRouting(s);
+          sessions.delete(session);
+        };
+        const now = Date.now();
+        s = { targetId: tab.id, cdp, createdAt: now, lastUsedAt: now, url: 'about:blank', title: '', navigations: 0 };
+        s.dialogPolicy = body.dialog === 'accept' ? 'accept' : 'dismiss';
+        attachDialogHandler(s);
+        sessions.set(session, s);
+      } catch (err) {
+        await cleanupFailedOpenSession(sessions, session, s, cdp, port, tab.id);
+        throw err;
       }
-      if (settings.mode === 'crawl' && settings.resourceBlocking) {
-        await cdp.send('Network.enable');
-        await cdp.send('Network.setBlockedURLs', { urls: CRAWL_BLOCK_URLS });
-      }
-      cdp.onDisconnect = (reason) => {
-        sessions.delete(session);
-      };
-      const now = Date.now();
-      s = { targetId: tab.id, cdp, createdAt: now, lastUsedAt: now, url: 'about:blank', title: '', navigations: 0 };
-      s.dialogPolicy = body.dialog === 'accept' ? 'accept' : 'dismiss';
-      attachDialogHandler(s);
-      sessions.set(session, s);
     }
     if (body.dialog === 'accept' || body.dialog === 'dismiss') s.dialogPolicy = body.dialog;
-    touchSession(s);
-    try {
-      await navigateSession(s.cdp, url, settings);
-    } catch (err) {
-      if (isNewSession && newTab) {
-        sessions.delete(session);
-        s.cdp.close();
-        await closeTab(port, newTab.id).catch(() => {});
-      }
-      throw err;
-    }
+    await prepareOpenSessionNavigation({
+      sessions,
+      session,
+      s,
+      body,
+      url,
+      settings,
+      port,
+      isNewSession,
+      newTab,
+    });
     const pageInfo = await readPageInfo(port, s.targetId, s.cdp, settings);
     s.url = pageInfo.url;
     s.title = pageInfo.title;
     s.navigations = (s.navigations || 0) + 1;
     touchSession(s);
     const result = { session, ...pageInfo };
+    if (s.oopif?.enabled) result.oopif = oopifSummary(s);
     // Nudge structure-first workflows: report how many interactive elements the
     // page has and the snapshot command that reveals them. Skipped in crawl mode
     // to keep worker-tab throughput unchanged.
@@ -2789,11 +3617,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
           // finds div-based controls that the standard count misses.
           if (n <= 20) {
             await markListenerClickables(s);
-            const sr = await s.cdp.send('Runtime.evaluate', {
-              expression: `(${SNAPSHOT_JS})(${JSON.stringify('interactive')}, 'auto')`,
-              returnByValue: true,
-            }, 2000);
-            const text = sr?.result?.value;
+            const text = await captureSessionSnapshot(s, 'interactive', 'auto', 2000);
             const body = typeof text === 'string' ? text.split('\n').slice(2).join('\n').trim() : '';
             if (body && text.length <= 2000) {
               if (!s.snapshotBaselines) s.snapshotBaselines = {};
@@ -2837,9 +3661,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     const s = getSession(sessions, session);
     touchSession(s);
     await markListenerClickables(s, clickable === 'on');
-    const expression = `(${SNAPSHOT_JS})(${JSON.stringify(filter)}, ${JSON.stringify(clickable)})`;
-    const r = await s.cdp.send('Runtime.evaluate', { expression, returnByValue: true });
-    const text = r.result.value;
+    const text = await captureSessionSnapshot(s, filter, clickable);
     if (typeof text !== 'string') return text;
     // Every snapshot (plain, --diff, or --grep) becomes the next baseline per
     // filter; grep/diff only change what is rendered, not what is stored.
@@ -2862,6 +3684,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     if (!session || !cdpMethod) throw httpErr(400, 'session and method required');
     const s = getSession(sessions, session);
     touchSession(s);
+    s.lastImageCoordinateSpace = null;
     try {
       return await s.cdp.send(cdpMethod, params || {}, timeoutMs);
     } catch (err) {
@@ -3026,38 +3849,141 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     }
   }
 
+  if (routePath === '/hover' && method === 'POST') {
+    const { session, selector, xy, space = 'css' } = body;
+    if (!session) throw httpErr(400, 'session required');
+    const s = getSession(sessions, session);
+    touchSession(s);
+    await s.cdp.send('Page.bringToFront', {});
+    const coordinateSpace = space === 'image' ? s.lastImageCoordinateSpace : null;
+    const point = await resolveActionTarget(s.cdp, { selector, xy, space }, 'Hover', coordinateSpace);
+    await s.cdp.send('Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x: point.x,
+      y: point.y,
+      button: 'none',
+    });
+    await sleep(100);
+    const result = {
+      hovered: point.target,
+      ...(point.coordinateSpace ? { coordinateSpace: point.coordinateSpace } : {}),
+    };
+    const verifyMs = resolveVerifyMs(body, settings);
+    if (verifyMs != null) {
+      const changed = await captureVerifyDiff(s, verifyMs);
+      if (changed != null) return { ...result, changed };
+    }
+    return { ...result, next: `chromux snapshot ${session} --diff` };
+  }
+
+  if (routePath === '/drag' && method === 'POST') {
+    const { session, from, to, mode = 'auto' } = body;
+    if (!session) throw httpErr(400, 'session required');
+    if (!['auto', 'pointer', 'html5'].includes(mode)) throw httpErr(400, 'drag mode must be auto, pointer, or html5');
+    const steps = Math.min(100, Math.max(2, Number(body.steps) || 12));
+    const holdMs = Math.min(2000, Math.max(0, Number(body.holdMs) || 100));
+    const s = getSession(sessions, session);
+    touchSession(s);
+    await s.cdp.send('Page.bringToFront', {});
+    const usesImageSpace = from?.space === 'image' || to?.space === 'image';
+    const coordinateSpace = usesImageSpace ? s.lastImageCoordinateSpace : null;
+    const mixedSelectorCoordinates = Boolean(from?.selector) !== Boolean(to?.selector);
+    const resolveOptions = { scrollIntoView: !mixedSelectorCoordinates };
+    let start = await resolveActionTarget(s.cdp, from, 'Drag source', coordinateSpace, resolveOptions);
+    let end = await resolveActionTarget(s.cdp, to, 'Drag destination', start.coordinateSpace, resolveOptions);
+    // Resolving a selector may scroll. Refresh both selector geometries without
+    // further scrolling so stale pre-scroll coordinates can never be dispatched.
+    if (from?.selector) {
+      start = await resolveActionTarget(s.cdp, from, 'Drag source', start.coordinateSpace, { scrollIntoView: false });
+    }
+    if (to?.selector) {
+      end = await resolveActionTarget(s.cdp, to, 'Drag destination', end.coordinateSpace, { scrollIntoView: false });
+    }
+    const selectedMode = mode === 'auto' ? (start.geometry?.draggable ? 'html5' : 'pointer') : mode;
+    if (selectedMode === 'html5') await dispatchHtml5Drag(s.cdp, start, end, steps, holdMs);
+    else await dispatchPointerDrag(s.cdp, start, end, steps, holdMs);
+    await sleep(150);
+    const result = {
+      dragged: {
+        from: start.target,
+        to: end.target,
+        mode: selectedMode,
+        steps,
+        syntheticFallback: false,
+      },
+      ...(start.coordinateSpace || end.coordinateSpace
+        ? { coordinateSpace: start.coordinateSpace || end.coordinateSpace }
+        : {}),
+    };
+    const verifyMs = resolveVerifyMs(body, settings);
+    if (verifyMs != null) {
+      const changed = await captureVerifyDiff(s, verifyMs);
+      if (changed != null) return { ...result, changed };
+    }
+    return { ...result, next: `chromux snapshot ${session} --diff` };
+  }
+
   if (routePath === '/click' && method === 'POST') {
-    const { session, selector, xy, button = 'left', clicks = 1 } = body;
+    const { session, selector, xy, button = 'left', clicks = 1, space = 'css' } = body;
     if (!session) throw httpErr(400, 'session required');
     const s = getSession(sessions, session);
     touchSession(s);
     const finishClick = actionFinisher(port, sessions, session, s, browserState, settings);
+    const routed = selector ? resolveOopifRef(s, selector) : null;
+    if (routed) {
+      await s.cdp.send('Page.bringToFront', {});
+      const result = await clickOopifRef(s, selector, routed, button, clicks);
+      await sleep(150);
+      const verifyMs = resolveVerifyMs(body, settings);
+      if (verifyMs != null) {
+        const changed = await captureVerifyDiff(s, verifyMs, selector);
+        if (changed != null) return finishClick({ ...result, changed });
+      }
+      return finishClick({ ...result, next: `chromux snapshot ${session} --diff` });
+    }
     if (xy) {
-      const [x, y] = xy.map(Number);
-      if (!Number.isFinite(x) || !Number.isFinite(y)) throw httpErr(400, 'xy must contain numeric x/y');
+      const [inputX, inputY] = xy.map(Number);
+      if (!Number.isFinite(inputX) || !Number.isFinite(inputY)) throw httpErr(400, 'xy must contain numeric x/y');
       const clickCount = Number.isFinite(Number(clicks)) ? Number(clicks) : 1;
       await s.cdp.send('Page.bringToFront', {});
-      const viewport = await s.cdp.send('Runtime.evaluate', {
+      let coordinateSpace = null;
+      let x = inputX;
+      let y = inputY;
+      if (space === 'image') {
+        coordinateSpace = s.lastImageCoordinateSpace;
+        if (!coordinateSpace) ({ coordinateSpace } = await captureCoordinateSpace(s.cdp));
+        ({ x, y } = pointToCss(inputX, inputY, space, coordinateSpace));
+      } else if (space !== 'css') {
+        throw httpErr(400, `Unknown coordinate space "${space}"; use css or image`);
+      }
+      const viewport = coordinateSpace?.cssViewport || (await s.cdp.send('Runtime.evaluate', {
         expression: '({width: window.innerWidth, height: window.innerHeight})',
         returnByValue: true,
-      });
-      const { width, height } = viewport.result?.value || {};
+      })).result?.value;
+      const { width, height } = viewport || {};
       if (x < 0 || y < 0 || x >= width || y >= height) {
         throw httpErr(400, `xy outside viewport: [${x}, ${y}] not within ${width}x${height}`);
       }
       await s.cdp.send('Input.dispatchMouseEvent', {
-        type: 'mousePressed', x, y, button, clickCount,
+        type: 'mousePressed', x, y, button, buttons: mouseButtonMask(button), clickCount, pointerType: 'mouse',
       });
       await s.cdp.send('Input.dispatchMouseEvent', {
-        type: 'mouseReleased', x, y, button, clickCount,
+        type: 'mouseReleased', x, y, button, buttons: 0, clickCount, pointerType: 'mouse',
       });
       await sleep(100);
       const xyVerifyMs = resolveVerifyMs(body, settings);
+      const clicked = {
+        xy: [inputX, inputY],
+        space,
+        css: [x, y],
+        button,
+        clicks: clickCount,
+      };
       if (xyVerifyMs != null) {
         const changed = await captureVerifyDiff(s, xyVerifyMs);
-        if (changed != null) return finishClick({ clicked: { xy: [x, y], button, clicks: clickCount }, changed });
+        if (changed != null) return finishClick({ clicked, ...(coordinateSpace ? { coordinateSpace } : {}), changed });
       }
-      return finishClick({ clicked: { xy: [x, y], button, clicks: clickCount }, next: `chromux snapshot ${session} --diff` });
+      return finishClick({ clicked, ...(coordinateSpace ? { coordinateSpace } : {}), next: `chromux snapshot ${session} --diff` });
     }
     if (!selector && !body.text) throw httpErr(400, 'selector, text, or xy required');
     // --text fallback: resolve by visible label when @refs went stale after a
@@ -3179,6 +4105,9 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
           x,
           y,
           hit: describe(hit),
+          opaqueFrame: /^(IFRAME|FRAME)$/.test(el.tagName) && (() => {
+            try { return !el.contentDocument; } catch { return true; }
+          })(),
         };
       })(${JSON.stringify(targetLabel)})`,
       returnByValue: true, awaitPromise: false,
@@ -3193,13 +4122,17 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     if (point) {
       const clickCount = Number.isFinite(Number(clicks)) ? Number(clicks) : 1;
       await s.cdp.send('Input.dispatchMouseEvent', {
-        type: 'mouseMoved', x: point.x, y: point.y, button: 'none',
+        type: 'mouseMoved', x: point.x, y: point.y, button: 'none', pointerType: 'mouse',
+      });
+      // Entering an OOPIF can require one renderer turn before Chrome routes
+      // the following press into the child. Settle the move instead of
+      // duplicating the click, which could trigger the child control twice.
+      if (point.opaqueFrame) await sleep(100);
+      await s.cdp.send('Input.dispatchMouseEvent', {
+        type: 'mousePressed', x: point.x, y: point.y, button, buttons: mouseButtonMask(button), clickCount, pointerType: 'mouse',
       });
       await s.cdp.send('Input.dispatchMouseEvent', {
-        type: 'mousePressed', x: point.x, y: point.y, button, clickCount,
-      });
-      await s.cdp.send('Input.dispatchMouseEvent', {
-        type: 'mouseReleased', x: point.x, y: point.y, button, clickCount,
+        type: 'mouseReleased', x: point.x, y: point.y, button, buttons: 0, clickCount, pointerType: 'mouse',
       });
     }
     await sleep(500);
@@ -3217,6 +4150,18 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     const s = getSession(sessions, session);
     touchSession(s);
     const actionStart = Date.now();
+    const routed = selector ? resolveOopifRef(s, selector) : null;
+    if (routed) {
+      if (Array.isArray(files) && files.length) throw httpErr(400, 'OOPIF file fill is not supported');
+      if (body.pick != null) throw httpErr(400, 'OOPIF fill --pick is not supported; use fill and a fresh snapshot');
+      const result = await fillOopifRef(s, selector, routed, text);
+      const verifyMs = resolveVerifyMs(body, settings);
+      if (verifyMs != null) {
+        const changed = await captureVerifyDiff(s, verifyMs, selector);
+        if (changed != null) return withDialogNote(s, actionStart, { ...result, changed });
+      }
+      return withDialogNote(s, actionStart, { ...result, next: `chromux snapshot ${session} --diff` });
+    }
     const sel = refToSelector(selector);
     // File upload path: resolve the input element to an objectId and hand the
     // local paths to Chrome via DOM.setFileInputFiles (no synthetic dialogs).
@@ -3261,11 +4206,19 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
         ${DEEP_QUERY_JS}
         const el = deepQuery(sel);
         if (!el) throw new Error('Element not found: ' + sel);
-        if (!('value' in el)) throw new Error('Element is not fillable: ' + sel);
         el.focus();
         // Constructors and prototypes must come from the element's own realm,
         // or elements inside same-origin iframes fail instanceof/setter paths.
         const view = el.ownerDocument.defaultView || window;
+        if (el.isContentEditable) {
+          const selection = view.getSelection();
+          const range = el.ownerDocument.createRange();
+          range.selectNodeContents(el);
+          selection.removeAllRanges();
+          selection.addRange(range);
+          return { contenteditable: true };
+        }
+        if (!('value' in el)) throw new Error('Element is not fillable: ' + sel);
         if (el.tagName === 'SELECT') {
           const opts = Array.from(el.options);
           const match = opts.find(o => o.value === txt)
@@ -3309,12 +4262,33 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
       if (wantsPick) await cleanupPickMarks(s);
       throw httpErr(400, (r.exceptionDetails.exception?.description || 'fill failed').split('\n')[0]);
     }
+    let fillDetails = {};
+    if (r.result?.value?.contenteditable) {
+      await s.cdp.send('Page.bringToFront', {});
+      await s.cdp.send('Input.insertText', { text });
+      const observed = await s.cdp.send('Runtime.evaluate', {
+        expression: `((sel) => {
+          ${DEEP_QUERY_JS}
+          const el = deepQuery(sel);
+          if (!el || !el.isContentEditable) throw new Error('Contenteditable target changed during fill: ' + sel);
+          return { observedText: el.innerText, contenteditable: true };
+        })(${JSON.stringify(sel)})`,
+        returnByValue: true,
+      });
+      if (observed.exceptionDetails) {
+        throw httpErr(400, (observed.exceptionDetails.exception?.description || 'contenteditable fill verification failed').split('\n')[0]);
+      }
+      fillDetails = observed.result?.value || { contenteditable: true };
+      if (fillDetails.observedText !== text) {
+        throw httpErr(400, `Contenteditable fill was rejected: expected ${JSON.stringify(text)}, observed ${JSON.stringify(fillDetails.observedText ?? '')}`);
+      }
+    }
     let picked = null;
     let pickEffect = null;
     if (wantsPick) ({ picked, pickEffect } = await pickSuggestion(s, sel, selector, text, body));
     const verifyMs = resolveVerifyMs(body, settings);
     const buildResult = (extra) => {
-      const result = { filled: selector, text, ...extra };
+      const result = { filled: selector, text, ...fillDetails, ...extra };
       if (picked != null) {
         result.picked = picked;
         if (pickEffect) result.pickEffect = pickEffect;
@@ -3334,7 +4308,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     const s = getSession(sessions, session);
     touchSession(s);
     await s.cdp.send('Page.bringToFront', {});
-    await s.cdp.send('Input.insertText', { text });
+    await typeFocusedText(s.cdp, text);
     const verifyMs = resolveVerifyMs(body, settings);
     if (verifyMs != null) {
       const changed = await captureVerifyDiff(s, verifyMs);
@@ -3448,26 +4422,40 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     const needle = isTextWait ? text : selector;
     if (!needle) throw httpErr(400, isTextWait ? 'text required' : 'selector required');
     const waitGone = !isTextWait && body.gone === true;
+    const routed = !isTextWait ? resolveOopifRef(s, selector) : null;
     let lastError = null;
     while (Date.now() <= deadline) {
       const expression = isTextWait
         ? textIncludesExpression(needle)
         : waitGone
-          ? selectorGoneExpression(needle)
-          : selectorVisibleExpression(needle);
-      const r = await s.cdp.send('Runtime.evaluate', {
-        expression,
-        returnByValue: true,
-      }, Math.min(timeout + 1000, 30000));
-      if (r.exceptionDetails) {
-        lastError = r.exceptionDetails.exception?.description || r.exceptionDetails.text || 'wait evaluation failed';
-        break;
+          ? selectorGoneExpression(routed?.selector || needle)
+          : selectorVisibleExpression(routed?.selector || needle);
+      const targets = routed
+        ? [routed.child]
+        : isTextWait && s.oopif?.enabled
+          ? [null, ...s.oopif.children.values()]
+          : [null];
+      let matched = false;
+      for (const child of targets) {
+        if (child) await child.ready;
+        const r = await s.cdp.send('Runtime.evaluate', {
+          expression,
+          returnByValue: true,
+        }, Math.min(timeout + 1000, 30000), child?.sessionId || null);
+        if (r.exceptionDetails) {
+          lastError = r.exceptionDetails.exception?.description || r.exceptionDetails.text || 'wait evaluation failed';
+          continue;
+        }
+        if (r.result?.value === true) {
+          matched = true;
+          break;
+        }
       }
-      if (r.result?.value === true) {
-        if (isTextWait) return { foundText: needle, timeoutMs: timeout };
+      if (matched) {
+        if (isTextWait) return { foundText: needle, timeoutMs: timeout, ...(s.oopif?.enabled ? { searchedOopif: true } : {}) };
         return waitGone
-          ? { goneSelector: needle, timeoutMs: timeout }
-          : { foundSelector: needle, timeoutMs: timeout };
+          ? { goneSelector: needle, timeoutMs: timeout, ...(routed ? { frame: oopifNamespace(routed.child) } : {}) }
+          : { foundSelector: needle, timeoutMs: timeout, ...(routed ? { frame: oopifNamespace(routed.child) } : {}) };
       }
       await sleep(100);
     }
@@ -3568,25 +4556,100 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
   }
 
   if (routePath === '/screenshot' && method === 'POST') {
-    const { session, path: savePath } = body;
+    const { session, path: savePath, region, ref, space = 'css' } = body;
     const s = getSession(sessions, session);
     touchSession(s);
-    const r = await s.cdp.send('Page.captureScreenshot', { format: 'png' });
-    const p = savePath || `/tmp/chromux-${session}-${Date.now()}.png`;
-    const resolved = path.resolve(p);
-    const realResolved = fs.realpathSync(path.dirname(resolved)) + path.sep + path.basename(resolved);
-    const allowedBases = ['/tmp', '/private/tmp', os.tmpdir(), os.homedir()];
-    if (!allowedBases.some(base => pathWithinBase(realResolved, base))) {
-      throw httpErr(400, `Screenshot path not allowed: ${resolved}`);
+    if (isHeadless) await s.cdp.send('Page.bringToFront');
+    let captured = null;
+    let inputCoordinateSpace = null;
+    let output = null;
+    let crop = null;
+    if (region || ref) {
+      if (region && ref) throw httpErr(400, 'Use either screenshot --region or --ref, not both');
+      let cssRect;
+      if (ref) {
+        cssRect = await resolveDeepElementRect(s.cdp, ref, 'Screenshot');
+        // Ref resolution may scroll a reachable offscreen element into view.
+        // Capture viewport and scroll metadata only after that movement.
+        captured = await captureCoordinateSpace(s.cdp);
+      } else {
+        if (space === 'image') inputCoordinateSpace = s.lastImageCoordinateSpace;
+        captured = await captureCoordinateSpace(s.cdp);
+        const values = region.map(Number);
+        if (values.length !== 4 || values.some(value => !Number.isFinite(value))) {
+          throw httpErr(400, 'region must contain numeric x, y, width, and height');
+        }
+        let [x, y, width, height] = values;
+        if (width <= 0 || height <= 0) throw httpErr(400, 'screenshot region width and height must be positive');
+        if (space === 'image') {
+          const sourceSpace = inputCoordinateSpace || captured.coordinateSpace;
+          const start = pointToCss(x, y, space, sourceSpace);
+          const end = pointToCss(x + width - 1, y + height - 1, space, sourceSpace);
+          x = start.x;
+          y = start.y;
+          width = end.x - start.x + sourceSpace.imageToCss.scaleX;
+          height = end.y - start.y + sourceSpace.imageToCss.scaleY;
+        } else if (space !== 'css') {
+          throw httpErr(400, `Unknown coordinate space "${space}"; use css or image`);
+        }
+        cssRect = { x, y, width, height };
+      }
+      const vv = captured.coordinateSpace.visualViewport;
+      const left = Math.max(vv.offsetLeft, cssRect.x);
+      const top = Math.max(vv.offsetTop, cssRect.y);
+      const right = Math.min(vv.offsetLeft + vv.width, cssRect.x + cssRect.width);
+      const bottom = Math.min(vv.offsetTop + vv.height, cssRect.y + cssRect.height);
+      if (right <= left || bottom <= top) throw httpErr(400, 'Screenshot crop is outside the visible viewport');
+      const visibleRect = { x: left, y: top, width: right - left, height: bottom - top };
+      const scroll = captured.coordinateSpace.scroll;
+      const clipped = await s.cdp.send('Page.captureScreenshot', {
+        format: 'png',
+        clip: {
+          x: scroll.x + visibleRect.x,
+          y: scroll.y + visibleRect.y,
+          width: visibleRect.width,
+          height: visibleRect.height,
+          scale: 1,
+        },
+      }, 30000);
+      output = Buffer.from(clipped.data, 'base64');
+      crop = {
+        source: ref ? 'ref' : 'region',
+        ...(ref ? { ref } : { requested: region, space }),
+        cssRect: visibleRect,
+        clipped: visibleRect.x !== cssRect.x || visibleRect.y !== cssRect.y
+          || visibleRect.width !== cssRect.width || visibleRect.height !== cssRect.height,
+      };
+    } else {
+      captured = await captureCoordinateSpace(s.cdp);
+      output = captured.buffer;
     }
-    fs.writeFileSync(resolved, Buffer.from(r.data, 'base64'));
-    return { path: resolved };
+    const p = savePath || `/tmp/chromux-${session}-${Date.now()}.png`;
+    let resolved;
+    try {
+      resolved = resolveSafeArtifactPath(p, 'Screenshot');
+    } catch (error) {
+      throw httpErr(400, error.message);
+    }
+    fs.writeFileSync(resolved, output);
+    const image = pngDimensions(output);
+    const coordinateSpace = crop
+      ? mapImageCoordinateSpace(captured.coordinateSpace, image, crop.cssRect, crop.source)
+      : captured.coordinateSpace;
+    s.lastImageCoordinateSpace = coordinateSpace;
+    return {
+      path: resolved,
+      image,
+      coordinateSpace,
+      ...(crop ? { crop: { ...crop, image } } : {}),
+    };
   }
 
   if (routePath === '/scroll' && method === 'POST') {
     const { session, direction } = body;
     const s = getSession(sessions, session);
     touchSession(s);
+    s.lastImageCoordinateSpace = null;
     const delta = direction === 'up' ? -500 : 500;
     await s.cdp.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: 300, y: 300, deltaX: 0, deltaY: delta });
     await sleep(300);
@@ -3604,12 +4667,16 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     const s = sessions.get(session);
     let knowledgeHint = null;
     let pageInfo = null;
+    let cleanup = null;
     if (s) {
       try {
         pageInfo = await readPageInfo(port, s.targetId, s.cdp, settings);
         knowledgeHint = siteKnowledgeHintForUrl(pageInfo.url);
       } catch {}
-      s.cdp.close();
+      const oopifBefore = s.oopif?.enabled ? oopifSummary(s) : null;
+      const transport = await s.cdp.closeAndWait();
+      const oopifAfter = disposeOopifRouting(s);
+      if (oopifBefore) cleanup = { oopif: { before: oopifBefore, after: oopifAfter }, transport };
       await closeTab(port, s.targetId).catch(() => {});
       sessions.delete(session);
     }
@@ -3617,6 +4684,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     if (pageInfo?.url) result.url = pageInfo.url;
     if (pageInfo?.title) result.title = pageInfo.title;
     if (knowledgeHint) result.knowledgeHint = knowledgeHint;
+    if (cleanup) result.cleanup = cleanup;
     return result;
   }
 
@@ -3763,7 +4831,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     return { stopping: true };
   }
 
-  throw httpErr(404, `Not found: ${method} ${routePath}. Known routes: POST /open /run /eval /cdp /click /fill /type /press /screenshot /scroll /scroll-until /wait /wait-for-text /console /network /stop, GET /health /list /snapshot/<session> /show/<session>, DELETE /session/<session>`);
+  throw httpErr(404, `Not found: ${method} ${routePath}. Known routes: POST /open /run /eval /cdp /click /hover /drag /fill /type /press /screenshot /scroll /scroll-until /wait /wait-for-text /console /network /stop, GET /health /list /snapshot/<session> /show/<session>, DELETE /session/<session>`);
 }
 
 // ============================================================
@@ -3860,6 +4928,7 @@ function parseOpenArgs(args) {
   const out = [];
   let background = openBackgroundDefault();
   let dialog = null;
+  let oopif = false;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === '--background' || arg === '--no-focus') {
@@ -3868,6 +4937,10 @@ function parseOpenArgs(args) {
     }
     if (arg === '--foreground') {
       background = false;
+      continue;
+    }
+    if (arg === '--oopif') {
+      oopif = true;
       continue;
     }
     if (arg === '--dialog') {
@@ -3884,6 +4957,7 @@ function parseOpenArgs(args) {
   }
   const parsed = { session: out[0], url: out[1], background };
   if (dialog) parsed.dialog = dialog;
+  if (oopif) parsed.oopif = true;
   return parsed;
 }
 
@@ -5026,6 +6100,18 @@ function takeVerifyFlag(args) {
   return ms ?? 300;
 }
 
+function takeCoordinateSpace(args) {
+  const idx = args.indexOf('--space');
+  if (idx === -1) return 'css';
+  const space = args[idx + 1];
+  if (space !== 'css' && space !== 'image') {
+    console.error('Invalid --space. Use css or image.');
+    process.exit(1);
+  }
+  args.splice(idx, 2);
+  return space;
+}
+
 // On-demand deep guides: the main SKILL.md is paid as input on every agent
 // turn, so topic depth lives here and loads only when a task needs it.
 function cmdSkillTopic(args) {
@@ -5052,6 +6138,7 @@ function cmdSkillTopic(args) {
 
 async function cmdClick(args, sock) {
   const verify = takeVerifyFlag(args);
+  const space = takeCoordinateSpace(args);
   const session = args[0];
   if (!session) { console.error('Usage: chromux click <session> (@ref|selector|--text "label"|--xy X Y) [--verify [MS]]'); process.exit(1); }
   const textIdx = args.indexOf('--text');
@@ -5072,10 +6159,99 @@ async function cmdClick(args, sock) {
       xy: [x, y],
       button: buttonIdx >= 0 ? args[buttonIdx + 1] : 'left',
       clicks: clicksIdx >= 0 ? parseInt(args[clicksIdx + 1]) : 1,
+      space,
       verify,
     }, sock);
   }
   return cliReq('POST', '/click', { session, selector: args[1], verify }, sock);
+}
+
+function coordinateTargetFromArgs(args, xyFlag, selectorValue, space) {
+  const xyIdx = args.indexOf(xyFlag);
+  if (xyIdx >= 0) {
+    const x = Number(args[xyIdx + 1]);
+    const y = Number(args[xyIdx + 2]);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      console.error(`${xyFlag} requires numeric X Y`);
+      process.exit(1);
+    }
+    return { xy: [x, y], space };
+  }
+  return selectorValue ? { selector: selectorValue } : null;
+}
+
+async function cmdHover(args, sock) {
+  const verify = takeVerifyFlag(args);
+  const space = takeCoordinateSpace(args);
+  const session = args[0];
+  const target = coordinateTargetFromArgs(args, '--xy', args[1], space);
+  if (!session || !target) {
+    console.error('Usage: chromux hover <session> (@ref|selector|--xy X Y) [--space css|image] [--verify [MS]]');
+    process.exit(1);
+  }
+  return cliReq('POST', '/hover', { session, ...target, verify }, sock);
+}
+
+async function cmdDrag(args, sock) {
+  const verify = takeVerifyFlag(args);
+  const space = takeCoordinateSpace(args);
+  const session = args[0];
+  const from = coordinateTargetFromArgs(args, '--xy', args[1], space);
+  const toSelectorIdx = args.indexOf('--to');
+  const to = coordinateTargetFromArgs(
+    args,
+    '--to-xy',
+    toSelectorIdx >= 0 ? args[toSelectorIdx + 1] : null,
+    space,
+  );
+  const modeIdx = args.indexOf('--drag-mode');
+  const mode = modeIdx >= 0 ? args[modeIdx + 1] : 'auto';
+  const stepsIdx = args.indexOf('--steps');
+  const holdIdx = args.indexOf('--hold-ms');
+  const steps = stepsIdx >= 0 ? Number(args[stepsIdx + 1]) : undefined;
+  const holdMs = holdIdx >= 0 ? Number(args[holdIdx + 1]) : undefined;
+  if (!session || !from || !to || !['auto', 'pointer', 'html5'].includes(mode)
+    || (steps != null && !Number.isFinite(steps)) || (holdMs != null && !Number.isFinite(holdMs))) {
+    console.error('Usage: chromux drag <session> (@ref|selector|--xy X Y) (--to @ref|selector|--to-xy X Y) [--space css|image] [--drag-mode auto|pointer|html5] [--steps N] [--hold-ms MS] [--verify [MS]]');
+    process.exit(1);
+  }
+  return cliReq('POST', '/drag', { session, from, to, mode, steps, holdMs, verify }, sock);
+}
+
+async function cmdScreenshot(args, sock) {
+  const space = takeCoordinateSpace(args);
+  const session = args[0];
+  if (!session) {
+    console.error('Usage: chromux screenshot <session> [path] [--region X Y WIDTH HEIGHT | --ref @N] [--space css|image]');
+    process.exit(1);
+  }
+  const refIdx = args.indexOf('--ref');
+  const ref = refIdx >= 0 ? args[refIdx + 1] : null;
+  if (refIdx >= 0) {
+    if (!ref) { console.error('--ref requires @N or a selector'); process.exit(1); }
+    args.splice(refIdx, 2);
+  }
+  const regionIdx = args.indexOf('--region');
+  let region = null;
+  if (regionIdx >= 0) {
+    region = args.slice(regionIdx + 1, regionIdx + 5).map(Number);
+    if (region.length !== 4 || region.some(value => !Number.isFinite(value))) {
+      console.error('--region requires numeric X Y WIDTH HEIGHT');
+      process.exit(1);
+    }
+    args.splice(regionIdx, 5);
+  }
+  if (ref && region) {
+    console.error('Use either --region or --ref, not both.');
+    process.exit(1);
+  }
+  return cliReq('POST', '/screenshot', {
+    session,
+    path: args[1] ? path.resolve(args[1]) : undefined,
+    ref,
+    region,
+    space,
+  }, sock, defaultCliTimeoutMs() + 5000);
 }
 
 async function cmdPress(args, sock) {
@@ -5415,7 +6591,7 @@ async function runCli(cmd, args) {
   // Tab commands (need daemon)
   const profile = getProfile();
   const tabCommands = new Set([
-    'show', 'open', 'snapshot', 'cdp', 'run', 'batch', 'click', 'fill', 'type',
+    'show', 'open', 'snapshot', 'cdp', 'run', 'batch', 'click', 'hover', 'drag', 'fill', 'type',
     'press', 'download', 'wait-for-text', 'wait-for-selector', 'eval',
     'scroll-until', 'screenshot', 'scroll', 'wait', 'watch', 'console',
     'network', 'close', 'list', 'stop',
@@ -5460,6 +6636,8 @@ async function runCli(cmd, args) {
       run:        () => cmdRun(args, sock),
       batch:      () => cmdBatch(args, sock),
       click:      () => cmdClick(args, sock),
+      hover:      () => cmdHover(args, sock),
+      drag:       () => cmdDrag(args, sock),
       fill:       () => {
         const verify = takeVerifyFlag(args);
         // fill <s> <sel> "text" --pick "label" types then chooses the
@@ -5498,7 +6676,7 @@ async function runCli(cmd, args) {
       'wait-for-selector': () => cmdWaitFor(args, sock, 'selector'),
       eval:       () => cmdEval(args, sock),
       'scroll-until': () => cmdScrollUntil(args, sock),
-      screenshot: () => cliReq('POST', '/screenshot', { session: args[0], path: args[1] }, sock),
+      screenshot: () => cmdScreenshot(args, sock),
       scroll:     () => cliReq('POST', '/scroll', { session: args[0], direction: args[1] || 'down' }, sock),
       wait:       () => cliReq('POST', '/wait', { session: args[0], ms: parseInt(args[1]) || 1000 }, sock),
       watch:      () => cmdWatch(args, sock),
@@ -6032,6 +7210,7 @@ The core surface:
   chromux open <s> <u> --dialog accept|dismiss   JS dialog auto-policy for the session
                                      (default: dismiss; beforeunload is always accepted;
                                      handled dialogs surface as "dialog" in action responses)
+  chromux open <s> <u> --oopif     Opt in to cross-origin child target refs and routing
   chromux run <session> -            Multi-step async JS with cdp/js/page/waitFor/assertPage helpers
                                      (waitFor accepts [fallback, candidates] for selector/text waits)
   chromux run <session> --page-file F  Run a JS file directly in the page (no shell escaping)
@@ -6067,19 +7246,30 @@ Convenience shortcuts:
   chromux snapshot <s> --clickable   Force behavior-based clickable detection (cursor/onclick
                                      divs); auto-enabled when a page has no standard elements
                                      or when clickable candidates are dense relative to them
-  Snapshots, clicks, fills, and waits pierce same-origin iframes and open
-                                     shadow DOM; cross-origin frames are marked as unreachable
+  Snapshots, clicks, fills, and waits pierce same-origin iframes and open shadow DOM.
+                                     Cross-origin frames expose an origin-only opaque ref and CSS
+                                     rect; --oopif adds namespaced child refs such as @f1g1:2
+                                     for snapshot/click/fill/waits. Navigation, detach, or crash invalidates refs.
+                                     list reports crashedTotal; close reports drained child/CDP cleanup.
+                                     --oopif uses child-target attachment and remains opt-in.
   chromux click <session> @<ref>     Click by ref number
   chromux click <session> "selector" Click by CSS selector
   chromux click <session> --text "label"   Click by visible label when refs went stale
                                      (ambiguous text fails and lists the candidates)
-  chromux click <session> --xy X Y   Click by viewport coordinates
+  chromux click <session> --xy X Y   Click by CSS viewport coordinates (backward compatible)
+  chromux click <s> --xy X Y --space image   Click the most recent screenshot's image pixels
+  chromux hover <s> (@ref|SEL|--xy X Y) [--space css|image]   Move the real pointer
+  chromux drag <s> (@ref|SEL|--xy X Y) (--to @ref|SEL|--to-xy X Y)
+                                     [--space css|image] [--drag-mode auto|pointer|html5]
   A click that opens a popup/new tab adopts it automatically: the response
                                      carries "newSession" with the adopted session name
   click/fill/type/press verify by default: the response carries the post-action
                                      diff ("changed"). --verify MS tunes the settle wait,
                                      --no-verify skips it (crawl mode skips automatically)
-  chromux fill <session> @<ref> "t"  Fill input field (native <select>: matches option value/label)
+  chromux fill <session> @<ref> "t"  Replace input or contenteditable text
+                                     (native <select>: matches option value/label)
+                                     contenteditable replacement is standards-based; verify custom
+                                     editors, mentions, slash commands, and IME flows separately
   chromux fill <s> @<ref> "se" --pick "Seoul"   Type, wait for the autocomplete popup,
                                      and choose the matching suggestion in one call
   chromux fill <s> @<ref> --file p   Set a file input for upload (repeat --file for multiple)
@@ -6092,7 +7282,13 @@ Convenience shortcuts:
   chromux wait-for-selector <s> SEL --gone   Wait until a selector disappears
   run waitFor also accepts {kind:'gone'} and {kind:'network-idle', idleMs:500}
                                      for deterministic waits without sleep()
-  chromux screenshot <session> [p]   Take PNG screenshot
+  chromux screenshot <session> [p]   Take PNG with measured CSS/image coordinate metadata
+  chromux screenshot <s> [p] --ref @N|SEL   Crop a visible element
+  chromux screenshot <s> [p] --region X Y W H [--space css|image]   Crop a visible region
+  Screenshot mappings describe the returned PNG; crop image coordinates start at local [0,0].
+                                     Image actions use the session's most recent screenshot mapping.
+                                     Do not infer mappings from DPR alone.
+  Canvas objects have no DOM refs: inspect a crop, then hover/click/drag in css or image space.
   chromux show <session>             Open DevTools in browser (inspect live tab)
 
 Watch / debug:
@@ -6135,6 +7331,7 @@ Deep guides (on demand, keeps per-turn skill text small):
   chromux skill forms                Forms, autocomplete --pick, uploads, wizards
   chromux skill extraction           Grep/diff, tables, pagination, saved scripts
   chromux skill recovery             Stale refs, dialogs, popups, human login handoff
+  chromux skill visual               DPR-safe screenshots, canvas, hover/drag, OOPIF tiers
 
 Policy:
   New browser actions should be expressed with run or cdp before adding verbs.

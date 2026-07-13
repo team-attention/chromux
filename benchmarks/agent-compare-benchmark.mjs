@@ -32,6 +32,15 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { startFixtureServer, closeFixtureServer, nonBrowserAccess, orderCode, navCode, stepValue, feedStats, inventoryStats, signupCode, shopProduct, shopCode, slowOrderCode, embedCode } from './fixtures.mjs';
 import { cloneMiniwob, startMiniwobServer, miniwobSucceeded } from './miniwob.mjs';
+import {
+  WEBGAMES_BENCHMARK_TASKS,
+  WEBGAMES_VISUAL_COMMANDS,
+  prepareWebgames,
+  startWebgamesServer,
+  webgamesCommandAllowed,
+  webgamesPasswordMatches,
+  webgamesSucceeded,
+} from './webgames.mjs';
 
 const MODULE_DIR = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const CHROMUX = path.join(MODULE_DIR, 'chromux.mjs');
@@ -127,7 +136,16 @@ function buildTools(runRoot, toolsDir) {
       bin: 'chromux',
       stateDir: path.join(runRoot, 'state-chromux'),
       setupShim(shimDir) {
-        makeShim(shimDir, 'chromux', `exec "${process.execPath}" "${CHROMUX}" "$@"`);
+        makeShim(shimDir, 'chromux', `if [ "\${CHROMUX_BENCH_VISUAL_ONLY:-0}" = "1" ]; then
+  case "$1" in
+    ${WEBGAMES_VISUAL_COMMANDS.join('|')}) ;;
+    *)
+      printf '%s\n' "Visual benchmark policy: chromux $1 is disabled; use screenshot and browser input actions." >&2
+      exit 64
+      ;;
+  esac
+fi
+exec "${process.execPath}" "${CHROMUX}" "$@"`);
       },
       env() {
         return {
@@ -312,6 +330,42 @@ function buildTasks() {
       },
     },
     {
+      id: 'webgames-canvas-target',
+      kind: 'webgames',
+      upstreamTaskId: 'canvas-catch-easy',
+      category: 'canvas-target',
+      mission: base => `Open ${base}/canvas-catch-easy and complete the upstream WebGames Canvas Catch (Easy) challenge by dragging the blue circle into the orange target. Use screenshots and browser input actions only; do not inspect source code, scripts, runtime variables, storage, or network responses for the answer. Report the password shown only after the page records success.\nANSWER JSON shape: {"password": "<password shown after success>"}`,
+      grade({ answer, fixture }) {
+        if (!webgamesSucceeded(fixture.state, 'canvas-catch-easy')) return { ok: false, reason: 'WebGames recorded no canvas-catch-easy completion' };
+        if (!webgamesPasswordMatches('canvas-catch-easy', answer?.password)) return { ok: false, reason: 'reported password did not match the pinned canvas-catch-easy completion password' };
+        return { ok: true };
+      },
+    },
+    {
+      id: 'webgames-drag-drop',
+      kind: 'webgames',
+      upstreamTaskId: 'map-panner-easy',
+      category: 'drag-drop',
+      mission: base => `Open ${base}/map-panner-easy and complete the upstream WebGames Map Panner (Easy) challenge by dragging the map until the treasure is found. Use screenshots and browser input actions only; do not inspect source code, scripts, runtime variables, storage, or network responses for the answer. Report the password shown only after the page records success.\nANSWER JSON shape: {"password": "<password shown after success>"}`,
+      grade({ answer, fixture }) {
+        if (!webgamesSucceeded(fixture.state, 'map-panner-easy')) return { ok: false, reason: 'WebGames recorded no map-panner-easy completion' };
+        if (!webgamesPasswordMatches('map-panner-easy', answer?.password)) return { ok: false, reason: 'reported password did not match the pinned map-panner-easy completion password' };
+        return { ok: true };
+      },
+    },
+    {
+      id: 'webgames-slider',
+      kind: 'webgames',
+      upstreamTaskId: 'slider-symphony-easy',
+      category: 'slider',
+      mission: base => `Open ${base}/slider-symphony-easy and complete the upstream WebGames Slider Symphony (Easy) challenge by aligning both moving boxes with their dashed targets. Adjust each range slider with pointer drags, using screenshots to compare the solid box and dashed target positions. Do not use fill on range inputs. Use screenshots and browser input actions only; do not inspect source code, scripts, runtime variables, storage, or network responses for the answer. Report the password shown only after the page records success.\nANSWER JSON shape: {"password": "<password shown after success>"}`,
+      grade({ answer, fixture }) {
+        if (!webgamesSucceeded(fixture.state, 'slider-symphony-easy')) return { ok: false, reason: 'WebGames recorded no slider-symphony-easy completion' };
+        if (!webgamesPasswordMatches('slider-symphony-easy', answer?.password)) return { ok: false, reason: 'reported password did not match the pinned slider-symphony-easy completion password' };
+        return { ok: true };
+      },
+    },
+    {
       id: 'miniwob-email-inbox',
       kind: 'miniwob',
       path: '/miniwob/email-inbox.html',
@@ -433,11 +487,16 @@ function buildTasks() {
 // ---------------------------------------------------------------------------
 // Agent session
 
-function missionPrompt(tool, taskText) {
+function missionPrompt(tool, taskText, task) {
+  const visualRule = task.kind === 'webgames'
+    ? `\n- For visual evidence, run \`${tool.bin} screenshot <session>\` without a destination path, then use the Read tool on the returned \`/tmp/chromux-*.png\` path. Read must not be used on source code or benchmark files.
+- Invoke \`${tool.bin}\` directly, one command per Bash call. Do not run \`command -v\`, \`which\`, shell pipelines, command substitutions, or any other shell probe.
+- For this visual benchmark, do not use \`${tool.bin} run\`, \`${tool.bin} cdp\`, or DOM/runtime inspection as a shortcut.`
+    : '';
   return `Complete the following browser task using ONLY the \`${tool.bin}\` CLI (already installed and on PATH) for all web access. Strict rules:
 - Every page access must go through \`${tool.bin}\`. Do not use curl, wget, fetch, or any other HTTP client or browser tool.
 - Do not answer from memory: every reported fact must come from what you observed through \`${tool.bin}\` in this session.
-- Work efficiently: prefer the smallest observation that answers the question, and avoid re-reading whole pages when a targeted check suffices.
+- Work efficiently: prefer the smallest observation that answers the question, and avoid re-reading whole pages when a targeted check suffices.${visualRule}
 
 Task: ${taskText}
 
@@ -464,17 +523,18 @@ function parseAnswer(resultText) {
   return null;
 }
 
-async function runAgentSession({ tool, task, rep, model, maxTurns, timeoutMs, shimDir, skillText, workDir, miniwobRoot }) {
+async function runAgentSession({ tool, task, rep, model, maxTurns, timeoutMs, shimDir, skillText, workDir, miniwobRoot, webgamesRoot, budgetUsd }) {
   const context = {};
   let fixture = null;
   if (task.kind === 'local') fixture = await startFixtureServer();
   if (task.kind === 'miniwob') fixture = await startMiniwobServer(miniwobRoot);
+  if (task.kind === 'webgames') fixture = await startWebgamesServer(webgamesRoot);
   // The fixture-closing finally below only starts after the session runs; a
   // throw from task setup here must not leak the fixture server.
   let prompt;
   try {
     if (task.before) await task.before(context);
-    prompt = missionPrompt(tool, task.mission(fixture ? fixture.baseUrl : null));
+    prompt = missionPrompt(tool, task.mission(fixture ? fixture.baseUrl : null), task);
   } catch (err) {
     if (fixture) await closeFixtureServer(fixture.server);
     throw err;
@@ -484,20 +544,41 @@ async function runAgentSession({ tool, task, rep, model, maxTurns, timeoutMs, sh
     if (key.startsWith('CHROMUX_') || key.startsWith('AGENT_BROWSER_') || key === 'CLAUDE_SESSION_ID') delete env[key];
   }
   Object.assign(env, tool.env(), { PATH: `${shimDir}:${process.env.PATH}` });
+  if (task.kind === 'webgames') env.CHROMUX_BENCH_VISUAL_ONLY = '1';
 
+  const webgamesToolPolicy = task.kind === 'webgames' ? {
+    availableTools: ['Bash', 'Read'],
+    allowedTools: ['Bash(chromux *)', 'Read(//tmp/chromux-*.png)'],
+    permissionMode: 'dontAsk',
+    safeMode: true,
+    sessionPersistence: false,
+  } : null;
   const args = [
     '-p', prompt,
     '--model', model,
     '--output-format', 'json',
+  ];
+  if (webgamesToolPolicy) {
+    args.push(
+      '--tools', webgamesToolPolicy.availableTools.join(','),
+      '--allowedTools', ...webgamesToolPolicy.allowedTools,
+      '--permission-mode', webgamesToolPolicy.permissionMode,
+      '--safe-mode',
+      '--no-session-persistence',
+    );
+  } else {
     // Headless permission model: only Bash is pre-approved; every other tool
     // (WebFetch, WebSearch, MCP, ...) is denied by default in -p mode.
-    '--allowedTools', 'Bash',
+    args.push('--allowedTools', 'Bash');
+  }
+  args.push(
     '--max-turns', String(maxTurns),
     '--setting-sources', '',
     '--strict-mcp-config',
     '--disallowedTools', 'WebFetch', 'WebSearch', 'Task',
     '--append-system-prompt', systemAppend(tool, skillText),
-  ];
+  );
+  if (Number.isFinite(budgetUsd)) args.push('--max-budget-usd', budgetUsd.toFixed(4));
   const sessionStartedAt = Date.now();
   const session = await run('claude', args, { cwd: workDir, env, timeoutMs });
 
@@ -524,6 +605,10 @@ async function runAgentSession({ tool, task, rep, model, maxTurns, timeoutMs, sh
     } : null,
     sessionId: parsed?.session_id ?? null,
     answer: null,
+    upstreamTaskId: task.upstreamTaskId || null,
+    category: task.category || null,
+    toolPolicy: webgamesToolPolicy,
+    permissionDenials: parsed?.permission_denials ?? [],
   };
   if (record.tokens) {
     record.tokens.total = record.tokens.input + record.tokens.output + record.tokens.cacheRead + record.tokens.cacheCreation;
@@ -558,8 +643,13 @@ async function runAgentSession({ tool, task, rep, model, maxTurns, timeoutMs, sh
       if (fixture) record.fixtureOrders = fixture.state.orders || fixture.state.results;
       record.resultTail = String(parsed?.result ?? '').slice(-1500) || null;
     }
-    // Diagnostic only (never affects grading): chromux keeps a local activity
-    // log, so record which CLI commands the agent issued during this session.
+    if (task.kind === 'webgames') {
+      record.machineGradeEvents = fixture.state.completions
+        .filter(event => event.taskId === task.upstreamTaskId)
+        .map(event => ({ taskId: event.taskId, pagePath: event.pagePath, at: event.at }));
+    }
+    // chromux keeps a local activity log, so retain the exact browser command
+    // trace and reject source/runtime shortcuts in visual benchmark sessions.
     const activityFile = tool.env().CHROMUX_HOME
       ? path.join(tool.env().CHROMUX_HOME, 'activity', 'events.jsonl') : null;
     if (activityFile && fs.existsSync(activityFile)) {
@@ -570,6 +660,14 @@ async function runAgentSession({ tool, task, rep, model, maxTurns, timeoutMs, sh
           .map(event => `${event.command} ${(event.args || []).join(' ')}`.trim()
             + (event.error ? ` !! ${String(event.error).slice(0, 120)}` : ''));
       } catch {}
+    }
+    if (task.kind === 'webgames') {
+      const shortcut = (record.commands || []).find(command => !webgamesCommandAllowed(command.split(/\s/, 1)[0]));
+      if (shortcut) {
+        record.ok = false;
+        record.failureKind = 'source-shortcut';
+        record.reason = `disallowed WebGames inspection command: ${shortcut}`;
+      }
     }
   } finally {
     if (fixture) await closeFixtureServer(fixture.server);
@@ -640,6 +738,7 @@ async function main() {
   const outPath = argValue('--out', path.join(os.tmpdir(), `agent-compare-${Date.now()}.json`));
   const onlyTools = argValue('--tools', null)?.split(',').map(s => s.trim());
   const onlyTasks = argValue('--tasks', null)?.split(',').map(s => s.trim());
+  const maxCostArg = argValue('--max-cost-usd', null);
 
   const probe = await run('claude', ['--version'], { timeoutMs: 30_000 });
   if (!probe.ok) {
@@ -652,18 +751,31 @@ async function main() {
   const shimRoot = path.join(runRoot, 'shims');
   fs.mkdirSync(toolsDir, { recursive: true });
 
-  console.error(`[setup] installing pinned competitor CLIs into ${toolsDir} ...`);
-  const install = await run('npm', ['install', '--prefix', toolsDir, 'agent-browser@latest', '@playwright/cli@latest', '--no-audit', '--no-fund'], { timeoutMs: 600_000 });
-  if (!install.ok) {
-    console.error(`npm install for competitor CLIs failed: ${install.stderr.slice(0, 500)}`);
-    process.exit(1);
+  const needsCompetitorInstall = !onlyTools || onlyTools.some(name => name !== 'chromux');
+  let install = { ok: true, durationMs: 0 };
+  if (needsCompetitorInstall) {
+    console.error(`[setup] installing pinned competitor CLIs into ${toolsDir} ...`);
+    install = await run('npm', ['install', '--prefix', toolsDir, 'agent-browser@latest', '@playwright/cli@latest', '--no-audit', '--no-fund'], { timeoutMs: 600_000 });
+    if (!install.ok) {
+      console.error(`npm install for competitor CLIs failed: ${install.stderr.slice(0, 500)}`);
+      process.exit(1);
+    }
+  } else {
+    console.error('[setup] chromux-only run; competitor CLI install skipped');
   }
 
   let tools = buildTools(runRoot, toolsDir);
   if (onlyTools) tools = tools.filter(t => onlyTools.includes(t.name));
   let tasks = buildTasks();
   if (onlyTasks) tasks = tasks.filter(t => onlyTasks.includes(t.id));
+  if (onlyTools && tools.length !== new Set(onlyTools).size) throw new Error(`unknown --tools value in ${onlyTools.join(',')}`);
+  if (onlyTasks && tasks.length !== new Set(onlyTasks).size) throw new Error(`unknown --tasks value in ${onlyTasks.join(',')}`);
   if (smoke && !onlyTasks) tasks = tasks.filter(t => t.id === 'form-order');
+  const webgamesSelected = tasks.some(task => task.kind === 'webgames');
+  const maxCostUsd = maxCostArg === null ? (webgamesSelected ? 5 : null) : Number(maxCostArg);
+  if (maxCostUsd !== null && (!Number.isFinite(maxCostUsd) || maxCostUsd <= 0)) {
+    throw new Error('--max-cost-usd must be a positive number');
+  }
 
   const init = { npmInstallMs: install.durationMs, tools: {} };
   // MiniWoB++ tasks serve pages from a benchmark checkout fetched at run
@@ -680,6 +792,27 @@ async function main() {
       tasks = tasks.filter(t => t.kind !== 'miniwob');
       console.error(`[setup] MiniWoB++ unavailable, skipping those tasks: ${cloned.error}`);
     }
+  }
+  let webgamesRoot = null;
+  if (webgamesSelected) {
+    const selectedMetadata = tasks.filter(task => task.kind === 'webgames').map(task => {
+      const pinned = WEBGAMES_BENCHMARK_TASKS.find(row => row.benchmarkId === task.id);
+      if (!pinned || pinned.upstreamTaskId !== task.upstreamTaskId || pinned.timed) {
+        throw new Error(`WebGames task registration drift for ${task.id}`);
+      }
+      return pinned;
+    });
+    console.error('[setup] fetching and building pinned WebGames checkout ...');
+    const prepared = await prepareWebgames(path.join(runRoot, 'webgames'));
+    webgamesRoot = prepared.distRoot;
+    init.webgames = {
+      repo: prepared.repo,
+      commit: prepared.commit,
+      license: prepared.license,
+      buildMs: prepared.buildMs,
+      tasks: selectedMetadata,
+    };
+    console.error(`[setup] WebGames ready at ${prepared.commit.slice(0, 12)} in ${prepared.buildMs}ms`);
   }
   const skills = {};
   const active = [];
@@ -724,6 +857,10 @@ async function main() {
     }
   }
   console.error(`[plan] ${plan.length} agent sessions (${active.map(t => t.name).join(', ')}) x (${tasks.map(t => t.id).join(', ')}), model=${model}`);
+  const perSessionBudgetUsd = maxCostUsd === null || !plan.length ? null : maxCostUsd / plan.length;
+  if (perSessionBudgetUsd !== null) {
+    console.error(`[plan] cost guard $${maxCostUsd.toFixed(2)} total, $${perSessionBudgetUsd.toFixed(4)} per session`);
+  }
 
   const results = [];
   try {
@@ -740,6 +877,8 @@ async function main() {
         skillText: skills[item.tool.name],
         workDir: item.tool.workDir,
         miniwobRoot,
+        webgamesRoot,
+        budgetUsd: perSessionBudgetUsd,
       });
       results.push(record);
       console.error(`         ${record.ok ? 'PASS' : `FAIL (${record.failureKind})`} in ${(record.durationMs / 1000).toFixed(1)}s, turns=${record.numTurns}, tokens=${record.tokens?.total?.toLocaleString('en-US') ?? '?'}${record.ok ? '' : ` — ${record.reason?.slice(0, 160)}`}`);
@@ -760,6 +899,10 @@ async function main() {
     repsLocal,
     repsExternal,
     smoke,
+    costGuard: maxCostUsd === null ? null : {
+      maxCostUsd,
+      perSessionBudgetUsd: Number(perSessionBudgetUsd.toFixed(4)),
+    },
     platform: `${os.type()} ${os.release()} ${os.arch()}`,
     init,
     summary,
@@ -772,7 +915,11 @@ async function main() {
   console.error(`\n[done] full report with per-session records: ${outPath}`);
   const graded = results.length;
   const passed = results.filter(r => r.ok).length;
-  console.error(`[done] ${passed}/${graded} sessions passed; total cost $${results.reduce((s, r) => s + (r.costUsd ?? 0), 0).toFixed(2)}`);
+  const totalCostUsd = results.reduce((sum, row) => sum + (row.costUsd ?? 0), 0);
+  console.error(`[done] ${passed}/${graded} sessions passed; total cost $${totalCostUsd.toFixed(2)}`);
+  if (webgamesSelected && (passed !== graded || (maxCostUsd !== null && totalCostUsd > maxCostUsd))) {
+    process.exitCode = 1;
+  }
 }
 
 main().catch(err => {

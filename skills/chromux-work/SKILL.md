@@ -55,6 +55,10 @@ uses the same `chromux` command surface.
   `snapshot --interactive` when you only need actionable elements (buttons,
   links, inputs) — it returns a much smaller payload. Reserve `screenshot` for
   visual verification a text snapshot cannot capture.
+- For canvas, range sliders, drag/drop, and other visual-only surfaces, read `chromux skill visual`.
+  Use measured screenshot coordinates with `hover`/`click`/`drag`; never assume screenshot pixels equal CSS units.
+- Default cross-origin frame recon is origin-only geometry.
+  Use `open --oopif` only when the task requires namespaced child refs or reliable child text actions, and refresh the snapshot after child navigation or detach.
 - For parent-controlled shutdown, use `chromux pause <profile>` to reject new
   browser work, then `chromux resume <profile>` before the next wave.
 - Keep work read-only unless the user explicitly asked to mutate state.
@@ -341,13 +345,14 @@ Prefer this order:
 2. `snapshot` for accessible structure and `@ref` handles; add `--interactive`
    when you only need actionable elements and want a smaller payload
 3. `click`, `fill`, `type`, and `press` for visible UI work from fresh refs
-4. `wait-for-text` and `wait-for-selector` after state-changing actions
-5. `run` with `page(...)`, `js(...)`, `waitFor(...)`, `assertPage(...)`, and
+4. `hover` and `drag` for hover-only, pointer-sortable, range, canvas, or native HTML5 drag/drop workflows, with a screenshot when the target lacks a ref
+5. `wait-for-text` and `wait-for-selector` after state-changing actions
+6. `run` with `page(...)`, `js(...)`, `waitFor(...)`, `assertPage(...)`, and
    `--receipt PATH` for DOM extraction, readiness proof, scrolling, and
    repeated collection. It is also the right tool to bundle a multi-step action
    sequence into one fast round-trip.
-6. `cdp` for precise protocol operations
-7. `screenshot` for visual evidence a text snapshot cannot capture
+7. `cdp` for precise protocol operations
+8. `screenshot` for visual evidence a text snapshot cannot capture
 
 Record enough evidence to distinguish:
 - actually verified page content

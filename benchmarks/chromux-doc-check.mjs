@@ -27,9 +27,14 @@ const docs = {
   help: help.stdout,
   readme: read('README.md'),
   benchmark: read('docs/benchmark-2026-07.md'),
+  agentCompare: read('benchmarks/agent-compare-benchmark.mjs'),
+  webgames: read('benchmarks/webgames.mjs'),
   install: read('install.md'),
   chromuxSkill: read('skills/chromux/SKILL.md'),
   workSkill: read('skills/chromux-work/SKILL.md'),
+  formsTopic: read('skills/chromux/topics/forms.md'),
+  recoveryTopic: read('skills/chromux/topics/recovery.md'),
+  visualTopic: read('skills/chromux/topics/visual.md'),
 };
 
 const checks = [];
@@ -53,6 +58,16 @@ assertContains(checks, 'help download verb', docs.help, 'chromux download');
 assertContains(checks, 'help wait gone', docs.help, '--gone');
 assertContains(checks, 'help network idle wait', docs.help, 'network-idle');
 assertContains(checks, 'help frame reach', docs.help, 'same-origin iframes');
+assertContains(checks, 'help image coordinate space', docs.help, '--space image');
+assertContains(checks, 'help crop-local image coordinates', docs.help, 'crop image coordinates start at local [0,0]');
+assertContains(checks, 'help hover action', docs.help, 'chromux hover');
+assertContains(checks, 'help drag modes', docs.help, '--drag-mode auto|pointer|html5');
+assertContains(checks, 'help screenshot crop', docs.help, '--region X Y W H');
+assertContains(checks, 'help contenteditable limits', docs.help, 'slash commands, and IME');
+assertContains(checks, 'help opaque frame identity', docs.help, 'origin-only opaque ref');
+assertContains(checks, 'help OOPIF refs', docs.help, '@f1g1:2');
+assertContains(checks, 'help OOPIF crash cleanup', docs.help, 'list reports crashedTotal');
+assertContains(checks, 'help visual topic', docs.help, 'chromux skill visual');
 assertContains(checks, 'help autocomplete pick', docs.help, '--pick');
 assertContains(checks, 'help click by text', docs.help, '--text "label"');
 assertContains(checks, 'help skill topics', docs.help, 'chromux skill');
@@ -75,6 +90,7 @@ assertContains(checks, 'README benchmark doc link', docs.readme, 'docs/benchmark
 assertContains(checks, 'README miniwob tasks', docs.readme, 'MiniWoB++');
 assertContains(checks, 'README expanded benchmark', docs.readme, 'Agent task success (20 tasks, 35 sessions)');
 assertContains(checks, 'benchmark expanded same-run', docs.benchmark, 'Expanded 20-task same-run results (chromux 0.18.0)');
+assertContains(checks, 'visual benchmark denies run and cdp shortcuts', docs.agentCompare, 'CHROMUX_BENCH_VISUAL_ONLY');
 assertContains(checks, 'README macos app install', docs.readme, 'install-app.sh');
 assertContains(checks, 'README launch at login', docs.readme, 'Launch at Login');
 assertContains(checks, 'README profile disk usage', docs.readme, 'per-profile disk usage');
@@ -95,7 +111,14 @@ assertContains(checks, 'chromux skill run args', docs.chromuxSkill, '--arg field
 assertContains(checks, 'chromux skill clickable', docs.chromuxSkill, '--clickable');
 assertContains(checks, 'chromux skill action verify', docs.chromuxSkill, '--verify');
 assertContains(checks, 'chromux skill frame reach', docs.chromuxSkill, 'same-origin iframes');
-assertContains(checks, 'chromux skill shadow reach', docs.chromuxSkill, 'closed shadow roots');
+assertContains(checks, 'chromux skill image coordinates', docs.chromuxSkill, '`--space image`');
+assertContains(checks, 'chromux skill hover action', docs.chromuxSkill, 'hover exp-ab12');
+assertContains(checks, 'chromux skill drag action', docs.chromuxSkill, '--drag-mode pointer');
+assertContains(checks, 'chromux skill contenteditable limits', docs.chromuxSkill, 'IME composition');
+assertContains(checks, 'chromux skill OOPIF opt-in', docs.chromuxSkill, 'open ... --oopif');
+assertContains(checks, 'chromux skill OOPIF crash cleanup', docs.chromuxSkill, 'renderer crash invalidates the child namespace');
+assertContains(checks, 'chromux skill visual topic', docs.chromuxSkill, 'forms|extraction|recovery|visual');
+assertContains(checks, 'chromux skill shadow reach', docs.chromuxSkill, 'Closed shadow roots');
 assertContains(checks, 'chromux skill dialog field', docs.chromuxSkill, '--dialog accept');
 assertContains(checks, 'chromux skill popup adoption', docs.chromuxSkill, 'newSession');
 assertContains(checks, 'chromux skill upload', docs.chromuxSkill, '--file /path');
@@ -116,6 +139,29 @@ assertContains(checks, 'README action verify', docs.readme, '--verify');
 assertContains(checks, 'README snapshot grep', docs.readme, '--grep');
 assertContains(checks, 'README run args', docs.readme, '--arg');
 assertContains(checks, 'README frame reach', docs.readme, 'same-origin iframes');
+assertContains(checks, 'README image coordinates', docs.readme, '`--space image`');
+assertContains(checks, 'README hover action', docs.readme, '`hover <session>');
+assertContains(checks, 'README drag modes', docs.readme, '`--drag-mode pointer`');
+assertContains(checks, 'README screenshot metadata', docs.readme, '`coordinateSpace.cssToImage`');
+assertContains(checks, 'README crop-local image contract', docs.readme, 'crop uses crop-local image coordinates');
+assertContains(checks, 'README latest screenshot action mapping', docs.readme, "session's most recent screenshot mapping");
+assertContains(checks, 'README contenteditable limits', docs.readme, 'slash commands, IME composition');
+assertContains(checks, 'README OOPIF opt-in', docs.readme, 'Target.setAutoAttach');
+assertContains(checks, 'README OOPIF close cleanup', docs.readme, 'CDP transport cleanup with zero attached frames');
+assertContains(checks, 'README opaque redaction', docs.readme, 'never includes child paths');
+assertContains(checks, 'README canvas workflow', docs.readme, 'Canvas and other visual-only surfaces');
+assertContains(checks, 'README OOPIF payload', docs.readme, '`open --oopif` / namespaced snapshot | ~236 / ~161 tok');
+assertContains(checks, 'README OOPIF attach payload', docs.readme, 'measured OOPIF attach overhead over default open | ~147 tok');
+assertContains(checks, 'README full screenshot payload', docs.readme, 'full canvas screenshot metadata | ~245 tok');
+assertContains(checks, 'README crop screenshot payload', docs.readme, 'bounded canvas crop metadata | ~323 tok');
+assertContains(checks, 'README WebGames reach tasks', docs.readme, 'webgames-canvas-target,webgames-drag-drop,webgames-slider');
+assertContains(checks, 'README WebGames visual command policy', docs.readme, 'snapshot, fill, eval, run, cdp, network, and watch are blocked');
+assertContains(checks, 'WebGames visual allowlist', docs.webgames, 'WEBGAMES_VISUAL_COMMANDS');
+assertContains(checks, 'WebGames visual help allowlist', docs.webgames, "'help'");
+assertContains(checks, 'WebGames exact password grade', docs.agentCompare, 'webgamesPasswordMatches');
+assertContains(checks, 'WebGames Read permission scope', docs.agentCompare, 'Read(//tmp/chromux-*.png)');
+assertContains(checks, 'WebGames safe mode', docs.agentCompare, "'--safe-mode'");
+assertContains(checks, 'WebGames hashed answers', docs.webgames, 'WEBGAMES_COMPLETION_PASSWORD_HASHES');
 assertContains(checks, 'README shadow reach', docs.readme, 'closed shadow roots');
 assertContains(checks, 'README dialog policy', docs.readme, '--dialog accept|dismiss');
 assertContains(checks, 'README popup adoption', docs.readme, 'newSession');
@@ -135,6 +181,25 @@ assertContains(checks, 'work skill benchmark', docs.workSkill, 'chromux-benchmar
 assertContains(checks, 'work skill script save', docs.workSkill, 'chromux script save');
 assertContains(checks, 'work skill snapshot diff', docs.workSkill, '--diff');
 assertContains(checks, 'work skill injection hygiene', docs.workSkill, 'lethal trifecta');
+assertContains(checks, 'work skill visual workflow', docs.workSkill, 'chromux skill visual');
+assertContains(checks, 'work skill OOPIF boundary', docs.workSkill, 'Default cross-origin frame recon');
+assertContains(checks, 'forms topic contenteditable', docs.formsTopic, 'standards-based');
+assertContains(checks, 'forms topic OOPIF constraints', docs.formsTopic, 'file uploads and `--pick` remain unsupported');
+assertContains(checks, 'recovery topic OOPIF stale refs', docs.recoveryTopic, 'stale-child error means re-snapshot');
+assertContains(checks, 'visual topic DPR warning', docs.visualTopic, 'Do not multiply or');
+assertContains(checks, 'visual topic crop-local coordinates', docs.visualTopic, 'image coordinates are local to that PNG');
+assertContains(checks, 'visual topic latest screenshot mapping', docs.visualTopic, "session's most recent screenshot mapping");
+assertContains(checks, 'visual topic canvas workflow', docs.visualTopic, 'Canvas objects do not have DOM refs');
+assertContains(checks, 'visual topic drag modes', docs.visualTopic, '`--drag-mode html5`');
+assertContains(checks, 'visual topic OOPIF limits', docs.visualTopic, 'ref-based hover/drag are not routed');
+assertContains(checks, 'visual topic OOPIF crash cleanup', docs.visualTopic, '`list` reports `crashedTotal`');
+
+{
+  const pkg = JSON.parse(read('package.json'));
+  const ok = pkg.version === '0.19.0' && !pkg.dependencies;
+  checks.push({ label: 'package remains zero-dependency at 0.19.0', needle: '0.19.0 with no dependencies', ok });
+  if (!ok) throw new Error(`package contract drift: version=${pkg.version}, dependencies=${JSON.stringify(pkg.dependencies)}`);
+}
 
 // Cross-file constant sync: the pick-candidate selector exists in the daemon
 // (fill --pick) and in the standalone search-and-pick snippet; drift between

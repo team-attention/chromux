@@ -15,9 +15,9 @@ chromux run <s> --file snippets/_builtin/form-flow.js \
   --arg readyText='Thanks' --arg report='#status'
 ```
 
-Fields inside same-origin iframes and open shadow DOM resolve like any other
-selector. `report` returns the element's final text so the confirmation code
-or error message rides back in the same response.
+Fields inside same-origin iframes and open shadow DOM resolve like any other selector.
+With an explicit `open ... --oopif` session, `fill` also routes a namespaced child ref; file uploads and `--pick` remain unsupported on that route.
+`report` returns the element's final text so the confirmation code or error message rides back in the same response.
 
 ## Autocomplete / combobox: type then pick
 
@@ -59,9 +59,17 @@ runs, so a failed transition stops the flow with a precise error.
 chromux fill <s> @6 --file /tmp/report.pdf          # repeat --file for multiple
 ```
 
-Sets the input through `DOM.setFileInputFiles` and dispatches input/change so
-frameworks see it. Rich editors (contenteditable) are not value-fillable:
-form-flow fails loudly on them — use `click` + `type`.
+Sets the input through `DOM.setFileInputFiles` and dispatches input/change so frameworks see it.
+
+## Contenteditable and rich editors
+
+`chromux fill <s> @N "replacement"` supports a standards-based contenteditable root.
+It focuses the editor, selects its current contents, replaces them through browser input events, and returns the observed text.
+Use `type` when insertion at the current selection is intended.
+
+Treat mentions, slash commands, IME composition, and framework-specific nested markup as conditional.
+Verify the editor's visible result and emitted state; use its documented keyboard flow when whole-root replacement is not enough.
+`snippets/_builtin/form-flow.js` still rejects contenteditable fields loudly because its value-based field contract cannot verify arbitrary rich markup.
 
 ## Slow confirmations and double submits
 

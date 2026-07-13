@@ -12,6 +12,7 @@
 // schema-shaped extraction.
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -49,6 +50,58 @@ function runChromux(args, timeoutMs = 90_000) {
   });
 }
 
+function startBrowserReachFixture() {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [path.join(MODULE_DIR, 'benchmarks', 'browser-reach-fixture.mjs')], {
+      cwd: MODULE_DIR,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    const timer = setTimeout(() => {
+      child.kill('SIGTERM');
+      reject(new Error(`browser reach fixture startup timed out: ${stderr.trim()}`));
+    }, 10_000);
+    child.stderr.on('data', chunk => { stderr += chunk; });
+    child.stdout.on('data', chunk => {
+      stdout += chunk;
+      const newline = stdout.indexOf('\n');
+      if (newline < 0) return;
+      clearTimeout(timer);
+      try {
+        resolve({ child, ...JSON.parse(stdout.slice(0, newline)) });
+      } catch (error) {
+        child.kill('SIGTERM');
+        reject(new Error(`browser reach fixture returned invalid startup data: ${error.message}`));
+      }
+    });
+    child.once('error', error => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.once('exit', code => {
+      if (stdout.includes('\n')) return;
+      clearTimeout(timer);
+      reject(new Error(`browser reach fixture exited ${code}: ${stderr.trim()}`));
+    });
+  });
+}
+
+function stopChild(child) {
+  return new Promise((resolve) => {
+    if (!child || child.exitCode != null) return resolve();
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      resolve();
+    }, 2000);
+    child.once('exit', () => {
+      clearTimeout(timer);
+      resolve();
+    });
+    child.kill('SIGTERM');
+  });
+}
+
 async function measure(label, page, args, { mutate = null, session }) {
   if (mutate) {
     const mutated = await runChromux(['run', session, mutate]);
@@ -67,11 +120,13 @@ async function main() {
   }
   const outPath = argValue('--out');
   const { server, baseUrl: base } = await startFixtureServer();
+  let reach = null;
   const profile = `tokens-${Date.now().toString(36)}`;
   process.env.CHROMUX_PROFILE = profile;
   const rows = [];
 
   try {
+    reach = await startBrowserReachFixture();
     const launched = await runChromux(['launch', profile, '--headless']);
     if (!launched.ok) throw new Error(`launch failed: ${launched.stderr}`);
 
@@ -123,9 +178,45 @@ async function main() {
 
       await runChromux(['close', session]);
     }
+
+    const canvasSession = 'tok-canvas';
+    const canvasPath = path.join(os.tmpdir(), `chromux-token-canvas-${process.pid}.png`);
+    const canvasCropPath = path.join(os.tmpdir(), `chromux-token-canvas-crop-${process.pid}.png`);
+    const canvasOpen = await runChromux(['open', canvasSession, reach.canvasUrl]);
+    if (!canvasOpen.ok) throw new Error(`open canvas payload probe failed: ${canvasOpen.stderr}`);
+    rows.push(await measure('screenshot response (full)', 'visual-canvas',
+      ['screenshot', canvasSession, canvasPath], { session: canvasSession }));
+    rows.push(await measure('screenshot response (region crop)', 'visual-canvas',
+      ['screenshot', canvasSession, canvasCropPath, '--region', '16', '76', '300', '180'], { session: canvasSession }));
+    await runChromux(['close', canvasSession]);
+    fs.rmSync(canvasPath, { force: true });
+    fs.rmSync(canvasCropPath, { force: true });
+
+    const defaultFrameSession = 'tok-frame-default';
+    const defaultOpen = await measure('open (opaque default)', 'frame-default',
+      ['open', defaultFrameSession, reach.parentUrl], { session: defaultFrameSession });
+    rows.push(defaultOpen);
+    rows.push(await measure('snapshot (opaque default)', 'frame-default',
+      ['snapshot', defaultFrameSession], { session: defaultFrameSession }));
+    await runChromux(['close', defaultFrameSession]);
+
+    const oopifFrameSession = 'tok-frame-oopif';
+    const oopifOpen = await measure('open --oopif', 'frame-oopif',
+      ['open', oopifFrameSession, reach.parentUrl, '--oopif'], { session: oopifFrameSession });
+    rows.push(oopifOpen);
+    rows.push({
+      label: 'open --oopif attach overhead',
+      page: 'frame-oopif',
+      bytes: Math.max(0, oopifOpen.bytes - defaultOpen.bytes),
+      estTokens: Math.max(0, oopifOpen.estTokens - defaultOpen.estTokens),
+    });
+    rows.push(await measure('snapshot (namespaced child refs)', 'frame-oopif',
+      ['snapshot', oopifFrameSession], { session: oopifFrameSession }));
+    await runChromux(['close', oopifFrameSession]);
   } finally {
     await runChromux(['kill', profile]);
-    server.close();
+    await stopChild(reach?.child);
+    await new Promise(resolve => server.close(resolve));
   }
 
   const byPage = {};
@@ -166,6 +257,13 @@ async function main() {
     'shop:snapshot --interactive': 640,
     'shop:snapshot --diff after one action': 100,
     'shop:snapshot --grep (find one item)': 100,
+    'visual-canvas:screenshot response (full)': 300,
+    'visual-canvas:screenshot response (region crop)': 400,
+    'frame-default:open (opaque default)': 500,
+    'frame-default:snapshot (opaque default)': 250,
+    'frame-oopif:open --oopif': 650,
+    'frame-oopif:open --oopif attach overhead': 200,
+    'frame-oopif:snapshot (namespaced child refs)': 400,
   };
   const over = [];
   for (const [page, entries] of Object.entries(byPage)) {

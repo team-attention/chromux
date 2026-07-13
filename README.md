@@ -288,6 +288,7 @@ response is not proof that the page reached the intended state.
 |---------|-------------|
 | `open <session> <url>` | Create or navigate a tab |
 | `open --background <session> <url>` | Explicitly create a new tab without activating it |
+| `open <session> <url> --oopif` | Opt into cross-origin child-target attachment and namespaced refs for this session |
 | `run <session> <code\|--file PATH\|->` | Run multi-step async JS with `cdp`, `js`, `sleep`, `waitLoad`, `page`, `waitFor`, and `assertPage` helpers |
 | `run <session> --page-file PATH` | Run a JS file directly in the page context, bypassing all shell/string escaping |
 | `run <session> --script <host>/<name>` | Replay a saved action script deterministically (no model calls) |
@@ -419,8 +420,10 @@ chromux cdp s Runtime.evaluate '{"expression":"navigator.userAgent","returnByVal
 | `click <session> @<ref>` | Click element by ref. Actions verify by default: the response's `changed` field carries the post-action diff (`--verify MS` tunes the settle wait, `--no-verify` skips; also on `fill`/`type`/`press`; crawl mode skips automatically). A click that opens a popup/new tab adopts it automatically and reports it as `newSession` |
 | `click <session> "selector"` | Click by CSS selector |
 | `click <session> --text "label"` | Click by visible label when refs went stale after a re-render; ambiguous text fails and lists the candidates |
-| `click <session> --xy X Y` | Click validated viewport coordinates via CDP mouse events |
-| `fill <session> @<ref> "text"` | Fill input field (a native `<select>` matches an option by value or label and fires `change`) |
+| `click <session> --xy X Y` | Click validated CSS viewport coordinates via CDP mouse events; add `--space image` for screenshot pixels |
+| `hover <session> (@ref\|selector\|--xy X Y) [--space css\|image]` | Move the real pointer and verify the resulting page diff |
+| `drag <session> (@ref\|selector\|--xy X Y) (--to @ref\|selector\|--to-xy X Y)` | Drag with bounded movement; `--drag-mode pointer` handles sliders/sortables and `html5` handles native drag/drop |
+| `fill <session> @<ref> "text"` | Fill input, textarea, native select, or standards-based contenteditable; contenteditable replacement uses browser input events |
 | `fill <session> @<ref> "se" --pick "Seoul"` | Type, wait for the autocomplete popup, and choose the matching suggestion in one call. Only suggestions that appeared after typing count; the response's `picked` is the chosen label and `pickEffect` reports the observed effect (an "unconfirmed" pick needs a follow-up check) |
 | `fill <session> @<ref> --file PATH` | Set a file input for upload via `DOM.setFileInputFiles` (repeat `--file` for multiple files) |
 | `type <session> "text"` | Insert text into the focused field |
@@ -428,14 +431,22 @@ chromux cdp s Runtime.evaluate '{"expression":"navigator.userAgent","returnByVal
 | `download <session> (@ref\|selector\|--url URL) [--to DIR]` | Trigger a download and wait for the completed file; returns the saved path |
 | `wait-for-text <session> "text" [timeout-ms]` | Wait until page text appears (same-origin frame text included) |
 | `wait-for-selector <session> "selector" [timeout-ms]` | Wait until a selector is visible; add `--gone` to wait until it disappears |
-| `screenshot <session> [path]` | Take PNG screenshot |
+| `screenshot <session> [path]` | Take a PNG and return measured CSS viewport, visual viewport, image dimensions, and conversion metadata |
+| `screenshot <session> [path] --region X Y W H [--space css\|image]` | Crop a bounded visible region |
+| `screenshot <session> [path] --ref @N\|selector` | Crop a reachable visible element |
 | `show <session>` | Open DevTools in browser (inspect live tab, even headless) |
 
-Snapshots, clicks, fills, and waits pierce same-origin iframes and open shadow
-DOM: elements inside them get normal `@refs` and are clicked at their true
-top-viewport coordinates. Cross-origin frames are marked
-`iframe (cross-origin; content not accessible)` in snapshots; closed shadow
-roots stay invisible. Native JS dialogs (`alert`/`confirm`/`prompt`) are
+Snapshots, clicks, fills, and waits pierce same-origin iframes and open shadow DOM.
+Elements inside them get normal `@refs` and are clicked at their true top-viewport coordinates.
+By default, a cross-origin frame stays opaque but exposes a stable frame ref, its origin without path or query data, and its CSS viewport rect.
+Use that geometry for visible pointer actions.
+Reliable DOM or text actions inside a site-isolated OOPIF require reopening the session with `open <session> <url> --oopif`.
+The opt-in snapshot adds namespaced child refs such as `@f1g1:2`, and click, fill, text/selector waits, and snapshots route to the child target.
+Child navigation, detach, or renderer crash invalidates that namespace, so take a fresh snapshot instead of retrying a stale child ref.
+Session diagnostics report `crashedTotal`, and closing an opted-in session returns child-routing and CDP transport cleanup with zero attached frames, pending calls, waiters, and listeners.
+The opt-in uses `Target.setAutoAttach`, adds payload and browser attachment surface, and remains off by default.
+Closed shadow roots stay invisible.
+Native JS dialogs (`alert`/`confirm`/`prompt`) are
 auto-handled per session policy (`open <s> <url> --dialog accept|dismiss`,
 default dismiss, `beforeunload` always accepted) and reported in the next
 action response's `dialog` field, so a stray alert can no longer brick a
@@ -461,15 +472,29 @@ instead of ~14K.
 `click` brings the tab forward before acting. Ref/selector clicks scroll the
 target into view and fail when the element is hidden, zero-size, stale, outside
 the viewport after scroll, or covered by another element at the click point.
-Coordinate clicks validate that `X,Y` are inside the current viewport. `fill`
-updates input state through the native value setter and dispatches input/change
-events so common frontend frameworks observe the value.
+Coordinate actions interpret `X,Y` as CSS viewport units by default and reject points outside the current viewport.
+When coordinates came from a screenshot PNG, pass `--space image` and use the response's measured `coordinateSpace.cssToImage` or `imageToCss` mapping.
+The top-level `coordinateSpace.image` always describes the returned PNG, so a region or ref crop uses crop-local image coordinates with `[0,0]` at that PNG's top-left corner.
+Image-space hover, click, and drag use the session's most recent screenshot mapping; taking another screenshot replaces it, while open, raw CDP, and scroll invalidate it.
+Do not derive the mapping from DPR alone because browser zoom, visual viewport scale, and clipping can change the relationship.
+`fill` updates ordinary fields through native setters and framework-visible events.
+For a standards-based contenteditable root, `fill` selects and replaces its contents through browser input events, while `type` preserves insertion semantics at the current selection.
+The command fails if the editor cancels insertion or the observed text does not equal the requested replacement.
+Mentions, slash commands, IME composition, and editor-specific nested markup remain conditional and require flow-specific verification.
+
+Canvas and other visual-only surfaces do not gain DOM refs for their internal objects.
+Take a full or bounded screenshot, inspect the visible target, then use `hover`, `click`, or pointer `drag` with CSS coordinates or crop-local `--space image` coordinates.
+For a range slider, drag the visible thumb rather than using `fill`.
+Use `--drag-mode html5` only for a native draggable/drop target; chromux does not report JavaScript synthetic fallback as success.
 
 Known reach limits, stated so agents report instead of blind-retrying:
 snapshot value display masks `type=password` inputs plus fields that look
 sensitive by autocomplete/name/id heuristics (`cc-number`, `one-time-code`,
-card/CVC/SSN/PIN patterns); values in other plain text fields appear as-is. Cross-origin iframes and closed shadow roots are not
-reachable (marked in snapshots where detectable). Clickable auto-detection
+card/CVC/SSN/PIN patterns); values in other plain text fields appear as-is.
+Cross-origin child DOM is unreachable without explicit `--oopif`, and closed shadow roots remain unreachable.
+Default opaque frame output is origin-only and never includes child paths, queries, or field values.
+Opted-in namespaced OOPIF snapshots expose child labels and roles, but field values remain redacted and link destinations are reduced to origins.
+Clickable auto-detection
 evaluates the current viewport — controls far below the fold may need a
 scroll (or `--clickable`) before they get refs. Verify diffs skip the
 per-element CDP listener re-scan: an element revealed by an action whose only
@@ -515,11 +540,8 @@ They cover common fast paths:
 - `network-errors.js`: browser-observable broken resource diagnostics.
 - `page-assert.js`: selector, text, and DOM assertion proof.
 
-Deeper task-type guides load on demand so the per-turn skill text stays
-small: `chromux skill` lists topics; `chromux skill forms|extraction|recovery`
-prints the guide (autocomplete `--pick` patterns, pagination and table
-extraction, dialog/popup recovery, and the pause → `open --foreground` →
-wait → resume human login handoff).
+Deeper task-type guides load on demand so the per-turn skill text stays small.
+`chromux skill` lists topics; `chromux skill forms|extraction|recovery|visual` prints the guide for autocomplete `--pick`, pagination/table extraction, dialog/popup recovery, DPR-safe canvas/frame workflows, and the pause → `open --foreground` → wait → resume human login handoff.
 
 Run them with `--file`, passing parameters as repeatable `--arg key=value`
 flags — values that parse as JSON arrive structured, everything else stays a
@@ -563,14 +585,27 @@ CHROMUX_HOME="$(mktemp -d /tmp/chromux-tokens-XXXXXX)" \
 Representative run (real Chrome, deterministic fixtures; the feed page has
 200 stories with ~600 interactive elements):
 
-| command | article page | form page | 200-item feed |
-|---|---|---|---|
-| full page HTML (`run` outerHTML) | ~790 tok | ~326 tok | ~22,430 tok |
-| `snapshot` (full) | ~775 tok | ~67 tok | ~14,252 tok |
-| `snapshot --interactive` | ~41 tok | ~38 tok | ~7,153 tok |
-| `snapshot --diff` after one action | ~36 tok | ~39 tok | **~45 tok** |
-| `snapshot --grep` (find one item) | — | — | **~59 tok** |
-| structured extract (`run` + shaped `page(...)`) | ~25 tok | ~27 tok | ~27 tok |
+| command | article page | form page | 200-item feed | shop page |
+|---|---|---|---|---|
+| full page HTML (`run` outerHTML) | ~815 tok | ~347 tok | ~25,108 tok | ~1,731 tok |
+| `snapshot` (full) | ~775 tok | ~69 tok | ~14,252 tok | ~818 tok |
+| `snapshot --interactive` | ~41 tok | ~40 tok | ~7,153 tok | ~580 tok |
+| `snapshot --diff` after one action | ~36 tok | ~39 tok | **~45 tok** | **~45 tok** |
+| `snapshot --grep` (find one item) | n/a | n/a | **~59 tok** | **~52 tok** |
+| structured extract (`run` + shaped `page(...)`) | ~25 tok | ~27 tok | ~27 tok | ~26 tok |
+
+Browser-reach payload rows measure the JSON/text response only.
+The PNG remains a separate visual artifact read by the agent when needed.
+
+| reach surface | response size | budget |
+|---|---|---|
+| full canvas screenshot metadata | ~245 tok | 300 tok |
+| bounded canvas crop metadata | ~323 tok | 400 tok |
+| default opaque-frame open / snapshot | ~89 / ~47 tok | 500 / 250 tok |
+| `open --oopif` / namespaced snapshot | ~236 / ~161 tok | 650 / 400 tok |
+| measured OOPIF attach overhead over default open | ~147 tok | 200 tok |
+
+The screenshot metadata rows include the action-ready mapping for the returned full or cropped PNG.
 
 The workflow the skills teach — inspect structure with `--interactive`, verify
 each action with `--diff`, extract with a shaped `page(...)` result (optionally
@@ -593,6 +628,16 @@ node benchmarks/agent-compare-benchmark.mjs \
   --reps-local 2 --reps-external 1 \
   --out /tmp/agent-compare.json
 node benchmarks/agent-compare-benchmark.mjs --smoke   # cheap harness check
+
+# Focused browser-reach proof against a pinned Apache-2.0 WebGames commit.
+# The three non-timed tasks hash-grade exact completion passwords and default to
+# a $5 total guard. Visual sessions restrict built-in tools to chromux Bash calls
+# and /tmp/chromux-*.png reads, then allow CLI help, screenshots, browser input,
+# and lifecycle commands; snapshot, fill, eval, run, cdp, network, and watch are blocked.
+node benchmarks/agent-compare-benchmark.mjs \
+  --model claude-sonnet-5 --tools chromux \
+  --tasks webgames-canvas-target,webgames-drag-drop,webgames-slider \
+  --reps-local 1 --out /tmp/chromux-webgames-reach.json
 
 # Deterministic (no LLM): payload bytes + warm latency for equivalent
 # observation commands, plus a parallel-session isolation probe.
