@@ -2909,7 +2909,7 @@ async function captureCoordinateSpace(cdp) {
     format: 'png',
     fromSurface: true,
     captureBeyondViewport: false,
-  });
+  }, 30000);
   const buffer = Buffer.from(screenshot.data, 'base64');
   const image = pngDimensions(buffer);
   const vv = viewport.visualViewport;
@@ -4394,7 +4394,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
           height: visibleRect.height,
           scale: 1,
         },
-      });
+      }, 30000);
       output = Buffer.from(clipped.data, 'base64');
       crop = {
         source: ref ? 'ref' : 'region',
