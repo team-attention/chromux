@@ -806,6 +806,9 @@ FRAME_CLICK=$(CHROMUX_PROFILE=$PROFILE node "$CT" click tab-frame "#fb" 2>/dev/n
 check "click reaches into iframe" "42" "$FRAME_CLICK"
 CHROMUX_PROFILE=$PROFILE node "$CT" close tab-frame 2>/dev/null > /dev/null
 
+OOPIF_OPEN_CLEANUP_PROBE=$(node "$(dirname "$CT")/benchmarks/oopif-open-cleanup-probe.mjs" 2>&1)
+check "OOPIF setup failure removes the session, transport, and tab" "cleanup probe passed" "$OOPIF_OPEN_CLEANUP_PROBE"
+
 REACH_FIXTURE_INFO="/tmp/chromux-browser-reach-info-$$.json"
 REACH_FIXTURE_LOG="/tmp/chromux-browser-reach-fixture-$$.log"
 node benchmarks/browser-reach-fixture.mjs >"$REACH_FIXTURE_INFO" 2>"$REACH_FIXTURE_LOG" &

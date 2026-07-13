@@ -3423,6 +3423,44 @@ async function navigateSession(cdp, url, settings) {
   await cdp.send('Page.stopLoading', {}, 2000).catch(() => {});
 }
 
+async function cleanupFailedOpenSession(sessions, session, s, cdp, port, targetId) {
+  sessions.delete(session);
+  if (s) disposeOopifRouting(s);
+  const transport = s?.cdp || cdp;
+  if (transport) {
+    try {
+      await transport.closeAndWait();
+    } catch {
+      try { transport.close(); } catch {}
+    }
+  }
+  if (targetId) await closeTab(port, targetId).catch(() => {});
+}
+
+async function prepareOpenSessionNavigation({
+  sessions,
+  session,
+  s,
+  body,
+  url,
+  settings,
+  port,
+  isNewSession,
+  newTab,
+}) {
+  try {
+    if (body.oopif === true) await enableOopifRouting(s);
+    touchSession(s);
+    s.lastImageCoordinateSpace = null;
+    await navigateSession(s.cdp, url, settings);
+  } catch (err) {
+    if (isNewSession && newTab) {
+      await cleanupFailedOpenSession(sessions, session, s, s.cdp, port, newTab.id);
+    }
+    throw err;
+  }
+}
+
 async function readPageInfo(port, targetId, cdp, settings) {
   const evalTimeout = settings.mode === 'crawl' ? 3000 : 10000;
   try {
@@ -3502,53 +3540,56 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
       const tab = await createTab(port, 'about:blank', background);
       newTab = tab;
       const cdp = new CDPClient();
-      await cdp.connect(tab.webSocketDebuggerUrl);
-      await cdp.send('Page.enable');
-      // NOTE: Runtime.enable intentionally NOT called (Patchright technique).
-      // Runtime.enable is the #1 CDP detection signal used by Cloudflare, DataDome, PerimeterX.
-      // Runtime.evaluate works without it — no need for Runtime.executionContextCreated events.
-      if (isHeadless) {
-        // Override User-Agent to remove "HeadlessChrome" signature
-        await cdp.send('Network.enable');
-        const r = await cdp.send('Runtime.evaluate', {
-          expression: 'navigator.userAgent', returnByValue: true,
-        });
-        const cleanUA = (r.result?.value || '').replace(/HeadlessChrome/g, 'Chrome');
-        if (cleanUA) await cdp.send('Network.setUserAgentOverride', { userAgent: cleanUA });
-        // Emulate OS-level focus so headless window appears focused (anti-detection)
-        await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true });
-        // NOTE: Page.addScriptToEvaluateOnNewDocument intentionally NOT called.
-        // Real Chrome already has correct webdriver/plugins/languages/chrome.runtime.
-        // The CDP call itself is a detectable signal — removing it is better stealth.
+      try {
+        await cdp.connect(tab.webSocketDebuggerUrl);
+        await cdp.send('Page.enable');
+        // NOTE: Runtime.enable intentionally NOT called (Patchright technique).
+        // Runtime.enable is the #1 CDP detection signal used by Cloudflare, DataDome, PerimeterX.
+        // Runtime.evaluate works without it - no need for Runtime.executionContextCreated events.
+        if (isHeadless) {
+          // Override User-Agent to remove "HeadlessChrome" signature
+          await cdp.send('Network.enable');
+          const r = await cdp.send('Runtime.evaluate', {
+            expression: 'navigator.userAgent', returnByValue: true,
+          });
+          const cleanUA = (r.result?.value || '').replace(/HeadlessChrome/g, 'Chrome');
+          if (cleanUA) await cdp.send('Network.setUserAgentOverride', { userAgent: cleanUA });
+          // Emulate OS-level focus so headless window appears focused (anti-detection)
+          await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true });
+          // NOTE: Page.addScriptToEvaluateOnNewDocument intentionally NOT called.
+          // Real Chrome already has correct webdriver/plugins/languages/chrome.runtime.
+          // The CDP call itself is a detectable signal - removing it is better stealth.
+        }
+        if (settings.mode === 'crawl' && settings.resourceBlocking) {
+          await cdp.send('Network.enable');
+          await cdp.send('Network.setBlockedURLs', { urls: CRAWL_BLOCK_URLS });
+        }
+        cdp.onDisconnect = (reason) => {
+          if (s) disposeOopifRouting(s);
+          sessions.delete(session);
+        };
+        const now = Date.now();
+        s = { targetId: tab.id, cdp, createdAt: now, lastUsedAt: now, url: 'about:blank', title: '', navigations: 0 };
+        s.dialogPolicy = body.dialog === 'accept' ? 'accept' : 'dismiss';
+        attachDialogHandler(s);
+        sessions.set(session, s);
+      } catch (err) {
+        await cleanupFailedOpenSession(sessions, session, s, cdp, port, tab.id);
+        throw err;
       }
-      if (settings.mode === 'crawl' && settings.resourceBlocking) {
-        await cdp.send('Network.enable');
-        await cdp.send('Network.setBlockedURLs', { urls: CRAWL_BLOCK_URLS });
-      }
-      cdp.onDisconnect = (reason) => {
-        if (s) disposeOopifRouting(s);
-        sessions.delete(session);
-      };
-      const now = Date.now();
-      s = { targetId: tab.id, cdp, createdAt: now, lastUsedAt: now, url: 'about:blank', title: '', navigations: 0 };
-      s.dialogPolicy = body.dialog === 'accept' ? 'accept' : 'dismiss';
-      attachDialogHandler(s);
-      sessions.set(session, s);
     }
     if (body.dialog === 'accept' || body.dialog === 'dismiss') s.dialogPolicy = body.dialog;
-    if (body.oopif === true) await enableOopifRouting(s);
-    touchSession(s);
-    s.lastImageCoordinateSpace = null;
-    try {
-      await navigateSession(s.cdp, url, settings);
-    } catch (err) {
-      if (isNewSession && newTab) {
-        sessions.delete(session);
-        s.cdp.close();
-        await closeTab(port, newTab.id).catch(() => {});
-      }
-      throw err;
-    }
+    await prepareOpenSessionNavigation({
+      sessions,
+      session,
+      s,
+      body,
+      url,
+      settings,
+      port,
+      isNewSession,
+      newTab,
+    });
     const pageInfo = await readPageInfo(port, s.targetId, s.cdp, settings);
     s.url = pageInfo.url;
     s.title = pageInfo.title;
