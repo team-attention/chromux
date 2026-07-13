@@ -329,7 +329,7 @@ COORD_HTML='<title>CoordinatePage</title><style>html,body{margin:0;min-height:14
 COORD_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$COORD_HTML")"
 CHROMUX_PROFILE=$PROFILE node "$CT" open tab-coord "$COORD_URL" 2>/dev/null > /dev/null
 CHROMUX_PROFILE=$PROFILE node "$CT" cdp tab-coord Emulation.setDeviceMetricsOverride '{"width":400,"height":300,"deviceScaleFactor":1,"mobile":false}' 2>/dev/null > /dev/null
-DPR1_SHOT=$(CHROMUX_PROFILE=$PROFILE node "$CT" screenshot tab-coord /tmp/chromux-dpr1-$$.png 2>/dev/null)
+DPR1_SHOT=$(CHROMUX_PROFILE=$PROFILE node "$CT" screenshot tab-coord /tmp/chromux-dpr1-$$.png)
 check "DPR 1 screenshot metadata records DPR" '"devicePixelRatio": 1' "$DPR1_SHOT"
 check "DPR 1 screenshot metadata records image width" '"width": 400' "$DPR1_SHOT"
 RELATIVE_SHOT_DIR=$(mktemp -d "${TMPDIR:-/tmp}/chromux-relative-shot-XXXXXX")
