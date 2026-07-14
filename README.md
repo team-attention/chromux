@@ -1,10 +1,10 @@
 <p align="center">
-  <img src="assets/logo/chromux-logo.svg" alt="chromux logo" width="760">
+  <img src="assets/hero/chromux-hero.svg" alt="chromux — the agent-native browser control plane" width="900">
 </p>
 
 <p align="center">
-  <b>tmux for Chrome tabs — the best browser tool for agents.</b><br>
-  Your real Chrome, logged in everywhere, split into a fleet of parallel agent sessions<br>
+  <b>The agent-native browser control plane.</b><br>
+  <i>tmux for Chrome tabs, grown up</i> — your real, logged-in Chrome split into a fleet of parallel agent sessions<br>
   that verify actions in ~47 tokens, learn every site they touch, and replay proven flows with zero model calls.
 </p>
 
@@ -41,18 +41,19 @@ Most "AI browser" tools hand your agent a stranger's browser: a bundled
 Chromium with a bot-shaped fingerprint, logged into nothing, reading
 20,000-token page dumps, rediscovering every flow from scratch — and paying
 for a model call at every step. Your agent deserves better. chromux hands it
-**your** browser, and five design bets do the rest:
+**your** browser, and six design bets do the rest:
 
 1. **Your real Chrome, your real logins.** No cloud browser to
    re-authenticate, no extension bridge to babysit, no fingerprint that
    screams "bot". chromux drives real, persistent Chrome profiles over raw
    CDP — log in once, run unattended forever, on macOS, Linux, native
    Windows, WSL, servers, and CI.
-2. **Parallel by architecture, not by luck.** One daemon per profile, N
-   isolated tab sessions: ten agents browse the same logged-in profile
-   concurrently without stepping on each other. `batch` pools workers over
-   URL queues with retries and per-host backoff; `pause`/`resume` is the
-   one-command kill switch for a whole wave.
+2. **~47 tokens to verify an action.** Observation payloads are the product:
+   on a measured 200-story feed page, full HTML is ~20,400 tokens,
+   `snapshot --interactive` is ~7,200 — and checking what an action changed
+   with `snapshot --diff` is **~47 tokens**. Extractions can be held to a
+   JSON-schema contract with `--schema`, so drift fails loudly. Reproduce it
+   all with the checked-in token benchmark (table below).
 3. **It gets smarter every run.** Site notes (`chromux note`) remember
    selectors, quirks, and wait behavior per host and surface automatically on
    the next visit. Working flows freeze with `chromux script save` and replay
@@ -60,13 +61,17 @@ for a model call at every step. Your agent deserves better. chromux hands it
    exists. When a site changes, the failed replay hands back the script path
    and a repair hint: fix once, replay forever. Most tools start every
    session from zero; chromux compounds.
-4. **~47 tokens to verify an action.** Observation payloads are the product:
-   on a measured 200-story feed page, full HTML is ~20,400 tokens,
-   `snapshot --interactive` is ~7,200 — and checking what an action changed
-   with `snapshot --diff` is **~47 tokens**. Extractions can be held to a
-   JSON-schema contract with `--schema`, so drift fails loudly. Reproduce it
-   all with the checked-in token benchmark (table below).
-5. **Zero dependencies. Zero LLM. Zero cloud.** One file on Node.js ≥ 22
+4. **Parallel by architecture, not by luck.** One daemon per profile, N
+   isolated tab sessions: ten agents browse the same logged-in profile
+   concurrently without stepping on each other. `batch` pools workers over
+   URL queues with retries and per-host backoff; `pause`/`resume` is the
+   one-command kill switch for a whole wave.
+5. **Reach into the whole page.** Shadow DOM, same-origin iframes, cross-origin
+   OOPIFs (`open --oopif`), JS dialogs, popups, upload/download, `drag`/`hover`,
+   and DPR-correct visual pixel clicks (`click --xy --space image`) for canvas
+   and WebGL. Accessibility-tree precision when the tree has it; real pointer
+   and vision coordinates when it doesn't — the same tool covers both.
+6. **Zero dependencies. Zero LLM. Zero cloud.** One file on Node.js ≥ 22
    built-ins. chromux is the deterministic hand; your coding agent is the
    brain — no per-step token bills, no vendor lock-in, no data leaving your
    machine.
@@ -94,6 +99,7 @@ Honest summary: the current official comparison is one 20-task, three-tool run u
 chromux was the only tool to pass all 35 sessions and had the lowest aggregate wall time, turns, tokens, and cost.
 All three tools passed every deterministic local and [MiniWoB++](https://github.com/Farama-Foundation/miniwob-plusplus) session, while task-level speed remained mixed.
 The largest separation was Google: chromux completed the task in real Chrome while both competitor browsers failed to return the expected result.
+These head-to-head numbers are from the 0.18.0-era run; 0.19.0 has since added cross-origin OOPIF routing, `drag`/`hover`, and DPR-correct visual pixel clicks (bet 5 above), which are not yet reflected in the comparison table.
 The historical v1/v2 tables, perception-upgrade loop disclosure, raw task cells, live-site caveats, and a Sonnet 5 cross-model check are in [docs/benchmark-2026-07.md](docs/benchmark-2026-07.md).
 
 Design principles, sharpened against the 2026 agent-browser landscape (see
