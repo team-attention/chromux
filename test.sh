@@ -500,6 +500,24 @@ check "mixed endpoint rejections dispatch no pointerdown" "0" "$DRAG_MIXED_EVENT
 CHROMUX_PROFILE=$PROFILE node "$CT" close tab-drag-scroll 2>/dev/null > /dev/null
 rm -f /tmp/chromux-drag-scroll-$$.txt /tmp/chromux-drag-mixed-$$.png /tmp/chromux-drag-mixed-image-$$.txt /tmp/chromux-drag-mixed-css-$$.txt
 
+# --- Test 5c.0c: stall detection across repeated no-change actions ---
+echo ""
+echo "--- Test 5c.0c: Stall detection (consecutive no-change streak) ---"
+STALL_HTML='<title>Stall</title><button id="noop">No-op</button><button id="real">Real</button><p id="log">start</p><script>document.getElementById("real").addEventListener("click",()=>{document.getElementById("log").textContent="changed-"+Date.now()})</script>'
+STALL_URL="data:text/html,$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$STALL_HTML")"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-stall "$STALL_URL" 2>/dev/null > /dev/null
+STALL_CLICK1=$(CHROMUX_PROFILE=$PROFILE node "$CT" click tab-stall '#noop' 2>/dev/null)
+check "first no-change action reports no visible change" "no visible change" "$STALL_CLICK1"
+check "first no-change action is not yet flagged stalled" "0" "$(echo "$STALL_CLICK1" | grep -c stalled)"
+CHROMUX_PROFILE=$PROFILE node "$CT" click tab-stall '#noop' 2>/dev/null > /dev/null
+STALL_CLICK3=$(CHROMUX_PROFILE=$PROFILE node "$CT" click tab-stall '#noop' 2>/dev/null)
+check "third consecutive no-change action is flagged as stalled" "# stalled:" "$STALL_CLICK3"
+# A real DOM change must break the streak so the next no-change action is not flagged.
+CHROMUX_PROFILE=$PROFILE node "$CT" click tab-stall '#real' 2>/dev/null > /dev/null
+STALL_AFTER=$(CHROMUX_PROFILE=$PROFILE node "$CT" click tab-stall '#noop' 2>/dev/null)
+check "a real change resets the stall streak" "0" "$(echo "$STALL_AFTER" | grep -c stalled)"
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-stall 2>/dev/null > /dev/null
+
 # --- Test 5c.1: text input shortcuts ---
 echo ""
 echo "--- Test 5c.1: Text input shortcuts ---"

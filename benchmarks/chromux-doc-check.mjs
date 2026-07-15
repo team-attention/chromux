@@ -186,6 +186,8 @@ assertContains(checks, 'work skill OOPIF boundary', docs.workSkill, 'Default cro
 assertContains(checks, 'forms topic contenteditable', docs.formsTopic, 'standards-based');
 assertContains(checks, 'forms topic OOPIF constraints', docs.formsTopic, 'file uploads and `--pick` remain unsupported');
 assertContains(checks, 'recovery topic OOPIF stale refs', docs.recoveryTopic, 'stale-child error means re-snapshot');
+assertContains(checks, 'recovery topic stall signal', docs.recoveryTopic, '# stalled:');
+assertContains(checks, 'chromux skill script confidence', docs.chromuxSkill, 'scriptStats');
 assertContains(checks, 'visual topic DPR warning', docs.visualTopic, 'Do not multiply or');
 assertContains(checks, 'visual topic crop-local coordinates', docs.visualTopic, 'image coordinates are local to that PNG');
 assertContains(checks, 'visual topic latest screenshot mapping', docs.visualTopic, "session's most recent screenshot mapping");
@@ -196,8 +198,8 @@ assertContains(checks, 'visual topic OOPIF crash cleanup', docs.visualTopic, '`l
 
 {
   const pkg = JSON.parse(read('package.json'));
-  const ok = pkg.version === '0.19.0' && !pkg.dependencies;
-  checks.push({ label: 'package remains zero-dependency at 0.19.0', needle: '0.19.0 with no dependencies', ok });
+  const ok = pkg.version === '0.19.1' && !pkg.dependencies;
+  checks.push({ label: 'package remains zero-dependency at 0.19.1', needle: '0.19.1 with no dependencies', ok });
   if (!ok) throw new Error(`package contract drift: version=${pkg.version}, dependencies=${JSON.stringify(pkg.dependencies)}`);
 }
 

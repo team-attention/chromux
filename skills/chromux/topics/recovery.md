@@ -41,6 +41,12 @@ dialog/new tab (both are reported when detected). Escalate in this order:
 console` / `watch <s> network` for silent failures. Never blindly repeat a
 submit-like action.
 
+When several verified actions in a row change nothing, the verify hint adds a
+`# stalled:` line. Treat it as a hard stop signal, not noise: you are almost
+certainly stuck on a dead control, behind an overlay/dialog that is eating the
+click, or in a loop. Do not repeat the action. Switch to a different element,
+dismiss the overlay, `wait-for` the state you expect, or hand off to the user.
+
 ## Cross-origin frame refs
 
 The default snapshot exposes an opaque frame ref, origin-only identity, and CSS rect without reading child DOM.

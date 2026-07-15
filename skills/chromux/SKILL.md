@@ -183,6 +183,11 @@ replay with `run <s> --script <host>/<name>` — zero model calls. `open`
 responses list saved scripts for the page's host; a failed replay points back
 at the script file so you can fix and re-save it.
 
+Replays are scored: each `run --script` records success or failure, so `open`
+ranks the most reliable flow first, adds `scriptStats` (confirmed/contradicted
+per script), and sets `replayNote` when the top flow recently broke. Prefer the
+first listed script, and heed `replayNote` before trusting a flaky one.
+
 ## Builtin Snippets
 
 Check `snippets/_builtin/` before recreating common loops (paths also work

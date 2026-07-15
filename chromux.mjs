@@ -277,6 +277,57 @@ function resolveScriptPath(ref) {
   return null;
 }
 
+// ---- Script usage confidence (the memory feedback loop) ----
+//
+// A saved flow is only worth replaying if it still works. Every replay already
+// produces a clean machine signal — the script ran to completion, or it threw.
+// We record that signal per script (confirmed vs contradicted) so `open` can
+// recommend proven flows first and warn about ones that recently broke. Pure
+// pass/fail counting, no per-site heuristics, so it cannot overfit.
+function scriptStatsPathFor(host) {
+  return path.join(SCRIPTS_DIR, host, '_stats.json');
+}
+
+function readScriptStats(host) {
+  return readJsonFile(scriptStatsPathFor(host), {}) || {};
+}
+
+// Stats are keyed by the resolved file's own host/name, so a script requested
+// via a subdomain label still updates the one record that backs the file.
+function scriptStatForPath(scriptPath) {
+  try {
+    const host = path.basename(path.dirname(scriptPath));
+    const name = path.basename(scriptPath).replace(/\.js$/, '');
+    return readScriptStats(host)[name] || null;
+  } catch {
+    return null;
+  }
+}
+
+function recordScriptReplayResult(codeSource, ok) {
+  if (codeSource?.kind !== 'script' || !codeSource.path) return;
+  try {
+    const dir = path.dirname(codeSource.path);
+    const host = path.basename(dir);
+    const name = path.basename(codeSource.path).replace(/\.js$/, '');
+    const stats = readScriptStats(host);
+    const rec = stats[name] || { confirmed: 0, contradicted: 0, lastResult: null, lastUsed: null };
+    if (ok) rec.confirmed = (rec.confirmed || 0) + 1;
+    else rec.contradicted = (rec.contradicted || 0) + 1;
+    rec.lastResult = ok ? 'ok' : 'fail';
+    rec.lastUsed = new Date().toISOString();
+    stats[name] = rec;
+    fs.mkdirSync(dir, { recursive: true });
+    // Write atomically (temp + rename) so an interrupted write never leaves a
+    // corrupt _stats.json — a corrupt file would reset the confidence history
+    // for every script on this host on the next record.
+    const statsPath = scriptStatsPathFor(host);
+    const tmpPath = `${statsPath}.${process.pid}.tmp`;
+    fs.writeFileSync(tmpPath, JSON.stringify(stats, null, 2));
+    fs.renameSync(tmpPath, statsPath);
+  } catch {}
+}
+
 function siteKnowledgeHintForUrl(rawUrl) {
   const host = hostFromUrl(rawUrl);
   if (!host) return null;
@@ -2399,7 +2450,17 @@ async function primeVerifyBaseline(s, timeoutMs = 3000) {
   if (text == null) return;
   if (!s.snapshotBaselines) s.snapshotBaselines = {};
   s.snapshotBaselines.verify = text;
+  // A fresh page/navigation is not a stall; start the streak over.
+  s.noChangeStreak = 0;
 }
+
+// Consecutive act-and-verify rounds that produce no visible change. A single
+// no-change round is normal (slow async UI); a run of them means the agent is
+// almost certainly stuck — re-clicking a dead control, trapped behind an
+// overlay, or looping — so surface it as a structural hint instead of letting
+// the agent thrash silently. Purely structural (no per-site knowledge), so it
+// generalizes and cannot overfit.
+const STALL_STREAK_THRESHOLD = 3;
 
 // Act-and-verify in one round-trip: wait for the UI to settle, snapshot
 // (full filter, stable clickable capping), diff against the session
@@ -2438,11 +2499,19 @@ async function captureVerifyDiff(s, waitMs, actedSelector) {
       if (late != null) text = late;
       if (noChangeYet()) {
         s.snapshotBaselines.verify = text;
-        return '# verify: no visible change detected within ~2s — the action was dispatched, but the UI may still be updating or the result may be in a new tab/dialog; confirm with wait-for-text or snapshot --diff BEFORE retrying the action';
+        s.noChangeStreak = (s.noChangeStreak || 0) + 1;
+        let msg = '# verify: no visible change detected within ~2s — the action was dispatched, but the UI may still be updating or the result may be in a new tab/dialog; confirm with wait-for-text or snapshot --diff BEFORE retrying the action';
+        if (s.noChangeStreak >= STALL_STREAK_THRESHOLD) {
+          msg += `\n# stalled: ${s.noChangeStreak} actions in a row changed nothing — you are likely stuck (dead control, an overlay/dialog intercepting the click, or a loop). Do not repeat the same action; try a different element, dismiss any overlay, wait-for the state you expect, or hand off to the user.`;
+        }
+        return msg;
       }
     }
   }
   s.snapshotBaselines.verify = text;
+  // Any path reaching here saw a real change (or a fresh baseline), so the
+  // stall streak is broken.
+  s.noChangeStreak = 0;
   if (previous == null && text.length > 2000) {
     return '# verify: first observation of a large page; showing changes from the next action onward';
   }
@@ -3641,11 +3710,31 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
         .map(note => `# Hint: ${note.label}\n${note.content}`);
       if (hints.length) result.hints = hints.join('\n\n');
       // Surface saved replay scripts for this host so agents reuse proven
-      // flows instead of re-deriving them.
+      // flows instead of re-deriving them. Rank by recorded confidence
+      // (confirmed − contradicted, recency tiebreak) so the recommended replay
+      // is the flow most likely to still work, and warn when it recently broke.
       const scripts = listScriptsForHostChain(knowledgeHint?.host);
       if (scripts.length) {
-        result.scripts = scripts.map(s => s.label);
-        result.replay = `chromux run ${session} --script ${scripts[0].label}`;
+        const scored = scripts.map(s => {
+          const st = scriptStatForPath(s.path);
+          return { label: s.label, st, score: st ? (st.confirmed || 0) - (st.contradicted || 0) : 0 };
+        }).sort((a, b) => (b.score - a.score)
+          || String(b.st?.lastUsed || '').localeCompare(String(a.st?.lastUsed || '')));
+        result.scripts = scored.map(s => s.label);
+        result.replay = `chromux run ${session} --script ${scored[0].label}`;
+        const withStats = scored.filter(s => s.st);
+        if (withStats.length) {
+          result.scriptStats = withStats.map(s => ({
+            label: s.label,
+            confirmed: s.st.confirmed || 0,
+            contradicted: s.st.contradicted || 0,
+            lastResult: s.st.lastResult || null,
+          }));
+        }
+        const top = scored[0];
+        if (top.st && (top.st.contradicted || 0) > 0 && (top.st.contradicted || 0) >= (top.st.confirmed || 0)) {
+          result.replayNote = 'Top saved flow recently failed at least as often as it worked — snapshot to confirm the page still matches before replaying.';
+        }
       }
     } catch {}
     return result;
@@ -5739,13 +5828,17 @@ async function cmdRun(args, sock) {
     throw error;
   }
   writeReceipt(result, null);
+  recordScriptReplayResult(codeSource, true);
   return result;
 }
 
 // When a saved-script replay fails, point the calling agent back at the
 // script so it can repair and re-save it — the agent is the self-healing LLM.
+// Both replay failure paths (thrown error and schema mismatch) funnel here, so
+// this is also where a contradicted result is recorded for the memory loop.
 function decorateScriptReplayError(error, codeSource) {
   if (codeSource?.kind !== 'script') return;
+  recordScriptReplayResult(codeSource, false);
   error.message += `\nscript: ${codeSource.label} (${codeSource.path})`
     + `\nhint: saved-script replay failed — snapshot the page to see its current state, fix the flow, then update it: chromux script save ${codeSource.label} --file <fixed.js>`;
 }
