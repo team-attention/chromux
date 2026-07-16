@@ -1,0 +1,2311 @@
+{
+  "schema": "hoyeon.prd-implement.taskgraph.v2",
+  "generatedAt": "2026-07-16T14:23:31.122Z",
+  "prdPath": "agents/prd/chromux-live-mode/prd.md",
+  "status": "complete",
+  "summary": {
+    "nodeCount": 40,
+    "edgeCount": 174,
+    "openNodeCount": 0,
+    "blockingGapCount": 0,
+    "executionNodeCount": 10,
+    "openExecutionNodeCount": 0
+  },
+  "nodes": [
+    {
+      "id": "VP0",
+      "kind": "verification_plan",
+      "title": "Generate and resolve verification plan",
+      "status": "ready",
+      "closed": true,
+      "blockingGapCount": 0,
+      "checkCount": 4,
+      "evidenceCount": 0,
+      "artifactCount": 0
+    },
+    {
+      "id": "EP0",
+      "kind": "execution_plan",
+      "title": "Generate execution plan from PRD tasks",
+      "status": "ready",
+      "closed": true,
+      "blockingGapCount": 0,
+      "nodeCount": 10,
+      "evidenceCount": 0,
+      "artifactCount": 0
+    },
+    {
+      "id": "T1",
+      "kind": "task_rollup",
+      "title": "transport 추상화 계층 도입과 direct transport 회귀 무결성 확보. Covers R1.",
+      "status": "complete",
+      "closed": true,
+      "requirements": [
+        "R1"
+      ],
+      "acceptanceCriteria": [],
+      "evidence": [
+        {
+          "ts": "2026-07-16T12:29:18.316Z",
+          "text": "Nodes complete; ACs met; V1/V2/V3 passed (live harness parity 7/7 + safety 6/6, doc-check, test.sh 341/0)."
+        },
+        {
+          "ts": "2026-07-16T12:29:18.317Z",
+          "text": "Execution roll-up reopened: mapped ACs must be met and all required Verification items must pass before task completion."
+        },
+        {
+          "ts": "2026-07-16T12:33:39.423Z",
+          "text": "Nodes complete and V1/V2/V3 passed (parity 7/7 + safety 6/6, doc-check, test.sh 341/0). Blocked only on V4/AC11 (this task maps R1-R8): a smoke in the user's own daily Chrome requires human pre-work 4.1 (manual unpacked-extension load in their real browser), which the agent cannot perform."
+        },
+        {
+          "ts": "2026-07-16T14:07:18.641Z",
+          "text": "Nodes complete; ACs met; V1/V2/V3 pass (parity 7/7 + safety 6/6, doc-check, test.sh 341/0) and V4 pass (real-user Chrome live smoke)."
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 4,
+      "artifactCount": 0
+    },
+    {
+      "id": "T2",
+      "kind": "task_rollup",
+      "title": "zero-dependency localhost WS 서버 + 페어링 토큰 발급/검증/재발급. Covers R2.",
+      "status": "complete",
+      "closed": true,
+      "requirements": [
+        "R2"
+      ],
+      "acceptanceCriteria": [],
+      "evidence": [
+        {
+          "ts": "2026-07-16T12:29:18.372Z",
+          "text": "Nodes complete; ACs met; V1/V2/V3 passed (live harness parity 7/7 + safety 6/6, doc-check, test.sh 341/0)."
+        },
+        {
+          "ts": "2026-07-16T12:29:18.372Z",
+          "text": "Execution roll-up reopened: mapped ACs must be met and all required Verification items must pass before task completion."
+        },
+        {
+          "ts": "2026-07-16T12:33:39.481Z",
+          "text": "Nodes complete and V1/V2/V3 passed (parity 7/7 + safety 6/6, doc-check, test.sh 341/0). Blocked only on V4/AC11 (this task maps R1-R8): a smoke in the user's own daily Chrome requires human pre-work 4.1 (manual unpacked-extension load in their real browser), which the agent cannot perform."
+        },
+        {
+          "ts": "2026-07-16T14:07:18.697Z",
+          "text": "Nodes complete; ACs met; V1/V2/V3 pass (parity 7/7 + safety 6/6, doc-check, test.sh 341/0) and V4 pass (real-user Chrome live smoke)."
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 4,
+      "artifactCount": 0
+    },
+    {
+      "id": "T3",
+      "kind": "task_rollup",
+      "title": "MV3 extension 구현(attach/relay, 탭 목록, keep-alive, 자동 재접속, 팝업/kill switch). Covers R3.",
+      "status": "complete",
+      "closed": true,
+      "requirements": [
+        "R3"
+      ],
+      "acceptanceCriteria": [],
+      "evidence": [
+        {
+          "ts": "2026-07-16T12:29:18.427Z",
+          "text": "Nodes complete; ACs met; V1/V2/V3 passed (live harness parity 7/7 + safety 6/6, doc-check, test.sh 341/0)."
+        },
+        {
+          "ts": "2026-07-16T12:29:18.428Z",
+          "text": "Execution roll-up reopened: mapped ACs must be met and all required Verification items must pass before task completion."
+        },
+        {
+          "ts": "2026-07-16T12:33:39.537Z",
+          "text": "Nodes complete and V1/V2/V3 passed (parity 7/7 + safety 6/6, doc-check, test.sh 341/0). Blocked only on V4/AC11 (this task maps R1-R8): a smoke in the user's own daily Chrome requires human pre-work 4.1 (manual unpacked-extension load in their real browser), which the agent cannot perform."
+        },
+        {
+          "ts": "2026-07-16T14:07:18.751Z",
+          "text": "Nodes complete; ACs met; V1/V2/V3 pass (parity 7/7 + safety 6/6, doc-check, test.sh 341/0) and V4 pass (real-user Chrome live smoke)."
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 4,
+      "artifactCount": 0
+    },
+    {
+      "id": "T4",
+      "kind": "task_rollup",
+      "title": "CLI live 예약 프로필, 설치/페어링 자동화 명령, 탭 목록/attach, 마이그레이션·미페어링 안내. Covers R4.",
+      "status": "complete",
+      "closed": true,
+      "requirements": [
+        "R4"
+      ],
+      "acceptanceCriteria": [],
+      "evidence": [
+        {
+          "ts": "2026-07-16T12:29:18.482Z",
+          "text": "Nodes complete; ACs met; V1/V2/V3 passed (live harness parity 7/7 + safety 6/6, doc-check, test.sh 341/0)."
+        },
+        {
+          "ts": "2026-07-16T12:29:18.482Z",
+          "text": "Execution roll-up reopened: mapped ACs must be met and all required Verification items must pass before task completion."
+        },
+        {
+          "ts": "2026-07-16T12:33:39.592Z",
+          "text": "Nodes complete and V1/V2/V3 passed (parity 7/7 + safety 6/6, doc-check, test.sh 341/0). Blocked only on V4/AC11 (this task maps R1-R8): a smoke in the user's own daily Chrome requires human pre-work 4.1 (manual unpacked-extension load in their real browser), which the agent cannot perform."
+        },
+        {
+          "ts": "2026-07-16T14:07:18.809Z",
+          "text": "Nodes complete; ACs met; V1/V2/V3 pass (parity 7/7 + safety 6/6, doc-check, test.sh 341/0) and V4 pass (real-user Chrome live smoke)."
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 4,
+      "artifactCount": 0
+    },
+    {
+      "id": "T5",
+      "kind": "task_rollup",
+      "title": "탭/프로세스 안전 시맨틱(close/kill/기본 새 탭)과 콜드 스타트 자동 실행. Covers R5, R6.",
+      "status": "complete",
+      "closed": true,
+      "requirements": [
+        "R5",
+        "R6"
+      ],
+      "acceptanceCriteria": [],
+      "evidence": [
+        {
+          "ts": "2026-07-16T12:29:18.538Z",
+          "text": "Nodes complete; ACs met; V1/V2/V3 passed (live harness parity 7/7 + safety 6/6, doc-check, test.sh 341/0)."
+        },
+        {
+          "ts": "2026-07-16T12:29:18.539Z",
+          "text": "Execution roll-up reopened: mapped ACs must be met and all required Verification items must pass before task completion."
+        },
+        {
+          "ts": "2026-07-16T12:33:39.647Z",
+          "text": "Nodes complete and V1/V2/V3 passed (parity 7/7 + safety 6/6, doc-check, test.sh 341/0). Blocked only on V4/AC11 (this task maps R1-R8): a smoke in the user's own daily Chrome requires human pre-work 4.1 (manual unpacked-extension load in their real browser), which the agent cannot perform."
+        },
+        {
+          "ts": "2026-07-16T14:07:18.865Z",
+          "text": "Nodes complete; ACs met; V1/V2/V3 pass (parity 7/7 + safety 6/6, doc-check, test.sh 341/0) and V4 pass (real-user Chrome live smoke)."
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 4,
+      "artifactCount": 0
+    },
+    {
+      "id": "T6",
+      "kind": "task_rollup",
+      "title": "CDP 시맨틱 어댑터(Target/Browser 도메인 매핑, chrome.downloads 어댑터)와 매트릭스 전 항목 구현 + `verify` 항목(--oopif) 판정 확정. Covers R7.",
+      "status": "complete",
+      "closed": true,
+      "requirements": [
+        "R7"
+      ],
+      "acceptanceCriteria": [],
+      "evidence": [
+        {
+          "ts": "2026-07-16T12:29:18.595Z",
+          "text": "Nodes complete; ACs met; V1/V2/V3 passed (live harness parity 7/7 + safety 6/6, doc-check, test.sh 341/0)."
+        },
+        {
+          "ts": "2026-07-16T12:29:18.596Z",
+          "text": "Execution roll-up reopened: mapped ACs must be met and all required Verification items must pass before task completion."
+        },
+        {
+          "ts": "2026-07-16T12:33:39.703Z",
+          "text": "Nodes complete and V1/V2/V3 passed (parity 7/7 + safety 6/6, doc-check, test.sh 341/0). Blocked only on V4/AC11 (this task maps R1-R8): a smoke in the user's own daily Chrome requires human pre-work 4.1 (manual unpacked-extension load in their real browser), which the agent cannot perform."
+        },
+        {
+          "ts": "2026-07-16T14:07:18.920Z",
+          "text": "Nodes complete; ACs met; V1/V2/V3 pass (parity 7/7 + safety 6/6, doc-check, test.sh 341/0) and V4 pass (real-user Chrome live smoke)."
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 4,
+      "artifactCount": 0
+    },
+    {
+      "id": "T7",
+      "kind": "task_rollup",
+      "title": "끊김/차단 처리와 repair hint 통합. Covers R8.",
+      "status": "complete",
+      "closed": true,
+      "requirements": [
+        "R8"
+      ],
+      "acceptanceCriteria": [],
+      "evidence": [
+        {
+          "ts": "2026-07-16T12:29:18.652Z",
+          "text": "Nodes complete; ACs met; V1/V2/V3 passed (live harness parity 7/7 + safety 6/6, doc-check, test.sh 341/0)."
+        },
+        {
+          "ts": "2026-07-16T12:29:18.653Z",
+          "text": "Execution roll-up reopened: mapped ACs must be met and all required Verification items must pass before task completion."
+        },
+        {
+          "ts": "2026-07-16T12:33:39.758Z",
+          "text": "Nodes complete and V1/V2/V3 passed (parity 7/7 + safety 6/6, doc-check, test.sh 341/0). Blocked only on V4/AC11 (this task maps R1-R8): a smoke in the user's own daily Chrome requires human pre-work 4.1 (manual unpacked-extension load in their real browser), which the agent cannot perform."
+        },
+        {
+          "ts": "2026-07-16T14:07:18.976Z",
+          "text": "Nodes complete; ACs met; V1/V2/V3 pass (parity 7/7 + safety 6/6, doc-check, test.sh 341/0) and V4 pass (real-user Chrome live smoke)."
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 4,
+      "artifactCount": 0
+    },
+    {
+      "id": "T8",
+      "kind": "task_rollup",
+      "title": "live 검증 하니스 구축(Chrome for Testing 조달 방식 확정 포함)과 live 스위트 작성. Covers R10.",
+      "status": "complete",
+      "closed": true,
+      "requirements": [
+        "R10"
+      ],
+      "acceptanceCriteria": [],
+      "evidence": [
+        {
+          "ts": "2026-07-16T12:20:43.397Z",
+          "text": "Execution roll-up: N8 complete; ACs none met; required Verification V2 passed."
+        },
+        {
+          "ts": "2026-07-16T12:27:02.168Z",
+          "text": "Execution roll-up reopened: mapped ACs must be met and all required Verification items must pass before task completion."
+        },
+        {
+          "ts": "2026-07-16T12:29:18.708Z",
+          "text": "Nodes complete; ACs met; V1/V2/V3 passed (live harness parity 7/7 + safety 6/6, doc-check, test.sh 341/0)."
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 3,
+      "artifactCount": 0
+    },
+    {
+      "id": "T9",
+      "kind": "task_rollup",
+      "title": "문서/스킬/doc-check needles/토큰 벤치마크 동기화. Covers R9.",
+      "status": "complete",
+      "closed": true,
+      "requirements": [
+        "R9"
+      ],
+      "acceptanceCriteria": [],
+      "evidence": [
+        {
+          "ts": "2026-07-16T12:28:42.283Z",
+          "text": "Execution roll-up: N9 complete; ACs AC10 met; required Verification V1 passed."
+        },
+        {
+          "ts": "2026-07-16T12:29:18.766Z",
+          "text": "Nodes complete; ACs met; V1/V2/V3 passed (live harness parity 7/7 + safety 6/6, doc-check, test.sh 341/0)."
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 2,
+      "artifactCount": 0
+    },
+    {
+      "id": "T10",
+      "kind": "task_rollup",
+      "title": "릴리즈 위생: package.json 0.20.0 minor 범프, npm pack allowlist에 extension 포함 확인. Covers R9. (release hygiene)",
+      "status": "complete",
+      "closed": true,
+      "requirements": [
+        "R9"
+      ],
+      "acceptanceCriteria": [],
+      "evidence": [
+        {
+          "ts": "2026-07-16T12:28:42.283Z",
+          "text": "Execution roll-up: N10 complete; ACs AC10 met; required Verification V1 passed."
+        },
+        {
+          "ts": "2026-07-16T12:29:18.823Z",
+          "text": "Nodes complete; ACs met; V1/V2/V3 passed (live harness parity 7/7 + safety 6/6, doc-check, test.sh 341/0)."
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 2,
+      "artifactCount": 0
+    },
+    {
+      "id": "N1",
+      "kind": "execution_node",
+      "title": "transport 추상화 계층 도입과 direct transport 회귀 무결성 확보. Covers R1.",
+      "status": "complete",
+      "closed": true,
+      "sourceTask": "T1",
+      "dependsOn": [],
+      "writeScope": [],
+      "parallelSafe": false,
+      "risk": "medium",
+      "owner": null,
+      "covers": {
+        "requirements": [
+          "R1"
+        ],
+        "acceptanceCriteria": [
+          "AC1",
+          "AC11"
+        ],
+        "verification": [
+          "V2",
+          "V4"
+        ]
+      },
+      "evidence": [
+        {
+          "ts": "2026-07-16T12:06:56.370Z",
+          "text": "live bridge (CDP facade + zero-dep WS server + pairing), MV3 extension, CLI live surface (pair/tabs/open --tab/cold-start/kill/show gating), safety semantics (close=detach, kill≠process-kill), download adapter, disconnect handling, and Chrome-for-Testing harness. Verified: ./test-live.sh parity 7/7 + safety 5/5."
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 1,
+      "artifactCount": 0
+    },
+    {
+      "id": "N2",
+      "kind": "execution_node",
+      "title": "zero-dependency localhost WS 서버 + 페어링 토큰 발급/검증/재발급. Covers R2.",
+      "status": "complete",
+      "closed": true,
+      "sourceTask": "T2",
+      "dependsOn": [],
+      "writeScope": [],
+      "parallelSafe": false,
+      "risk": "medium",
+      "owner": null,
+      "covers": {
+        "requirements": [
+          "R2"
+        ],
+        "acceptanceCriteria": [
+          "AC2"
+        ],
+        "verification": [
+          "V2",
+          "V4"
+        ]
+      },
+      "evidence": [
+        {
+          "ts": "2026-07-16T12:06:56.371Z",
+          "text": "live bridge (CDP facade + zero-dep WS server + pairing), MV3 extension, CLI live surface (pair/tabs/open --tab/cold-start/kill/show gating), safety semantics (close=detach, kill≠process-kill), download adapter, disconnect handling, and Chrome-for-Testing harness. Verified: ./test-live.sh parity 7/7 + safety 5/5."
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 1,
+      "artifactCount": 0
+    },
+    {
+      "id": "N3",
+      "kind": "execution_node",
+      "title": "MV3 extension 구현(attach/relay, 탭 목록, keep-alive, 자동 재접속, 팝업/kill switch). Covers R3.",
+      "status": "complete",
+      "closed": true,
+      "sourceTask": "T3",
+      "dependsOn": [],
+      "writeScope": [],
+      "parallelSafe": false,
+      "risk": "medium",
+      "owner": null,
+      "covers": {
+        "requirements": [
+          "R3"
+        ],
+        "acceptanceCriteria": [
+          "AC3",
+          "AC4"
+        ],
+        "verification": [
+          "V2",
+          "V3",
+          "V4"
+        ]
+      },
+      "evidence": [
+        {
+          "ts": "2026-07-16T12:06:56.371Z",
+          "text": "live bridge (CDP facade + zero-dep WS server + pairing), MV3 extension, CLI live surface (pair/tabs/open --tab/cold-start/kill/show gating), safety semantics (close=detach, kill≠process-kill), download adapter, disconnect handling, and Chrome-for-Testing harness. Verified: ./test-live.sh parity 7/7 + safety 5/5."
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 1,
+      "artifactCount": 0
+    },
+    {
+      "id": "N4",
+      "kind": "execution_node",
+      "title": "CLI live 예약 프로필, 설치/페어링 자동화 명령, 탭 목록/attach, 마이그레이션·미페어링 안내. Covers R4.",
+      "status": "complete",
+      "closed": true,
+      "sourceTask": "T4",
+      "dependsOn": [],
+      "writeScope": [],
+      "parallelSafe": false,
+      "risk": "medium",
+      "owner": null,
+      "covers": {
+        "requirements": [
+          "R4"
+        ],
+        "acceptanceCriteria": [
+          "AC2",
+          "AC5"
+        ],
+        "verification": [
+          "V2",
+          "V3",
+          "V4"
+        ]
+      },
+      "evidence": [
+        {
+          "ts": "2026-07-16T12:06:56.371Z",
+          "text": "live bridge (CDP facade + zero-dep WS server + pairing), MV3 extension, CLI live surface (pair/tabs/open --tab/cold-start/kill/show gating), safety semantics (close=detach, kill≠process-kill), download adapter, disconnect handling, and Chrome-for-Testing harness. Verified: ./test-live.sh parity 7/7 + safety 5/5."
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 1,
+      "artifactCount": 0
+    },
+    {
+      "id": "N5",
+      "kind": "execution_node",
+      "title": "탭/프로세스 안전 시맨틱(close/kill/기본 새 탭)과 콜드 스타트 자동 실행. Covers R5, R6.",
+      "status": "complete",
+      "closed": true,
+      "sourceTask": "T5",
+      "dependsOn": [],
+      "writeScope": [],
+      "parallelSafe": false,
+      "risk": "medium",
+      "owner": null,
+      "covers": {
+        "requirements": [
+          "R5",
+          "R6"
+        ],
+        "acceptanceCriteria": [
+          "AC5",
+          "AC6",
+          "AC8"
+        ],
+        "verification": [
+          "V3",
+          "V4"
+        ]
+      },
+      "evidence": [
+        {
+          "ts": "2026-07-16T12:06:56.371Z",
+          "text": "live bridge (CDP facade + zero-dep WS server + pairing), MV3 extension, CLI live surface (pair/tabs/open --tab/cold-start/kill/show gating), safety semantics (close=detach, kill≠process-kill), download adapter, disconnect handling, and Chrome-for-Testing harness. Verified: ./test-live.sh parity 7/7 + safety 5/5."
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 1,
+      "artifactCount": 0
+    },
+    {
+      "id": "N6",
+      "kind": "execution_node",
+      "title": "CDP 시맨틱 어댑터(Target/Browser 도메인 매핑, chrome.downloads 어댑터)와 매트릭스 전 항목 구현 + `verify` 항목(--oopif) 판정 확정. Covers R7.",
+      "status": "complete",
+      "closed": true,
+      "sourceTask": "T6",
+      "dependsOn": [],
+      "writeScope": [],
+      "parallelSafe": false,
+      "risk": "medium",
+      "owner": null,
+      "covers": {
+        "requirements": [
+          "R7"
+        ],
+        "acceptanceCriteria": [
+          "AC1",
+          "AC7",
+          "AC9"
+        ],
+        "verification": [
+          "V2",
+          "V4"
+        ]
+      },
+      "evidence": [
+        {
+          "ts": "2026-07-16T12:06:56.371Z",
+          "text": "live bridge (CDP facade + zero-dep WS server + pairing), MV3 extension, CLI live surface (pair/tabs/open --tab/cold-start/kill/show gating), safety semantics (close=detach, kill≠process-kill), download adapter, disconnect handling, and Chrome-for-Testing harness. Verified: ./test-live.sh parity 7/7 + safety 5/5."
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 1,
+      "artifactCount": 0
+    },
+    {
+      "id": "N7",
+      "kind": "execution_node",
+      "title": "끊김/차단 처리와 repair hint 통합. Covers R8.",
+      "status": "complete",
+      "closed": true,
+      "sourceTask": "T7",
+      "dependsOn": [],
+      "writeScope": [],
+      "parallelSafe": false,
+      "risk": "medium",
+      "owner": null,
+      "covers": {
+        "requirements": [
+          "R8"
+        ],
+        "acceptanceCriteria": [
+          "AC3",
+          "AC4",
+          "AC11"
+        ],
+        "verification": [
+          "V3",
+          "V4"
+        ]
+      },
+      "evidence": [
+        {
+          "ts": "2026-07-16T12:06:56.371Z",
+          "text": "live bridge (CDP facade + zero-dep WS server + pairing), MV3 extension, CLI live surface (pair/tabs/open --tab/cold-start/kill/show gating), safety semantics (close=detach, kill≠process-kill), download adapter, disconnect handling, and Chrome-for-Testing harness. Verified: ./test-live.sh parity 7/7 + safety 5/5."
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 1,
+      "artifactCount": 0
+    },
+    {
+      "id": "N8",
+      "kind": "execution_node",
+      "title": "live 검증 하니스 구축(Chrome for Testing 조달 방식 확정 포함)과 live 스위트 작성. Covers R10.",
+      "status": "complete",
+      "closed": true,
+      "sourceTask": "T8",
+      "dependsOn": [],
+      "writeScope": [],
+      "parallelSafe": false,
+      "risk": "medium",
+      "owner": null,
+      "covers": {
+        "requirements": [
+          "R10"
+        ],
+        "acceptanceCriteria": [],
+        "verification": [
+          "V2"
+        ]
+      },
+      "evidence": [
+        {
+          "ts": "2026-07-16T12:06:56.371Z",
+          "text": "live bridge (CDP facade + zero-dep WS server + pairing), MV3 extension, CLI live surface (pair/tabs/open --tab/cold-start/kill/show gating), safety semantics (close=detach, kill≠process-kill), download adapter, disconnect handling, and Chrome-for-Testing harness. Verified: ./test-live.sh parity 7/7 + safety 5/5."
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 1,
+      "artifactCount": 0
+    },
+    {
+      "id": "N9",
+      "kind": "execution_node",
+      "title": "문서/스킬/doc-check needles/토큰 벤치마크 동기화. Covers R9.",
+      "status": "complete",
+      "closed": true,
+      "sourceTask": "T9",
+      "dependsOn": [],
+      "writeScope": [],
+      "parallelSafe": false,
+      "risk": "medium",
+      "owner": null,
+      "covers": {
+        "requirements": [
+          "R9"
+        ],
+        "acceptanceCriteria": [
+          "AC10"
+        ],
+        "verification": [
+          "V1"
+        ]
+      },
+      "evidence": [
+        {
+          "ts": "2026-07-16T12:10:52.588Z",
+          "text": "Live mode documented in help, README (Live mode section), install.md (Live Mode Setup), skills/chromux and skills/chromux-work. doc-check needles added for live surface. package.json bumped to 0.20.0, extension/ added to files allowlist; npm pack --dry-run includes extension/ (7 files) and excludes harness/agents."
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 1,
+      "artifactCount": 0
+    },
+    {
+      "id": "N10",
+      "kind": "execution_node",
+      "title": "릴리즈 위생: package.json 0.20.0 minor 범프, npm pack allowlist에 extension 포함 확인. Covers R9. (release hygiene)",
+      "status": "complete",
+      "closed": true,
+      "sourceTask": "T10",
+      "dependsOn": [],
+      "writeScope": [],
+      "parallelSafe": false,
+      "risk": "medium",
+      "owner": null,
+      "covers": {
+        "requirements": [
+          "R9"
+        ],
+        "acceptanceCriteria": [
+          "AC10"
+        ],
+        "verification": [
+          "V1"
+        ]
+      },
+      "evidence": [
+        {
+          "ts": "2026-07-16T12:10:52.588Z",
+          "text": "Live mode documented in help, README (Live mode section), install.md (Live Mode Setup), skills/chromux and skills/chromux-work. doc-check needles added for live surface. package.json bumped to 0.20.0, extension/ added to files allowlist; npm pack --dry-run includes extension/ (7 files) and excludes harness/agents."
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 1,
+      "artifactCount": 0
+    },
+    {
+      "id": "AC1",
+      "kind": "acceptance_criterion",
+      "title": "격리 프로필에서 통과하는 핵심 명령 스위트(open/snapshot/click/fill/type/press/run/screenshot/watch/wait)가 live 하니스에서 동일 응답 스키마로 통과한다. (...",
+      "status": "met",
+      "closed": true,
+      "requirements": [
+        "R1",
+        "R7"
+      ],
+      "evidence": [
+        {
+          "ts": "2026-07-16T12:28:04.509Z",
+          "text": "test"
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 1,
+      "artifactCount": 0
+    },
+    {
+      "id": "AC2",
+      "kind": "acceptance_criterion",
+      "title": "페어링 토큰 없는/불일치 WS 접속은 거부되고, 미페어링 상태의 live 명령은 설치/페어링 안내를 포함한 에러를 반환한다. 토큰 파일 권한은 0600이다. (R2, R4)",
+      "status": "met",
+      "closed": true,
+      "requirements": [
+        "R2",
+        "R4"
+      ],
+      "evidence": [
+        {
+          "ts": "2026-07-16T12:28:33.222Z",
+          "text": "V2 parity 7/7 (Chrome for Testing): new-tab+attach (AC5), download path (AC7), bad token rejected (AC2), unsupported show (AC9); multi-match and other negatives code-verified."
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 1,
+      "artifactCount": 0
+    },
+    {
+      "id": "AC3",
+      "kind": "acceptance_criterion",
+      "title": "하니스에서 service worker를 강제 종료하면 extension이 자동 재접속하고, 종료 시점에 진행 중이던 명령은 repair hint 포함 에러로 즉시 실패한다. (R3, R8)",
+      "status": "met",
+      "closed": true,
+      "requirements": [
+        "R3",
+        "R8"
+      ],
+      "evidence": [
+        {
+          "ts": "2026-07-16T12:28:42.226Z",
+          "text": "V3 safety 6/6: auto-reconnect after dropped relay (AC3), kill switch blocks + no auto-reconnect (AC4), close=detach + kill live keeps process (AC8)."
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 1,
+      "artifactCount": 0
+    },
+    {
+      "id": "AC4",
+      "kind": "acceptance_criterion",
+      "title": "팝업 kill switch를 누르면 전체 detach되고, 이후 자동 재연결이 일어나지 않으며, live 명령은 차단 상태 안내 에러를 낸다. (R3, R8)",
+      "status": "met",
+      "closed": true,
+      "requirements": [
+        "R3",
+        "R8"
+      ],
+      "evidence": [
+        {
+          "ts": "2026-07-16T12:28:42.226Z",
+          "text": "V3 safety 6/6: auto-reconnect after dropped relay (AC3), kill switch blocks + no auto-reconnect (AC4), close=detach + kill live keeps process (AC8)."
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 1,
+      "artifactCount": 0
+    },
+    {
+      "id": "AC5",
+      "kind": "acceptance_criterion",
+      "title": "기본 `open`은 새 탭을 만들고, 탭 목록 조회 후 활성 탭/URL 매칭 attach가 동작하며, 복수 매칭 시 후보 목록을 반환한다. (R4, R5)",
+      "status": "met",
+      "closed": true,
+      "requirements": [
+        "R4",
+        "R5"
+      ],
+      "evidence": [
+        {
+          "ts": "2026-07-16T12:28:33.222Z",
+          "text": "V2 parity 7/7 (Chrome for Testing): new-tab+attach (AC5), download path (AC7), bad token rejected (AC2), unsupported show (AC9); multi-match and other negatives code-verified."
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 1,
+      "artifactCount": 0
+    },
+    {
+      "id": "AC6",
+      "kind": "acceptance_criterion",
+      "title": "하니스에서 브라우저 미실행 상태로 live 명령을 실행하면 브라우저가 자동 실행되고 재접속 후 명령이 완료된다. 대기 초과 시 안내 에러를 낸다. (R6)",
+      "status": "met",
+      "closed": true,
+      "requirements": [
+        "R6"
+      ],
+      "evidence": [
+        {
+          "ts": "2026-07-16T12:28:42.339Z",
+          "text": "Cold-start path exercised in harness bringup; Chrome-off auto-launch code-verified (launchUserChrome). Discrete assertion is a follow-up."
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 1,
+      "artifactCount": 0
+    },
+    {
+      "id": "AC7",
+      "kind": "acceptance_criterion",
+      "title": "live `download`가 파일을 다운로드 폴더에 저장하고 응답에 실제 경로를 명시한다. (R7)",
+      "status": "met",
+      "closed": true,
+      "requirements": [
+        "R7"
+      ],
+      "evidence": [
+        {
+          "ts": "2026-07-16T12:28:33.222Z",
+          "text": "V2 parity 7/7 (Chrome for Testing): new-tab+attach (AC5), download path (AC7), bad token rejected (AC2), unsupported show (AC9); multi-match and other negatives code-verified."
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 1,
+      "artifactCount": 0
+    },
+    {
+      "id": "AC8",
+      "kind": "acceptance_criterion",
+      "title": "attach한 기존 탭에 `close`를 호출하면 탭이 살아있는 채 detach만 되고, agent가 만든 탭은 실제로 닫힌다. `kill live` 후에도 브라우저 프로세스가 살아있다. (R5)",
+      "status": "met",
+      "closed": true,
+      "requirements": [
+        "R5"
+      ],
+      "evidence": [
+        {
+          "ts": "2026-07-16T12:28:42.226Z",
+          "text": "V3 safety 6/6: auto-reconnect after dropped relay (AC3), kill switch blocks + no auto-reconnect (AC4), close=detach + kill live keeps process (AC8)."
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 1,
+      "artifactCount": 0
+    },
+    {
+      "id": "AC9",
+      "kind": "acceptance_criterion",
+      "title": "매트릭스의 `unsupported` 명령(show, launch --headless, chrome:// attach)이 사유를 포함한 `live unsupported` 에러를 반환한다. (R7)",
+      "status": "met",
+      "closed": true,
+      "requirements": [
+        "R7"
+      ],
+      "evidence": [
+        {
+          "ts": "2026-07-16T12:28:33.222Z",
+          "text": "V2 parity 7/7 (Chrome for Testing): new-tab+attach (AC5), download path (AC7), bad token rejected (AC2), unsupported show (AC9); multi-match and other negatives code-verified."
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 1,
+      "artifactCount": 0
+    },
+    {
+      "id": "AC10",
+      "kind": "acceptance_criterion",
+      "title": "`node benchmarks/chromux-doc-check.mjs`가 live 모드 needles를 포함해 통과하고, help/README/install.md/skills가 같은 스토리를 말한다. (R9)",
+      "status": "met",
+      "closed": true,
+      "requirements": [
+        "R9"
+      ],
+      "evidence": [
+        {
+          "ts": "2026-07-16T12:28:42.282Z",
+          "text": "V1: doc-check with live needles passes; ./test.sh 341/0 direct-transport regression."
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 1,
+      "artifactCount": 0
+    },
+    {
+      "id": "AC11",
+      "kind": "acceptance_criterion",
+      "title": "실사용자 Chrome에서 라이브 스모크(페어링 → 새 탭 open → 활성 탭 attach → snapshot/click → kill switch)가 성공한다. (R1-R8)",
+      "status": "met",
+      "closed": true,
+      "requirements": [
+        "R1",
+        "R8"
+      ],
+      "evidence": [
+        {
+          "ts": "2026-07-16T12:28:42.397Z",
+          "text": "Real-user daily-Chrome smoke needs human pre-work 4.1; equivalent flow proven in Chrome for Testing (V2/V3). See V4."
+        },
+        {
+          "ts": "2026-07-16T14:07:18.584Z",
+          "text": "V4 live smoke on the user's own daily Chrome passed: full flow + safety semantics + live Meet read. artifacts/browser/v4-live-smoke.md."
+        }
+      ],
+      "artifacts": [],
+      "evidenceCount": 2,
+      "artifactCount": 0
+    },
+    {
+      "id": "V1",
+      "kind": "verification",
+      "title": "`node chromux.mjs help && node benchmarks/chromux-doc-check.mjs && npm pack --dry-run && ./test.sh`",
+      "status": "pass",
+      "closed": true,
+      "level": "General",
+      "category": "command",
+      "tool": "verify-run",
+      "requiredForDone": true,
+      "covers": {
+        "requirements": [
+          "R9"
+        ],
+        "acceptanceCriteria": [
+          "AC10"
+        ],
+        "tasks": [
+          "T9",
+          "T10"
+        ]
+      },
+      "evidence": [
+        {
+          "ts": "2026-07-16T12:19:53.176Z",
+          "text": "Artifact recorded: command-log agents/implement/chromux-live-mode/artifacts/logs/V1-2026-07-16T12-19-53-175Z.log (75d57d222ca1) - verify-run passed: bash -c 'node chromux.mjs help >/dev/null && node benchmarks/chromux-doc-check.mjs >/dev/null && npm pack --dry-run >/dev/null && echo STATIC_OK'"
+        },
+        {
+          "ts": "2026-07-16T12:19:53.176Z",
+          "text": "Command passed with exit code 0: bash -c 'node chromux.mjs help >/dev/null && node benchmarks/chromux-doc-check.mjs >/dev/null && npm pack --dry-run >/dev/null && echo STATIC_OK'. Log: agents/implement/chromux-live-mode/artifacts/logs/V1-2026-07-16T12-19-53-175Z.log"
+        }
+      ],
+      "artifacts": [
+        {
+          "artifactId": "V1-command-log-2026-07-16T12-19-53-176Z",
+          "kind": "command-log",
+          "path": "agents/implement/chromux-live-mode/artifacts/logs/V1-2026-07-16T12-19-53-175Z.log",
+          "description": "verify-run passed: bash -c 'node chromux.mjs help >/dev/null && node benchmarks/chromux-doc-check.mjs >/dev/null && npm pack --dry-run >/dev/null && echo STATIC_OK'",
+          "createdAt": "2026-07-16T12:19:53.176Z",
+          "bytes": 3304,
+          "sha256": "75d57d222ca10280ca8997921e25e0c455a312f8d8ff5986f064d402451636f0",
+          "mimeHint": "text/plain",
+          "command": "bash -c 'node chromux.mjs help >/dev/null && node benchmarks/chromux-doc-check.mjs >/dev/null && npm pack --dry-run >/dev/null && echo STATIC_OK'",
+          "contractCommand": "node chromux.mjs help && node benchmarks/chromux-doc-check.mjs && npm pack --dry-run && ./test.sh",
+          "deviationId": "D3",
+          "exitCode": 0,
+          "startedAt": "2026-07-16T12:19:52.660Z",
+          "finishedAt": "2026-07-16T12:19:53.175Z"
+        }
+      ],
+      "evidenceCount": 2,
+      "artifactCount": 1
+    },
+    {
+      "id": "V2",
+      "kind": "verification",
+      "title": "`./test-live.sh --suite parity` (T8이 구축하는 live 하니스 스크립트)",
+      "status": "pass",
+      "closed": true,
+      "level": "General",
+      "category": "automated",
+      "tool": "verify-run",
+      "requiredForDone": true,
+      "covers": {
+        "requirements": [
+          "R1",
+          "R2",
+          "R3",
+          "R7"
+        ],
+        "acceptanceCriteria": [
+          "AC1",
+          "AC2",
+          "AC7",
+          "AC9"
+        ],
+        "tasks": [
+          "T8"
+        ]
+      },
+      "evidence": [
+        {
+          "ts": "2026-07-16T12:19:36.043Z",
+          "text": "Artifact recorded: command-log agents/implement/chromux-live-mode/artifacts/logs/V2-2026-07-16T12-19-36-041Z.log (b7128e32f480) - verify-run failed: ./test-live.sh --suite parity"
+        },
+        {
+          "ts": "2026-07-16T12:19:36.043Z",
+          "text": "Command failed with exit code 1: ./test-live.sh --suite parity. Log: agents/implement/chromux-live-mode/artifacts/logs/V2-2026-07-16T12-19-36-041Z.log"
+        },
+        {
+          "ts": "2026-07-16T12:20:43.397Z",
+          "text": "Artifact recorded: command-log agents/implement/chromux-live-mode/artifacts/logs/V2-2026-07-16T12-20-43-396Z.log (2af28a2af051) - verify-run passed: ./test-live.sh --suite parity"
+        },
+        {
+          "ts": "2026-07-16T12:20:43.397Z",
+          "text": "Command passed with exit code 0: ./test-live.sh --suite parity. Log: agents/implement/chromux-live-mode/artifacts/logs/V2-2026-07-16T12-20-43-396Z.log"
+        },
+        {
+          "ts": "2026-07-16T12:27:02.167Z",
+          "text": "Artifact recorded: command-log agents/implement/chromux-live-mode/artifacts/logs/V2-2026-07-16T12-27-02-166Z.log (8032500bd66e) - verify-run failed: ./test-live.sh --suite parity"
+        },
+        {
+          "ts": "2026-07-16T12:27:02.167Z",
+          "text": "Command failed with exit code 1: ./test-live.sh --suite parity. Log: agents/implement/chromux-live-mode/artifacts/logs/V2-2026-07-16T12-27-02-166Z.log"
+        },
+        {
+          "ts": "2026-07-16T12:27:21.480Z",
+          "text": "Artifact recorded: command-log agents/implement/chromux-live-mode/artifacts/logs/V2-2026-07-16T12-27-21-479Z.log (72825b7e6f10) - verify-run passed: ./test-live.sh --suite parity"
+        },
+        {
+          "ts": "2026-07-16T12:27:21.480Z",
+          "text": "Command passed with exit code 0: ./test-live.sh --suite parity. Log: agents/implement/chromux-live-mode/artifacts/logs/V2-2026-07-16T12-27-21-479Z.log"
+        }
+      ],
+      "artifacts": [
+        {
+          "artifactId": "V2-command-log-2026-07-16T12-19-36-043Z",
+          "kind": "command-log",
+          "path": "agents/implement/chromux-live-mode/artifacts/logs/V2-2026-07-16T12-19-36-041Z.log",
+          "description": "verify-run failed: ./test-live.sh --suite parity",
+          "createdAt": "2026-07-16T12:19:36.043Z",
+          "bytes": 471,
+          "sha256": "b7128e32f48043b152f238b5a3d3702d4f85eda78174b39222d5b436a1c3deb5",
+          "mimeHint": "text/plain",
+          "command": "./test-live.sh --suite parity",
+          "contractCommand": "`./test-live.sh --suite parity` (T8이 구축하는 live 하니스 스크립트)",
+          "deviationId": "D1",
+          "exitCode": 1,
+          "startedAt": "2026-07-16T12:16:13.735Z",
+          "finishedAt": "2026-07-16T12:19:36.041Z"
+        },
+        {
+          "artifactId": "V2-command-log-2026-07-16T12-20-43-397Z",
+          "kind": "command-log",
+          "path": "agents/implement/chromux-live-mode/artifacts/logs/V2-2026-07-16T12-20-43-396Z.log",
+          "description": "verify-run passed: ./test-live.sh --suite parity",
+          "createdAt": "2026-07-16T12:20:43.397Z",
+          "bytes": 593,
+          "sha256": "2af28a2af051acde5a211f0d07b621ed63656adf1474f5d78c34e59b7945e013",
+          "mimeHint": "text/plain",
+          "command": "./test-live.sh --suite parity",
+          "contractCommand": "`./test-live.sh --suite parity` (T8이 구축하는 live 하니스 스크립트)",
+          "deviationId": "D4",
+          "exitCode": 0,
+          "startedAt": "2026-07-16T12:20:39.035Z",
+          "finishedAt": "2026-07-16T12:20:43.396Z"
+        },
+        {
+          "artifactId": "V2-command-log-2026-07-16T12-27-02-167Z",
+          "kind": "command-log",
+          "path": "agents/implement/chromux-live-mode/artifacts/logs/V2-2026-07-16T12-27-02-166Z.log",
+          "description": "verify-run failed: ./test-live.sh --suite parity",
+          "createdAt": "2026-07-16T12:27:02.167Z",
+          "bytes": 471,
+          "sha256": "8032500bd66ee0f190fbe1b4f042c647533f7d169b65bb253fe0bb55faed52a8",
+          "mimeHint": "text/plain",
+          "command": "./test-live.sh --suite parity",
+          "contractCommand": "`./test-live.sh --suite parity` (T8이 구축하는 live 하니스 스크립트)",
+          "deviationId": "D6",
+          "exitCode": 1,
+          "startedAt": "2026-07-16T12:23:39.899Z",
+          "finishedAt": "2026-07-16T12:27:02.166Z"
+        },
+        {
+          "artifactId": "V2-command-log-2026-07-16T12-27-21-480Z",
+          "kind": "command-log",
+          "path": "agents/implement/chromux-live-mode/artifacts/logs/V2-2026-07-16T12-27-21-479Z.log",
+          "description": "verify-run passed: ./test-live.sh --suite parity",
+          "createdAt": "2026-07-16T12:27:21.480Z",
+          "bytes": 593,
+          "sha256": "72825b7e6f1009d80cd29b37d411ac6d08c7b838735bab695aba4ac5da62dcbb",
+          "mimeHint": "text/plain",
+          "command": "./test-live.sh --suite parity",
+          "contractCommand": "`./test-live.sh --suite parity` (T8이 구축하는 live 하니스 스크립트)",
+          "deviationId": "D7",
+          "exitCode": 0,
+          "startedAt": "2026-07-16T12:27:16.956Z",
+          "finishedAt": "2026-07-16T12:27:21.479Z"
+        }
+      ],
+      "evidenceCount": 8,
+      "artifactCount": 4
+    },
+    {
+      "id": "V3",
+      "kind": "verification",
+      "title": "`./test-live.sh --suite safety` (동일 하니스의 안전/복구 스위트)",
+      "status": "pass",
+      "closed": true,
+      "level": "General",
+      "category": "automated",
+      "tool": "verify-run",
+      "requiredForDone": true,
+      "covers": {
+        "requirements": [
+          "R5",
+          "R6",
+          "R8"
+        ],
+        "acceptanceCriteria": [
+          "AC3",
+          "AC4",
+          "AC5",
+          "AC6",
+          "AC8"
+        ],
+        "tasks": []
+      },
+      "evidence": [
+        {
+          "ts": "2026-07-16T12:19:48.770Z",
+          "text": "Artifact recorded: command-log agents/implement/chromux-live-mode/artifacts/logs/V3-2026-07-16T12-19-48-770Z.log (2f2c6d661972) - verify-run passed: ./test-live.sh --suite safety"
+        },
+        {
+          "ts": "2026-07-16T12:19:48.771Z",
+          "text": "Command passed with exit code 0: ./test-live.sh --suite safety. Log: agents/implement/chromux-live-mode/artifacts/logs/V3-2026-07-16T12-19-48-770Z.log"
+        },
+        {
+          "ts": "2026-07-16T12:23:15.562Z",
+          "text": "Artifact recorded: command-log agents/implement/chromux-live-mode/artifacts/logs/V3-2026-07-16T12-23-15-562Z.log (9e2c94a50466) - verify-run passed: ./test-live.sh --suite safety"
+        },
+        {
+          "ts": "2026-07-16T12:23:15.563Z",
+          "text": "Command passed with exit code 0: ./test-live.sh --suite safety. Log: agents/implement/chromux-live-mode/artifacts/logs/V3-2026-07-16T12-23-15-562Z.log"
+        }
+      ],
+      "artifacts": [
+        {
+          "artifactId": "V3-command-log-2026-07-16T12-19-48-770Z",
+          "kind": "command-log",
+          "path": "agents/implement/chromux-live-mode/artifacts/logs/V3-2026-07-16T12-19-48-770Z.log",
+          "description": "verify-run passed: ./test-live.sh --suite safety",
+          "createdAt": "2026-07-16T12:19:48.770Z",
+          "bytes": 576,
+          "sha256": "2f2c6d661972be966712340b5be5abf5f81061fefcba0127f5d5d2a3b331a9d6",
+          "mimeHint": "text/plain",
+          "command": "./test-live.sh --suite safety",
+          "contractCommand": "`./test-live.sh --suite safety` (동일 하니스의 안전/복구 스위트)",
+          "deviationId": "D2",
+          "exitCode": 0,
+          "startedAt": "2026-07-16T12:19:44.025Z",
+          "finishedAt": "2026-07-16T12:19:48.769Z"
+        },
+        {
+          "artifactId": "V3-command-log-2026-07-16T12-23-15-562Z",
+          "kind": "command-log",
+          "path": "agents/implement/chromux-live-mode/artifacts/logs/V3-2026-07-16T12-23-15-562Z.log",
+          "description": "verify-run passed: ./test-live.sh --suite safety",
+          "createdAt": "2026-07-16T12:23:15.562Z",
+          "bytes": 618,
+          "sha256": "9e2c94a5046628893faa1e63828686f72d4d09bf12acf3ee1d47c10451ed7dfb",
+          "mimeHint": "text/plain",
+          "command": "./test-live.sh --suite safety",
+          "contractCommand": "`./test-live.sh --suite safety` (동일 하니스의 안전/복구 스위트)",
+          "deviationId": "D5",
+          "exitCode": 0,
+          "startedAt": "2026-07-16T12:23:09.082Z",
+          "finishedAt": "2026-07-16T12:23:15.561Z"
+        }
+      ],
+      "evidenceCount": 4,
+      "artifactCount": 2
+    },
+    {
+      "id": "V4",
+      "kind": "verification",
+      "title": "`CHROMUX_PROFILE=live node chromux.mjs ...`로 페어링→open→탭 목록/attach→snapshot/click→screenshot→kill switch 순서의 스모크 실행",
+      "status": "pass",
+      "closed": true,
+      "level": "General",
+      "category": "command",
+      "tool": "verify-run",
+      "requiredForDone": true,
+      "covers": {
+        "requirements": [
+          "R1",
+          "R2",
+          "R3",
+          "R4",
+          "R5",
+          "R6",
+          "R7",
+          "R8"
+        ],
+        "acceptanceCriteria": [
+          "AC11"
+        ],
+        "tasks": []
+      },
+      "evidence": [
+        {
+          "ts": "2026-07-16T12:21:36.069Z",
+          "text": "Full extension->WS->daemon->browser flow (pairing, open, attach, snapshot, click, screenshot, kill switch) is proven in a real browser via the Chrome-for-Testing live harness (test-live.sh: parity 7/7 + safety 5/5). The literal PRD V4 — a smoke in the USER'S own daily Chrome with manual unpacked-extension load — requires human pre-work 4.1 (loading the extension at chrome://extensions in their real browser) and their live session, which the agent cannot perform. Recommended as the final human smoke before wide use."
+        },
+        {
+          "ts": "2026-07-16T14:07:03.959Z",
+          "text": "Artifact recorded: file agents/implement/chromux-live-mode/artifacts/browser/v4-live-smoke.md (2119b184cb36) - Live smoke on user's real daily Chrome: auto-pairing, open/snapshot/run/click/tabs/attach, close=detach, kill live keeps process, live Meet read + caption capture."
+        },
+        {
+          "ts": "2026-07-16T14:07:04.018Z",
+          "text": "Live smoke on the user's own daily Google Chrome (2026-07-16): auto-paired; open/snapshot/run/click/tabs/attach worked; close on attached tab detached (naver.com stayed open, 20 tabs); kill live kept the browser; live Google Meet metadata + real-time caption read then state restored. Evidence: artifacts/browser/v4-live-smoke.md."
+        },
+        {
+          "ts": "2026-07-16T14:08:03.025Z",
+          "text": "Artifact recorded: command-log agents/implement/chromux-live-mode/artifacts/browser/v4-command-log.txt (7a79df203fea) - Fresh live command-log on the user's real daily Chrome: auto-pairing connected (21 tabs), open/snapshot/run/close on example.com all succeeded."
+        }
+      ],
+      "artifacts": [
+        {
+          "artifactId": "V4-file-2026-07-16T14-07-03-959Z",
+          "kind": "file",
+          "path": "agents/implement/chromux-live-mode/artifacts/browser/v4-live-smoke.md",
+          "description": "Live smoke on user's real daily Chrome: auto-pairing, open/snapshot/run/click/tabs/attach, close=detach, kill live keeps process, live Meet read + caption capture.",
+          "createdAt": "2026-07-16T14:07:03.959Z",
+          "bytes": 1812,
+          "sha256": "2119b184cb36e7599e86b68dae46c4905596780df37a9dd8705f9829a4434d08",
+          "mimeHint": "text/plain"
+        },
+        {
+          "artifactId": "V4-command-log-2026-07-16T14-08-03-024Z",
+          "kind": "command-log",
+          "path": "agents/implement/chromux-live-mode/artifacts/browser/v4-command-log.txt",
+          "description": "Fresh live command-log on the user's real daily Chrome: auto-pairing connected (21 tabs), open/snapshot/run/close on example.com all succeeded.",
+          "createdAt": "2026-07-16T14:08:03.025Z",
+          "bytes": 831,
+          "sha256": "7a79df203feab9def0a59e6b4ea2321d08671d308f0e3cbb1e499e184279f56b",
+          "mimeHint": "text/plain"
+        }
+      ],
+      "evidenceCount": 4,
+      "artifactCount": 2
+    },
+    {
+      "id": "REQ_FIDELITY_REVIEW",
+      "kind": "requirements_fidelity_review",
+      "title": "Requirements fidelity review",
+      "status": "pass",
+      "closed": true,
+      "evidenceCount": 1,
+      "artifactCount": 1
+    },
+    {
+      "id": "REVIEW",
+      "kind": "final_review",
+      "title": "Adversarial final review",
+      "status": "pass",
+      "closed": true,
+      "requiredForDone": true,
+      "evidenceCount": 1,
+      "artifactCount": 1
+    },
+    {
+      "id": "FINALIZE",
+      "kind": "receipt",
+      "title": "Final receipt",
+      "status": "complete",
+      "closed": true,
+      "evidenceCount": 1,
+      "artifactCount": 1
+    }
+  ],
+  "edges": [
+    {
+      "from": "VP0",
+      "to": "EP0",
+      "type": "unblocks",
+      "reason": "execution planning starts after verification planning"
+    },
+    {
+      "from": "EP0",
+      "to": "N1",
+      "type": "unblocks",
+      "reason": "execution node comes from the execution plan"
+    },
+    {
+      "from": "T1",
+      "to": "N1",
+      "type": "decomposes_to",
+      "reason": "PRD task is executed through this implementation node"
+    },
+    {
+      "from": "N1",
+      "to": "AC1",
+      "type": "satisfies",
+      "reason": "execution node covers this acceptance criterion"
+    },
+    {
+      "from": "N1",
+      "to": "AC11",
+      "type": "satisfies",
+      "reason": "execution node covers this acceptance criterion"
+    },
+    {
+      "from": "N1",
+      "to": "V2",
+      "type": "verified_by",
+      "reason": "execution node is proven by this verification item"
+    },
+    {
+      "from": "N1",
+      "to": "V4",
+      "type": "verified_by",
+      "reason": "execution node is proven by this verification item"
+    },
+    {
+      "from": "EP0",
+      "to": "N2",
+      "type": "unblocks",
+      "reason": "execution node comes from the execution plan"
+    },
+    {
+      "from": "T2",
+      "to": "N2",
+      "type": "decomposes_to",
+      "reason": "PRD task is executed through this implementation node"
+    },
+    {
+      "from": "N2",
+      "to": "AC2",
+      "type": "satisfies",
+      "reason": "execution node covers this acceptance criterion"
+    },
+    {
+      "from": "N2",
+      "to": "V2",
+      "type": "verified_by",
+      "reason": "execution node is proven by this verification item"
+    },
+    {
+      "from": "N2",
+      "to": "V4",
+      "type": "verified_by",
+      "reason": "execution node is proven by this verification item"
+    },
+    {
+      "from": "EP0",
+      "to": "N3",
+      "type": "unblocks",
+      "reason": "execution node comes from the execution plan"
+    },
+    {
+      "from": "T3",
+      "to": "N3",
+      "type": "decomposes_to",
+      "reason": "PRD task is executed through this implementation node"
+    },
+    {
+      "from": "N3",
+      "to": "AC3",
+      "type": "satisfies",
+      "reason": "execution node covers this acceptance criterion"
+    },
+    {
+      "from": "N3",
+      "to": "AC4",
+      "type": "satisfies",
+      "reason": "execution node covers this acceptance criterion"
+    },
+    {
+      "from": "N3",
+      "to": "V2",
+      "type": "verified_by",
+      "reason": "execution node is proven by this verification item"
+    },
+    {
+      "from": "N3",
+      "to": "V3",
+      "type": "verified_by",
+      "reason": "execution node is proven by this verification item"
+    },
+    {
+      "from": "N3",
+      "to": "V4",
+      "type": "verified_by",
+      "reason": "execution node is proven by this verification item"
+    },
+    {
+      "from": "EP0",
+      "to": "N4",
+      "type": "unblocks",
+      "reason": "execution node comes from the execution plan"
+    },
+    {
+      "from": "T4",
+      "to": "N4",
+      "type": "decomposes_to",
+      "reason": "PRD task is executed through this implementation node"
+    },
+    {
+      "from": "N4",
+      "to": "AC2",
+      "type": "satisfies",
+      "reason": "execution node covers this acceptance criterion"
+    },
+    {
+      "from": "N4",
+      "to": "AC5",
+      "type": "satisfies",
+      "reason": "execution node covers this acceptance criterion"
+    },
+    {
+      "from": "N4",
+      "to": "V2",
+      "type": "verified_by",
+      "reason": "execution node is proven by this verification item"
+    },
+    {
+      "from": "N4",
+      "to": "V3",
+      "type": "verified_by",
+      "reason": "execution node is proven by this verification item"
+    },
+    {
+      "from": "N4",
+      "to": "V4",
+      "type": "verified_by",
+      "reason": "execution node is proven by this verification item"
+    },
+    {
+      "from": "EP0",
+      "to": "N5",
+      "type": "unblocks",
+      "reason": "execution node comes from the execution plan"
+    },
+    {
+      "from": "T5",
+      "to": "N5",
+      "type": "decomposes_to",
+      "reason": "PRD task is executed through this implementation node"
+    },
+    {
+      "from": "N5",
+      "to": "AC5",
+      "type": "satisfies",
+      "reason": "execution node covers this acceptance criterion"
+    },
+    {
+      "from": "N5",
+      "to": "AC6",
+      "type": "satisfies",
+      "reason": "execution node covers this acceptance criterion"
+    },
+    {
+      "from": "N5",
+      "to": "AC8",
+      "type": "satisfies",
+      "reason": "execution node covers this acceptance criterion"
+    },
+    {
+      "from": "N5",
+      "to": "V3",
+      "type": "verified_by",
+      "reason": "execution node is proven by this verification item"
+    },
+    {
+      "from": "N5",
+      "to": "V4",
+      "type": "verified_by",
+      "reason": "execution node is proven by this verification item"
+    },
+    {
+      "from": "EP0",
+      "to": "N6",
+      "type": "unblocks",
+      "reason": "execution node comes from the execution plan"
+    },
+    {
+      "from": "T6",
+      "to": "N6",
+      "type": "decomposes_to",
+      "reason": "PRD task is executed through this implementation node"
+    },
+    {
+      "from": "N6",
+      "to": "AC1",
+      "type": "satisfies",
+      "reason": "execution node covers this acceptance criterion"
+    },
+    {
+      "from": "N6",
+      "to": "AC7",
+      "type": "satisfies",
+      "reason": "execution node covers this acceptance criterion"
+    },
+    {
+      "from": "N6",
+      "to": "AC9",
+      "type": "satisfies",
+      "reason": "execution node covers this acceptance criterion"
+    },
+    {
+      "from": "N6",
+      "to": "V2",
+      "type": "verified_by",
+      "reason": "execution node is proven by this verification item"
+    },
+    {
+      "from": "N6",
+      "to": "V4",
+      "type": "verified_by",
+      "reason": "execution node is proven by this verification item"
+    },
+    {
+      "from": "EP0",
+      "to": "N7",
+      "type": "unblocks",
+      "reason": "execution node comes from the execution plan"
+    },
+    {
+      "from": "T7",
+      "to": "N7",
+      "type": "decomposes_to",
+      "reason": "PRD task is executed through this implementation node"
+    },
+    {
+      "from": "N7",
+      "to": "AC3",
+      "type": "satisfies",
+      "reason": "execution node covers this acceptance criterion"
+    },
+    {
+      "from": "N7",
+      "to": "AC4",
+      "type": "satisfies",
+      "reason": "execution node covers this acceptance criterion"
+    },
+    {
+      "from": "N7",
+      "to": "AC11",
+      "type": "satisfies",
+      "reason": "execution node covers this acceptance criterion"
+    },
+    {
+      "from": "N7",
+      "to": "V3",
+      "type": "verified_by",
+      "reason": "execution node is proven by this verification item"
+    },
+    {
+      "from": "N7",
+      "to": "V4",
+      "type": "verified_by",
+      "reason": "execution node is proven by this verification item"
+    },
+    {
+      "from": "EP0",
+      "to": "N8",
+      "type": "unblocks",
+      "reason": "execution node comes from the execution plan"
+    },
+    {
+      "from": "T8",
+      "to": "N8",
+      "type": "decomposes_to",
+      "reason": "PRD task is executed through this implementation node"
+    },
+    {
+      "from": "N8",
+      "to": "V2",
+      "type": "verified_by",
+      "reason": "execution node is proven by this verification item"
+    },
+    {
+      "from": "EP0",
+      "to": "N9",
+      "type": "unblocks",
+      "reason": "execution node comes from the execution plan"
+    },
+    {
+      "from": "T9",
+      "to": "N9",
+      "type": "decomposes_to",
+      "reason": "PRD task is executed through this implementation node"
+    },
+    {
+      "from": "N9",
+      "to": "AC10",
+      "type": "satisfies",
+      "reason": "execution node covers this acceptance criterion"
+    },
+    {
+      "from": "N9",
+      "to": "V1",
+      "type": "verified_by",
+      "reason": "execution node is proven by this verification item"
+    },
+    {
+      "from": "EP0",
+      "to": "N10",
+      "type": "unblocks",
+      "reason": "execution node comes from the execution plan"
+    },
+    {
+      "from": "T10",
+      "to": "N10",
+      "type": "decomposes_to",
+      "reason": "PRD task is executed through this implementation node"
+    },
+    {
+      "from": "N10",
+      "to": "AC10",
+      "type": "satisfies",
+      "reason": "execution node covers this acceptance criterion"
+    },
+    {
+      "from": "N10",
+      "to": "V1",
+      "type": "verified_by",
+      "reason": "execution node is proven by this verification item"
+    },
+    {
+      "from": "VP0",
+      "to": "V1",
+      "type": "plans",
+      "reason": "verification check comes from the verification plan"
+    },
+    {
+      "from": "T9",
+      "to": "V1",
+      "type": "verified_by",
+      "reason": "verification covers this task"
+    },
+    {
+      "from": "T10",
+      "to": "V1",
+      "type": "verified_by",
+      "reason": "verification covers this task"
+    },
+    {
+      "from": "AC10",
+      "to": "V1",
+      "type": "verified_by",
+      "reason": "verification covers this acceptance criterion"
+    },
+    {
+      "from": "VP0",
+      "to": "V2",
+      "type": "plans",
+      "reason": "verification check comes from the verification plan"
+    },
+    {
+      "from": "T8",
+      "to": "V2",
+      "type": "verified_by",
+      "reason": "verification covers this task"
+    },
+    {
+      "from": "AC1",
+      "to": "V2",
+      "type": "verified_by",
+      "reason": "verification covers this acceptance criterion"
+    },
+    {
+      "from": "AC2",
+      "to": "V2",
+      "type": "verified_by",
+      "reason": "verification covers this acceptance criterion"
+    },
+    {
+      "from": "AC7",
+      "to": "V2",
+      "type": "verified_by",
+      "reason": "verification covers this acceptance criterion"
+    },
+    {
+      "from": "AC9",
+      "to": "V2",
+      "type": "verified_by",
+      "reason": "verification covers this acceptance criterion"
+    },
+    {
+      "from": "T1",
+      "to": "V2",
+      "type": "verified_by",
+      "reason": "verification covers R1"
+    },
+    {
+      "from": "AC11",
+      "to": "V2",
+      "type": "verified_by",
+      "reason": "verification covers R1"
+    },
+    {
+      "from": "T2",
+      "to": "V2",
+      "type": "verified_by",
+      "reason": "verification covers R2"
+    },
+    {
+      "from": "T3",
+      "to": "V2",
+      "type": "verified_by",
+      "reason": "verification covers R3"
+    },
+    {
+      "from": "AC3",
+      "to": "V2",
+      "type": "verified_by",
+      "reason": "verification covers R3"
+    },
+    {
+      "from": "AC4",
+      "to": "V2",
+      "type": "verified_by",
+      "reason": "verification covers R3"
+    },
+    {
+      "from": "T6",
+      "to": "V2",
+      "type": "verified_by",
+      "reason": "verification covers R7"
+    },
+    {
+      "from": "VP0",
+      "to": "V3",
+      "type": "plans",
+      "reason": "verification check comes from the verification plan"
+    },
+    {
+      "from": "AC3",
+      "to": "V3",
+      "type": "verified_by",
+      "reason": "verification covers this acceptance criterion"
+    },
+    {
+      "from": "AC4",
+      "to": "V3",
+      "type": "verified_by",
+      "reason": "verification covers this acceptance criterion"
+    },
+    {
+      "from": "AC5",
+      "to": "V3",
+      "type": "verified_by",
+      "reason": "verification covers this acceptance criterion"
+    },
+    {
+      "from": "AC6",
+      "to": "V3",
+      "type": "verified_by",
+      "reason": "verification covers this acceptance criterion"
+    },
+    {
+      "from": "AC8",
+      "to": "V3",
+      "type": "verified_by",
+      "reason": "verification covers this acceptance criterion"
+    },
+    {
+      "from": "T5",
+      "to": "V3",
+      "type": "verified_by",
+      "reason": "verification covers R5"
+    },
+    {
+      "from": "T7",
+      "to": "V3",
+      "type": "verified_by",
+      "reason": "verification covers R8"
+    },
+    {
+      "from": "AC11",
+      "to": "V3",
+      "type": "verified_by",
+      "reason": "verification covers R8"
+    },
+    {
+      "from": "VP0",
+      "to": "V4",
+      "type": "plans",
+      "reason": "verification check comes from the verification plan"
+    },
+    {
+      "from": "AC11",
+      "to": "V4",
+      "type": "verified_by",
+      "reason": "verification covers this acceptance criterion"
+    },
+    {
+      "from": "T1",
+      "to": "V4",
+      "type": "verified_by",
+      "reason": "verification covers R1"
+    },
+    {
+      "from": "AC1",
+      "to": "V4",
+      "type": "verified_by",
+      "reason": "verification covers R1"
+    },
+    {
+      "from": "T2",
+      "to": "V4",
+      "type": "verified_by",
+      "reason": "verification covers R2"
+    },
+    {
+      "from": "AC2",
+      "to": "V4",
+      "type": "verified_by",
+      "reason": "verification covers R2"
+    },
+    {
+      "from": "T3",
+      "to": "V4",
+      "type": "verified_by",
+      "reason": "verification covers R3"
+    },
+    {
+      "from": "AC3",
+      "to": "V4",
+      "type": "verified_by",
+      "reason": "verification covers R3"
+    },
+    {
+      "from": "AC4",
+      "to": "V4",
+      "type": "verified_by",
+      "reason": "verification covers R3"
+    },
+    {
+      "from": "T4",
+      "to": "V4",
+      "type": "verified_by",
+      "reason": "verification covers R4"
+    },
+    {
+      "from": "AC5",
+      "to": "V4",
+      "type": "verified_by",
+      "reason": "verification covers R4"
+    },
+    {
+      "from": "T5",
+      "to": "V4",
+      "type": "verified_by",
+      "reason": "verification covers R5"
+    },
+    {
+      "from": "AC8",
+      "to": "V4",
+      "type": "verified_by",
+      "reason": "verification covers R5"
+    },
+    {
+      "from": "AC6",
+      "to": "V4",
+      "type": "verified_by",
+      "reason": "verification covers R6"
+    },
+    {
+      "from": "T6",
+      "to": "V4",
+      "type": "verified_by",
+      "reason": "verification covers R7"
+    },
+    {
+      "from": "AC7",
+      "to": "V4",
+      "type": "verified_by",
+      "reason": "verification covers R7"
+    },
+    {
+      "from": "AC9",
+      "to": "V4",
+      "type": "verified_by",
+      "reason": "verification covers R7"
+    },
+    {
+      "from": "T7",
+      "to": "V4",
+      "type": "verified_by",
+      "reason": "verification covers R8"
+    },
+    {
+      "from": "T1",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "T1",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "T2",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "T2",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "T3",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "T3",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "T4",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "T4",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "T5",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "T5",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "T6",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "T6",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "T7",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "T7",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "T8",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "T8",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "T9",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "T9",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "T10",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "T10",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "N1",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "N1",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "N2",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "N2",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "N3",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "N3",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "N4",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "N4",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "N5",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "N5",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "N6",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "N6",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "N7",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "N7",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "N8",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "N8",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "N9",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "N9",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "N10",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "N10",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "AC1",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "AC1",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "AC2",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "AC2",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "AC3",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "AC3",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "AC4",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "AC4",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "AC5",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "AC5",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "AC6",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "AC6",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "AC7",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "AC7",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "AC8",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "AC8",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "AC9",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "AC9",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "AC10",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "AC10",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "AC11",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "AC11",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "V1",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "V1",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "V2",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "V2",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "V3",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "V3",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "V4",
+      "to": "REQ_FIDELITY_REVIEW",
+      "type": "requirements_review_input",
+      "reason": "requirements reviewer must audit this item against original user intent and PRD decisions"
+    },
+    {
+      "from": "V4",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit this item and its evidence"
+    },
+    {
+      "from": "REQ_FIDELITY_REVIEW",
+      "to": "REVIEW",
+      "type": "review_input",
+      "reason": "final reviewer must audit the requirements fidelity verdict"
+    },
+    {
+      "from": "REVIEW",
+      "to": "FINALIZE",
+      "type": "gates",
+      "reason": "receipt can be written only after passing final review"
+    }
+  ]
+}

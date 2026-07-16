@@ -224,6 +224,31 @@ cleanup); reuse 3-5 stable session names as a worker pool instead of new
 sessions per URL. Tuning env vars: see `chromux help`. `pause`/`resume`
 hard-stop or resume a profile's tab work.
 
+## Live Mode: The User's Real Chrome
+
+Two routes reach a browser: isolated profiles (the "agent's browser", default)
+and the reserved `live` profile (the "user's browser", via the chromux
+extension). Choose `live` only when the task needs the user's own logged-in
+session (SSO, 2FA, an already-open page) or the user says "do this on the page
+I'm looking at". Otherwise use an isolated profile.
+
+- Setup is one-time: the user loads the unpacked extension once, then
+  `chromux pair` opens a short auto-pairing window and the extension connects on
+  its own (no token paste). If `CHROMUX_PROFILE=live` commands error with "not
+  paired" or "extension not connected", tell the user to run `chromux pair` (and
+  load/reload the extension) rather than retrying blindly.
+- Same command surface, different profile: `CHROMUX_PROFILE=live chromux open
+  <s> <url>` creates a visible new tab in the user's Chrome; add `--tab
+  active|<tabId>|<url-or-title-match>` to attach an existing tab instead. Use
+  `chromux tabs` to see the user's tabs and their ids.
+- Safety semantics differ: `close` on an attached user tab detaches (never
+  closes the user's tab); `kill live` stops the bridge without touching the
+  Chrome process. `show`, `launch --headless`, and `chrome://`/Web Store pages
+  are unsupported and return a clear `live unsupported` error — do not retry
+  them, switch to an isolated profile if you truly need them.
+- Everything runs on the user's real session, so treat destructive actions with
+  extra care and prefer new tabs over reusing the user's tabs unless asked.
+
 ## Diagnostics And Evidence
 
 - `chromux watch <s> console` / `watch <s> network --all` capture logs and

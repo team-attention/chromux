@@ -38,6 +38,13 @@ const DAEMON_HOST = '127.0.0.1';
 const DAEMON_PORT_RANGE_START = 9400;
 const DAEMON_PORT_RANGE_END = 9499;
 const DEFAULT_PROFILE = 'default';
+// Live mode: the reserved "live" profile drives the user's real Chrome through
+// the chromux extension bridge instead of launching an isolated instance.
+const LIVE_PROFILE = 'live';
+const LIVE_CONFIG_PATH = path.join(CHROMUX_HOME, 'live.json');
+const LIVE_DEFAULT_PORT = 47700;
+const LIVE_TARGET_PREFIX = 'live-tab-';
+const EXTENSION_DIR = path.join(MODULE_DIR, 'extension');
 const DEFAULT_ACTIVITY_RETENTION_DAYS = 90;
 const ACTIVITY_RETENTION_OPTIONS = new Set([7, 30, 90, 365, 'unlimited']);
 const ACTIVITY_IDLE_WINDOW_MS = 30 * 60 * 1000;
@@ -1492,8 +1499,13 @@ async function createBackgroundTab(port, url = 'about:blank') {
 }
 
 async function createTab(port, url = 'about:blank', background = false) {
-  if (background) return createBackgroundTab(port, url);
-  return cdpFetch(port, `/json/new?${encodeURI(url)}`, 'PUT');
+  const tab = background
+    ? await createBackgroundTab(port, url)
+    : await cdpFetch(port, `/json/new?${encodeURI(url)}`, 'PUT');
+  if (!tab || typeof tab !== 'object' || !tab.webSocketDebuggerUrl) {
+    throw new Error(tab?.error || `Tab creation failed${typeof tab === 'string' ? `: ${tab}` : ''}`);
+  }
+  return tab;
 }
 
 async function closeTab(port, targetId) {
@@ -1508,6 +1520,767 @@ async function closeInitialTabs(port) {
     if (target.url !== 'about:blank' && target.url !== 'chrome://newtab/') continue;
     await closeTab(port, target.id).catch(() => {});
   }
+}
+
+// ============================================================
+// Live mode — extension bridge for the user's real Chrome
+// ============================================================
+//
+// Chrome 136+ ignores --remote-debugging-port on the default user-data-dir,
+// so the only way into the user's real logged-in browser is an extension
+// speaking chrome.debugger. The bridge below is a wire-level CDP facade: it
+// emulates the DevTools HTTP endpoints (/json/*) and per-target WebSocket
+// URLs that the rest of chromux already talks to, backed by a single
+// token-authenticated relay WebSocket from the MV3 extension. The daemon
+// then runs against the facade port unchanged — same commands, same
+// response schema, no per-command transport branching.
+
+function isLiveProfile(name) { return name === LIVE_PROFILE; }
+
+function readLiveConfig() {
+  try {
+    const cfg = JSON.parse(fs.readFileSync(LIVE_CONFIG_PATH, 'utf8'));
+    if (cfg && typeof cfg === 'object') return cfg;
+  } catch {}
+  return null;
+}
+
+function writeLiveConfig(cfg) {
+  fs.mkdirSync(CHROMUX_HOME, { recursive: true });
+  fs.writeFileSync(LIVE_CONFIG_PATH, JSON.stringify(cfg, null, 2) + '\n', { mode: 0o600 });
+  try { fs.chmodSync(LIVE_CONFIG_PATH, 0o600); } catch {}
+  return cfg;
+}
+
+function ensureLiveConfig({ rotateToken = false } = {}) {
+  const cfg = readLiveConfig() || {};
+  let changed = false;
+  if (!Number.isInteger(cfg.port) || cfg.port <= 0 || cfg.port > 65535) {
+    cfg.port = LIVE_DEFAULT_PORT;
+    changed = true;
+  }
+  if (!cfg.token || rotateToken) {
+    cfg.token = crypto.randomBytes(24).toString('hex');
+    changed = true;
+  }
+  if (changed) writeLiveConfig(cfg);
+  return cfg;
+}
+
+function liveTokenMatches(candidate) {
+  const expected = readLiveConfig()?.token || '';
+  if (!expected || !candidate) return false;
+  const a = Buffer.from(String(candidate));
+  const b = Buffer.from(expected);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+function liveDisconnectedMessage(bridge) {
+  if (bridge?.killSwitchAt) {
+    return 'live extension is blocked by its kill switch — re-enable the connection from the chromux extension popup';
+  }
+  return 'live extension not connected — open Chrome with the chromux extension installed, or run: chromux pair';
+}
+
+// --- Minimal RFC6455 WebSocket server (zero-dependency) ---
+// Node 22 ships a WebSocket *client* only; the extension needs something to
+// connect to, so the accept path is implemented directly on the HTTP upgrade
+// socket. Text frames, fragmentation, ping/pong, and close are supported —
+// no extensions, no compression (we simply never negotiate them).
+
+const WS_ACCEPT_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
+
+function encodeWsFrame(opcode, payload) {
+  const len = payload.length;
+  let header;
+  if (len < 126) {
+    header = Buffer.alloc(2);
+    header[1] = len;
+  } else if (len < 65536) {
+    header = Buffer.alloc(4);
+    header[1] = 126;
+    header.writeUInt16BE(len, 2);
+  } else {
+    header = Buffer.alloc(10);
+    header[1] = 127;
+    header.writeBigUInt64BE(BigInt(len), 2);
+  }
+  header[0] = 0x80 | opcode;
+  return Buffer.concat([header, payload]);
+}
+
+function decodeWsFrame(buffer) {
+  if (buffer.length < 2) return null;
+  const fin = (buffer[0] & 0x80) !== 0;
+  const opcode = buffer[0] & 0x0f;
+  const masked = (buffer[1] & 0x80) !== 0;
+  let len = buffer[1] & 0x7f;
+  let offset = 2;
+  if (len === 126) {
+    if (buffer.length < 4) return null;
+    len = buffer.readUInt16BE(2);
+    offset = 4;
+  } else if (len === 127) {
+    if (buffer.length < 10) return null;
+    const big = buffer.readBigUInt64BE(2);
+    if (big > 64n * 1024n * 1024n) throw new Error('WebSocket frame too large');
+    len = Number(big);
+    offset = 10;
+  }
+  let mask = null;
+  if (masked) {
+    if (buffer.length < offset + 4) return null;
+    mask = buffer.subarray(offset, offset + 4);
+    offset += 4;
+  }
+  if (buffer.length < offset + len) return null;
+  let payload = buffer.subarray(offset, offset + len);
+  if (mask) {
+    payload = Buffer.from(payload);
+    for (let i = 0; i < payload.length; i++) payload[i] ^= mask[i & 3];
+  }
+  return { fin, opcode, payload, frameLength: offset + len };
+}
+
+function acceptWebSocket(req, socket) {
+  const accept = crypto.createHash('sha1')
+    .update(req.headers['sec-websocket-key'] + WS_ACCEPT_GUID)
+    .digest('base64');
+  socket.write(
+    'HTTP/1.1 101 Switching Protocols\r\n'
+    + 'Upgrade: websocket\r\n'
+    + 'Connection: Upgrade\r\n'
+    + `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
+  );
+  socket.setNoDelay(true);
+  // Messages can arrive before the caller assigns onmessage (e.g. while an
+  // async attach is still awaiting). Buffer until a handler is set, then flush.
+  let _onmessage = null;
+  let _pendingMessages = [];
+  const conn = {
+    open: true,
+    get onmessage() { return _onmessage; },
+    set onmessage(fn) {
+      _onmessage = fn;
+      if (fn && _pendingMessages.length) {
+        const queued = _pendingMessages;
+        _pendingMessages = [];
+        for (const m of queued) fn(m);
+      }
+    },
+    onclose: null,
+    send(text) {
+      if (!this.open) return false;
+      try {
+        socket.write(encodeWsFrame(0x1, Buffer.from(String(text), 'utf8')));
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    close(code = 1000) {
+      if (!this.open) return;
+      this.open = false;
+      try {
+        const body = Buffer.alloc(2);
+        body.writeUInt16BE(code, 0);
+        socket.write(encodeWsFrame(0x8, body));
+      } catch {}
+      try { socket.end(); } catch {}
+    },
+  };
+  let buffer = Buffer.alloc(0);
+  let fragments = null;
+  const deliver = (text) => {
+    if (_onmessage) _onmessage(text);
+    else _pendingMessages.push(text);
+  };
+  const finish = () => {
+    const wasOpen = conn.open;
+    conn.open = false;
+    try { socket.destroy(); } catch {}
+    if (conn.onclose && (wasOpen || conn.onclose)) {
+      const cb = conn.onclose;
+      conn.onclose = null;
+      cb();
+    }
+  };
+  socket.on('data', (chunk) => {
+    buffer = buffer.length ? Buffer.concat([buffer, chunk]) : chunk;
+    try {
+      while (true) {
+        const frame = decodeWsFrame(buffer);
+        if (!frame) break;
+        buffer = buffer.subarray(frame.frameLength);
+        const { opcode, fin, payload } = frame;
+        if (opcode === 0x8) { conn.close(1000); finish(); return; }
+        if (opcode === 0x9) { try { socket.write(encodeWsFrame(0xA, payload)); } catch {} continue; }
+        if (opcode === 0xA) continue;
+        if (opcode === 0x0) {
+          if (!fragments) continue;
+          fragments.chunks.push(payload);
+          if (fin) {
+            const message = Buffer.concat(fragments.chunks);
+            const isText = fragments.opcode === 0x1;
+            fragments = null;
+            if (isText) deliver(message.toString('utf8'));
+          }
+          continue;
+        }
+        if (opcode === 0x1 || opcode === 0x2) {
+          if (!fin) { fragments = { opcode, chunks: [payload] }; continue; }
+          if (opcode === 0x1) deliver(payload.toString('utf8'));
+        }
+      }
+    } catch {
+      finish();
+    }
+  });
+  socket.on('close', finish);
+  socket.on('error', finish);
+  return conn;
+}
+
+// --- Live bridge server (CDP facade + extension relay) ---
+
+async function startLiveBridge(facadePort) {
+  if (!readLiveConfig()?.token) {
+    console.error('live profile is not paired. Run: chromux pair');
+    process.exit(1);
+  }
+
+  const bridge = {
+    relay: null,
+    relaySeq: 0,
+    relayPending: new Map(),
+    connectedAt: null,
+    lastDisconnect: null,
+    killSwitchAt: null,
+    pairingUntil: 0,
+    tabs: new Map(),
+    createdByChromux: new Set(),
+    pageConns: new Map(),
+    browserConns: new Set(),
+    downloadPath: null,
+    downloads: new Map(),
+  };
+
+  const targetIdFor = (tabId) => `${LIVE_TARGET_PREFIX}${tabId}`;
+  const tabIdFrom = (targetId) => {
+    const raw = String(targetId || '');
+    if (!raw.startsWith(LIVE_TARGET_PREFIX)) return null;
+    const n = Number(raw.slice(LIVE_TARGET_PREFIX.length));
+    return Number.isInteger(n) ? n : null;
+  };
+
+  const dbg = process.env.CHROMUX_LIVE_DEBUG
+    ? (...a) => { try { fs.appendFileSync(process.env.CHROMUX_LIVE_DEBUG, a.join(' ') + '\n'); } catch {} }
+    : () => {};
+
+  function relayCall(op, payload = {}, timeoutMs = 20000) {
+    return new Promise((resolve, reject) => {
+      if (!bridge.relay?.open) {
+        reject(new Error(liveDisconnectedMessage(bridge)));
+        return;
+      }
+      const id = ++bridge.relaySeq;
+      const timer = setTimeout(() => {
+        bridge.relayPending.delete(id);
+        dbg('relayCall TIMEOUT', id, op, payload.method || '');
+        reject(new Error(`live extension: ${op} timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+      bridge.relayPending.set(id, {
+        resolve: (v) => { clearTimeout(timer); resolve(v); },
+        reject: (e) => { clearTimeout(timer); reject(e); },
+      });
+      if (!bridge.relay.send(JSON.stringify({ id, op, ...payload }))) {
+        clearTimeout(timer);
+        bridge.relayPending.delete(id);
+        reject(new Error(liveDisconnectedMessage(bridge)));
+      }
+    });
+  }
+
+  function rememberTab(tab) {
+    if (!tab || typeof tab.id !== 'number') return;
+    bridge.tabs.set(tab.id, {
+      id: tab.id,
+      url: tab.url || tab.pendingUrl || '',
+      title: tab.title || '',
+      active: !!tab.active,
+      openerTabId: typeof tab.openerTabId === 'number' ? tab.openerTabId : null,
+    });
+  }
+
+  function isAttachableUrl(rawUrl) {
+    const u = String(rawUrl || '');
+    if (!u || u.startsWith('about:')) return true;
+    if (/^(chrome|chrome-extension|chrome-untrusted|devtools):/.test(u)) return false;
+    if (u.startsWith('https://chromewebstore.google.com')) return false;
+    return true;
+  }
+
+  function targetInfoFor(tabId) {
+    const tab = bridge.tabs.get(tabId);
+    const info = {
+      targetId: targetIdFor(tabId),
+      type: 'page',
+      title: tab?.title || '',
+      url: tab?.url || '',
+      attached: bridge.pageConns.has(tabId),
+      canAccessOpener: false,
+      browserContextId: 'live',
+    };
+    if (tab?.openerTabId != null) info.openerId = targetIdFor(tab.openerTabId);
+    return info;
+  }
+
+  function liveTargetJson(tabId) {
+    const tab = bridge.tabs.get(tabId) || { id: tabId, url: '', title: '', active: false };
+    const attachable = isAttachableUrl(tab.url);
+    const json = {
+      id: targetIdFor(tabId),
+      tabId,
+      type: 'page',
+      title: tab.title || '',
+      url: tab.url || '',
+      active: !!tab.active,
+      attachable,
+      createdByChromux: bridge.createdByChromux.has(tabId),
+      description: '',
+      devtoolsFrontendUrl: '',
+    };
+    if (attachable) json.webSocketDebuggerUrl = `ws://127.0.0.1:${facadePort}/devtools/page/${targetIdFor(tabId)}`;
+    return json;
+  }
+
+  async function listLiveTabs() {
+    if (bridge.relay?.open) {
+      const tabs = await relayCall('tabs.query', {});
+      bridge.tabs.clear();
+      if (Array.isArray(tabs)) for (const tab of tabs) rememberTab(tab);
+    }
+    return [...bridge.tabs.keys()].map(liveTargetJson);
+  }
+
+  function broadcastBrowserEvent(method, params) {
+    const frame = JSON.stringify({ method, params });
+    for (const entry of bridge.browserConns) {
+      if (method.startsWith('Target.') && !entry.discover) continue;
+      entry.conn.send(frame);
+    }
+  }
+
+  async function closeLiveTarget(tabId) {
+    if (bridge.createdByChromux.has(tabId)) {
+      await relayCall('tabs.remove', { tabId });
+      return { closed: true };
+    }
+    // Attached-only user tab: never close the user's tab — detach instead.
+    const conns = bridge.pageConns.get(tabId);
+    if (conns) {
+      for (const conn of conns) conn.close(1000);
+      bridge.pageConns.delete(tabId);
+    }
+    await relayCall('debugger.detach', { tabId }).catch(() => {});
+    return { closed: false, detached: true };
+  }
+
+  function handleDownloadEvent(msg) {
+    let record;
+    let downloadId;
+    if (msg.phase === 'created' && msg.item) {
+      downloadId = msg.item.id;
+      record = {
+        url: msg.item.finalUrl || msg.item.url || '',
+        filename: msg.item.filename || '',
+        state: msg.item.state || 'in_progress',
+        announced: false,
+        completed: false,
+      };
+      bridge.downloads.set(downloadId, record);
+    } else if (msg.phase === 'changed' && msg.id != null) {
+      downloadId = msg.id;
+      record = bridge.downloads.get(downloadId);
+      if (!record) {
+        record = { url: '', filename: '', state: 'in_progress', announced: false, completed: false };
+        bridge.downloads.set(downloadId, record);
+      }
+      if (msg.delta?.filename?.current) record.filename = msg.delta.filename.current;
+      if (msg.delta?.state?.current) record.state = msg.delta.state.current;
+    } else {
+      return;
+    }
+    const guid = `live-dl-${downloadId}`;
+    if (!record.announced && record.filename) {
+      record.announced = true;
+      broadcastBrowserEvent('Browser.downloadWillBegin', {
+        guid,
+        suggestedFilename: path.basename(record.filename),
+        url: record.url,
+        frameId: '',
+      });
+    }
+    if (!record.announced) return;
+    if (record.state === 'complete' && !record.completed) {
+      record.completed = true;
+      // The file lives in the user's own download folder. When a chromux
+      // download is in flight (Browser.setDownloadBehavior recorded a path),
+      // copy it under the expected <downloadPath>/<guid> name so the daemon's
+      // transport-agnostic /download flow finds it; the original stays put.
+      if (bridge.downloadPath && record.filename) {
+        try {
+          fs.mkdirSync(bridge.downloadPath, { recursive: true });
+          fs.copyFileSync(record.filename, path.join(bridge.downloadPath, guid));
+        } catch {
+          broadcastBrowserEvent('Browser.downloadProgress', { guid, state: 'canceled', receivedBytes: 0, totalBytes: 0 });
+          return;
+        }
+      }
+      broadcastBrowserEvent('Browser.downloadProgress', { guid, state: 'completed', receivedBytes: 0, totalBytes: 0 });
+    } else if (record.state === 'interrupted') {
+      broadcastBrowserEvent('Browser.downloadProgress', { guid, state: 'canceled', receivedBytes: 0, totalBytes: 0 });
+    }
+  }
+
+  function handleRelayEvent(msg) {
+    if (msg.event === 'cdp') {
+      const conns = bridge.pageConns.get(msg.tabId);
+      if (!conns) { dbg('EXT cdp event DROPPED (no conn)', msg.tabId, msg.method); return; }
+      const frame = JSON.stringify({
+        method: msg.method,
+        params: msg.params,
+        ...(msg.sessionId ? { sessionId: msg.sessionId } : {}),
+      });
+      for (const conn of conns) conn.send(frame);
+      return;
+    }
+    if (msg.event === 'detached') {
+      dbg('EXT detached tab', msg.tabId, 'reason=', msg.reason);
+      const conns = bridge.pageConns.get(msg.tabId);
+      if (conns) {
+        for (const conn of conns) conn.close(1001);
+        bridge.pageConns.delete(msg.tabId);
+      }
+      return;
+    }
+    if (msg.event === 'tabCreated' && msg.tab) {
+      rememberTab(msg.tab);
+      broadcastBrowserEvent('Target.targetCreated', { targetInfo: targetInfoFor(msg.tab.id) });
+      return;
+    }
+    if (msg.event === 'tabUpdated' && msg.tab) {
+      rememberTab(msg.tab);
+      broadcastBrowserEvent('Target.targetInfoChanged', { targetInfo: targetInfoFor(msg.tab.id) });
+      return;
+    }
+    if (msg.event === 'tabRemoved') {
+      bridge.tabs.delete(msg.tabId);
+      bridge.createdByChromux.delete(msg.tabId);
+      const conns = bridge.pageConns.get(msg.tabId);
+      if (conns) {
+        for (const conn of conns) conn.close(1001);
+        bridge.pageConns.delete(msg.tabId);
+      }
+      broadcastBrowserEvent('Target.targetDestroyed', { targetId: targetIdFor(msg.tabId) });
+      return;
+    }
+    if (msg.event === 'download') {
+      handleDownloadEvent(msg);
+      return;
+    }
+    if (msg.event === 'killswitch') {
+      bridge.killSwitchAt = Date.now();
+    }
+  }
+
+  function adoptRelayConnection(conn) {
+    if (bridge.relay?.open) bridge.relay.close(1000);
+    bridge.relay = conn;
+    bridge.connectedAt = Date.now();
+    bridge.killSwitchAt = null;
+    conn.onmessage = (text) => {
+      let msg;
+      try { msg = JSON.parse(text); } catch { return; }
+      if (msg.id && bridge.relayPending.has(msg.id)) {
+        const pending = bridge.relayPending.get(msg.id);
+        bridge.relayPending.delete(msg.id);
+        if (msg.ok === false) pending.reject(new Error(msg.error || 'live extension call failed'));
+        else pending.resolve(msg.result);
+        return;
+      }
+      if (msg.event) handleRelayEvent(msg);
+    };
+    conn.onclose = () => {
+      if (bridge.relay !== conn) return;
+      bridge.relay = null;
+      bridge.lastDisconnect = { at: Date.now(), reason: bridge.killSwitchAt ? 'killswitch' : 'closed' };
+      const err = new Error(liveDisconnectedMessage(bridge));
+      for (const pending of bridge.relayPending.values()) pending.reject(err);
+      bridge.relayPending.clear();
+      // In-flight commands fail fast with an explicit error; nothing is
+      // implicitly re-run after the extension reconnects.
+      for (const conns of bridge.pageConns.values()) {
+        for (const c of conns) {
+          c.send(JSON.stringify({ method: 'Inspector.detached', params: { reason: 'live extension disconnected' } }));
+          c.close(1001);
+        }
+      }
+      bridge.pageConns.clear();
+    };
+    listLiveTabs().catch(() => {});
+  }
+
+  async function openPageConnection(tabId, conn) {
+    let set = bridge.pageConns.get(tabId);
+    const needAttach = !set || set.size === 0;
+    if (!set) {
+      set = new Set();
+      bridge.pageConns.set(tabId, set);
+    }
+    set.add(conn);
+    if (needAttach) {
+      try {
+        const attachRes = await relayCall('debugger.attach', { tabId });
+      } catch (err) {
+        set.delete(conn);
+        if (set.size === 0) bridge.pageConns.delete(tabId);
+        throw err;
+      }
+    }
+    conn.onmessage = async (text) => {
+      let msg;
+      try { msg = JSON.parse(text); } catch { return; }
+      const sessionEcho = msg.sessionId ? { sessionId: msg.sessionId } : {};
+      // Top-level Page.navigate: route through chrome.tabs.update in the
+      // extension (chrome.debugger Page.navigate rejects with "Detached while
+      // handling command" on process swaps), then poll tab status here in Node
+      // and synthesize Page.loadEventFired. Orchestrating in the facade avoids
+      // depending on fragile MV3 service-worker in-memory state or timers.
+      if (msg.method === 'Page.navigate' && !msg.sessionId && msg.params?.url) {
+        try {
+          const navRes = await relayCall('tabs.navigate', { tabId, url: msg.params.url });
+          conn.send(JSON.stringify({ id: msg.id, result: { frameId: String(tabId), loaderId: '' } }));
+          const deadline = Date.now() + 30000;
+          // Leave the previous "complete" state before sampling.
+          await sleep(120);
+          while (Date.now() < deadline) {
+            const t = await relayCall('tabs.get', { tabId }).catch(() => ({ status: 'gone' }));
+            if (t.status === 'complete' || t.status === 'gone') break;
+            await sleep(150);
+          }
+          conn.send(JSON.stringify({ method: 'Page.loadEventFired', params: { timestamp: Date.now() / 1000 } }));
+        } catch (err) {
+          conn.send(JSON.stringify({ id: msg.id, error: { code: -32000, message: err.message } }));
+        }
+        return;
+      }
+      try {
+        const result = await relayCall('debugger.send', {
+          tabId,
+          method: msg.method,
+          params: msg.params || {},
+          ...(msg.sessionId ? { sessionId: msg.sessionId } : {}),
+        }, 60000);
+        conn.send(JSON.stringify({ id: msg.id, result: result ?? {}, ...sessionEcho }));
+      } catch (err) {
+        conn.send(JSON.stringify({ id: msg.id, error: { code: -32000, message: err.message }, ...sessionEcho }));
+      }
+    };
+    conn.onclose = () => {
+      const conns = bridge.pageConns.get(tabId);
+      if (!conns) return;
+      conns.delete(conn);
+      if (conns.size === 0) {
+        bridge.pageConns.delete(tabId);
+        relayCall('debugger.detach', { tabId }).catch(() => {});
+      }
+    };
+  }
+
+  function openBrowserConnection(conn) {
+    const entry = { conn, discover: false };
+    bridge.browserConns.add(entry);
+    conn.onmessage = async (text) => {
+      let msg;
+      try { msg = JSON.parse(text); } catch { return; }
+      const reply = (result) => conn.send(JSON.stringify({ id: msg.id, result }));
+      const fail = (message, code = -32000) => conn.send(JSON.stringify({ id: msg.id, error: { code, message } }));
+      const params = msg.params || {};
+      try {
+        switch (msg.method) {
+          case 'Browser.getVersion':
+            reply({ product: 'chromux-live-bridge', protocolVersion: '1.3' });
+            break;
+          case 'Target.setDiscoverTargets': {
+            const was = entry.discover;
+            entry.discover = params.discover !== false;
+            reply({});
+            if (!was && entry.discover) {
+              for (const tabId of bridge.tabs.keys()) {
+                conn.send(JSON.stringify({ method: 'Target.targetCreated', params: { targetInfo: targetInfoFor(tabId) } }));
+              }
+            }
+            break;
+          }
+          case 'Target.getTargets':
+            reply({ targetInfos: [...bridge.tabs.keys()].map(targetInfoFor) });
+            break;
+          case 'Target.createTarget': {
+            const created = await relayCall('tabs.create', {
+              url: params.url || 'about:blank',
+              active: params.background !== true,
+            });
+            rememberTab(created);
+            bridge.createdByChromux.add(created.id);
+            reply({ targetId: targetIdFor(created.id) });
+            break;
+          }
+          case 'Target.closeTarget': {
+            const tabId = tabIdFrom(params.targetId);
+            if (tabId == null) { fail(`Unknown live target: ${params.targetId}`); break; }
+            await closeLiveTarget(tabId);
+            reply({ success: true });
+            break;
+          }
+          case 'Browser.setDownloadBehavior':
+            bridge.downloadPath = params.behavior === 'allowAndName' && params.downloadPath
+              ? params.downloadPath
+              : null;
+            reply({});
+            break;
+          default:
+            fail(`live mode does not support browser-level ${msg.method}`, -32601);
+        }
+      } catch (err) {
+        fail(err.message);
+      }
+    };
+    conn.onclose = () => bridge.browserConns.delete(entry);
+  }
+
+  const server = http.createServer(async (req, res) => {
+    const url = new URL(req.url, 'http://x');
+    const send = (status, value, type = 'application/json') => {
+      if (res.writableEnded) return;
+      res.writeHead(status, { 'Content-Type': type });
+      res.end(typeof value === 'string' ? value : JSON.stringify(value));
+    };
+    try {
+      if (url.pathname === '/json/version') {
+        send(200, {
+          Browser: 'chromux-live-bridge',
+          'Protocol-Version': '1.3',
+          webSocketDebuggerUrl: `ws://127.0.0.1:${facadePort}/devtools/browser/live`,
+        });
+        return;
+      }
+      if (url.pathname === '/relay/status') {
+        send(200, {
+          extensionConnected: !!bridge.relay?.open,
+          connectedAt: bridge.connectedAt,
+          killSwitchAt: bridge.killSwitchAt,
+          lastDisconnect: bridge.lastDisconnect,
+          tabs: bridge.tabs.size,
+          attached: [...bridge.pageConns.keys()].map(targetIdFor),
+        });
+        return;
+      }
+      // Auto-pairing: `chromux pair` opens a short loopback window during which
+      // the extension can fetch the port+token without a manual paste. The
+      // token still gates every ongoing relay connection (D-09); only its
+      // delivery is automated. Window is user-initiated and short.
+      if (url.pathname === '/pair/open' && req.method === 'POST') {
+        bridge.pairingUntil = Date.now() + 60000;
+        send(200, { ok: true, until: bridge.pairingUntil });
+        return;
+      }
+      if (url.pathname === '/pair') {
+        if (Date.now() < (bridge.pairingUntil || 0)) {
+          send(200, { port: facadePort, token: readLiveConfig()?.token || '' });
+        } else {
+          send(403, { error: 'no pairing window open; run: chromux pair' });
+        }
+        return;
+      }
+      if (url.pathname === '/relay/detach-all' && req.method === 'POST') {
+        const attached = [...bridge.pageConns.keys()];
+        for (const tabId of attached) {
+          const conns = bridge.pageConns.get(tabId);
+          if (conns) for (const conn of conns) conn.close(1000);
+          bridge.pageConns.delete(tabId);
+        }
+        if (bridge.relay?.open) await relayCall('detachAll', {}).catch(() => {});
+        send(200, { detached: attached.length });
+        return;
+      }
+      if (url.pathname === '/json' || url.pathname === '/json/list') {
+        send(200, await listLiveTabs());
+        return;
+      }
+      if (url.pathname === '/json/new') {
+        const rawUrl = decodeURI(url.search.slice(1)) || 'about:blank';
+        const created = await relayCall('tabs.create', { url: rawUrl, active: true });
+        rememberTab(created);
+        bridge.createdByChromux.add(created.id);
+        send(200, liveTargetJson(created.id));
+        return;
+      }
+      if (url.pathname.startsWith('/json/close/')) {
+        const tabId = tabIdFrom(url.pathname.slice('/json/close/'.length));
+        if (tabId == null) {
+          send(404, { error: `unknown live target: ${url.pathname.slice('/json/close/'.length)}` });
+          return;
+        }
+        await closeLiveTarget(tabId);
+        send(200, 'Target is closing', 'text/plain');
+        return;
+      }
+      send(404, { error: `unknown live bridge path: ${url.pathname}` });
+    } catch (err) {
+      send(500, { error: err.message });
+    }
+  });
+
+  server.on('upgrade', (req, socket) => {
+    const url = new URL(req.url, 'http://x');
+    if (!req.headers['sec-websocket-key']) { socket.destroy(); return; }
+    if (url.pathname === '/relay') {
+      if (!liveTokenMatches(url.searchParams.get('token'))) {
+        socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+        socket.destroy();
+        return;
+      }
+      adoptRelayConnection(acceptWebSocket(req, socket));
+      return;
+    }
+    if (url.pathname === '/devtools/browser/live') {
+      openBrowserConnection(acceptWebSocket(req, socket));
+      return;
+    }
+    if (url.pathname.startsWith('/devtools/page/')) {
+      const tabId = tabIdFrom(url.pathname.slice('/devtools/page/'.length));
+      if (tabId == null) {
+        socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
+        socket.destroy();
+        return;
+      }
+      const conn = acceptWebSocket(req, socket);
+      openPageConnection(tabId, conn).catch((err) => {
+        conn.send(JSON.stringify({ method: 'Inspector.detached', params: { reason: err.message } }));
+        conn.close(1011);
+      });
+      return;
+    }
+    socket.destroy();
+  });
+
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(facadePort, DAEMON_HOST, resolve);
+  });
+  console.log(`chromux live bridge [${LIVE_PROFILE}] on http://${DAEMON_HOST}:${facadePort} (extension relay: /relay)`);
+  return bridge;
 }
 
 // ============================================================
@@ -3521,7 +4294,8 @@ async function prepareOpenSessionNavigation({
     if (body.oopif === true) await enableOopifRouting(s);
     touchSession(s);
     s.lastImageCoordinateSpace = null;
-    await navigateSession(s.cdp, url, settings);
+    // Live attach-in-place: no url means "use the tab's current page".
+    if (url) await navigateSession(s.cdp, url, settings);
   } catch (err) {
     if (isNewSession && newTab) {
       await cleanupFailedOpenSession(sessions, session, s, s.cdp, port, newTab.id);
@@ -3590,7 +4364,10 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
 
   if (routePath === '/open' && method === 'POST') {
     const { session, url } = body;
-    if (!session || !url) throw httpErr(400, 'session and url required');
+    // Live attach-in-place: --tab resolves to attachTargetId and url may be
+    // null (operate on the tab's current page without navigating).
+    const attachTargetId = body.attachTargetId || null;
+    if (!session || (!url && !attachTargetId)) throw httpErr(400, 'session and url required');
     enforceResourceGuard(settings);
     let s = sessions.get(session);
     if (s && shouldRecycleSession(s, settings)) {
@@ -3601,13 +4378,30 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     }
     const isNewSession = !s;
     let newTab = null;
+    // Live mode drives the user's real Chrome through the extension. Creating a
+    // fresh tab already pointing at the URL avoids the about:blank -> navigate
+    // dance, which stalls when the debugger attaches to the still-loading
+    // initial document. The daemon then skips its own navigate step.
+    const liveMode = settings.profileName === LIVE_PROFILE;
+    const liveDirectNav = liveMode && !attachTargetId && !!url;
     if (!s) {
       if (settings.maxSessions > 0 && sessions.size >= settings.maxSessions) {
         throw httpErr(429, `Profile session limit reached (${settings.maxSessions}). Close sessions or increase CHROMUX_MAX_SESSIONS_PER_PROFILE.`);
       }
       const background = body.background === true;
-      const tab = await createTab(port, 'about:blank', background);
-      newTab = tab;
+      let tab;
+      if (attachTargetId) {
+        // Attach an existing tab (live mode): find it in the target list and
+        // connect to its debugger websocket instead of creating a new tab.
+        const targets = await cdpFetch(port, '/json/list').catch(() => []);
+        tab = Array.isArray(targets) ? targets.find(t => t.id === attachTargetId) : null;
+        if (!tab || !tab.webSocketDebuggerUrl) {
+          throw httpErr(404, `Tab ${attachTargetId} is not available to attach`);
+        }
+      } else {
+        tab = await createTab(port, liveDirectNav ? url : 'about:blank', background);
+      }
+      newTab = attachTargetId ? null : tab;
       const cdp = new CDPClient();
       try {
         await cdp.connect(tab.webSocketDebuggerUrl);
@@ -3653,7 +4447,9 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
       session,
       s,
       body,
-      url,
+      // Live direct-nav already created the tab at the target URL, so skip the
+      // daemon's own navigation.
+      url: liveDirectNav ? null : url,
       settings,
       port,
       isNewSession,
@@ -5018,6 +5814,7 @@ function parseOpenArgs(args) {
   let background = openBackgroundDefault();
   let dialog = null;
   let oopif = false;
+  let tab = null;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === '--background' || arg === '--no-focus') {
@@ -5032,6 +5829,17 @@ function parseOpenArgs(args) {
       oopif = true;
       continue;
     }
+    if (arg === '--tab') {
+      // Live mode: attach the user's existing tab (active | <tabId> | url/title match).
+      const value = args[i + 1];
+      if (!value) {
+        console.error('Usage: chromux open <session> --tab active|<tabId>|<url-or-title-match>');
+        process.exit(1);
+      }
+      tab = value;
+      i++;
+      continue;
+    }
     if (arg === '--dialog') {
       const value = args[i + 1];
       if (value !== 'accept' && value !== 'dismiss') {
@@ -5044,9 +5852,12 @@ function parseOpenArgs(args) {
     }
     out.push(arg);
   }
-  const parsed = { session: out[0], url: out[1], background };
+  // With --tab, url is optional (attach in place); default to about:blank so
+  // the daemon's navigation step is a no-op re-read of the current page.
+  const parsed = { session: out[0], url: tab ? (out[1] || null) : out[1], background };
   if (dialog) parsed.dialog = dialog;
   if (oopif) parsed.oopif = true;
+  if (tab) parsed.tab = tab;
   return parsed;
 }
 
@@ -5239,6 +6050,43 @@ async function cmdPs(args = []) {
     });
   }
 
+  // Live profile: not an isolated Chrome, so it never appears in PROFILES_DIR
+  // discovery. Surface it separately when its bridge daemon is up.
+  {
+    const liveEndpoint = daemonEndpointFromState(readState(LIVE_PROFILE));
+    let liveHealthy = false;
+    if (liveEndpoint) {
+      try { await cliReq('GET', '/health', null, liveEndpoint, 2000); liveHealthy = true; } catch {}
+    }
+    if (liveHealthy) {
+      let extension = 'disconnected';
+      let tabs = '-';
+      try {
+        const status = await cdpFetch(ensureLiveConfig().port, '/relay/status');
+        extension = status.killSwitchAt ? 'kill-switch' : status.extensionConnected ? 'connected' : 'waiting';
+        if (typeof status.tabs === 'number') tabs = String(status.tabs);
+      } catch {}
+      let sessions = tabs;
+      try {
+        const list = await cliReq('GET', '/list', null, liveEndpoint, 5000);
+        sessions = String(Object.keys(list).length);
+      } catch {}
+      rows.push({
+        profile: LIVE_PROFILE,
+        port: ensureLiveConfig().port,
+        pid: null,
+        status: 'running',
+        reason: null,
+        tabs: sessions,
+        daemon: 'ok',
+        paused: false,
+        launchMode: 'live',
+        extension,
+        resources: null,
+      });
+    }
+  }
+
   if (json) {
     const totals = rows.reduce((acc, row) => {
       acc.profiles += 1;
@@ -5267,10 +6115,11 @@ async function cmdPs(args = []) {
       console.log(
         r.profile.padEnd(20) +
         String(r.port || '-').padEnd(8) +
-        String(r.pid).padEnd(10) +
+        String(r.pid ?? '-').padEnd(10) +
         r.status.padEnd(12) +
         r.daemon.padEnd(8) +
-        r.tabs
+        r.tabs +
+        (r.extension ? `  (extension: ${r.extension})` : '')
       );
     }
   }
@@ -5497,6 +6346,135 @@ async function cmdKill(profileName) {
   try { fs.unlinkSync(sockPath(profileName)); } catch {}
   const removedProfileFiles = clearStaleChromeSingletons(profileName);
   console.log(JSON.stringify({ profile: profileName, killed: true, pids: [...pids], removedProfileFiles }, null, 2));
+}
+
+// ============================================================
+// Live mode CLI
+// ============================================================
+
+async function cmdPair(args) {
+  const rotate = args.includes('--new-token');
+  const cfg = ensureLiveConfig({ rotateToken: rotate });
+  const installed = fs.existsSync(path.join(EXTENSION_DIR, 'manifest.json'));
+
+  // Bring up the live bridge (facade) and open a short auto-pairing window so
+  // the extension can fetch the token over loopback without a manual paste.
+  let autoPairing = false;
+  const prevProfile = process.env.CHROMUX_PROFILE;
+  process.env.CHROMUX_PROFILE = LIVE_PROFILE;
+  try {
+    await ensureDaemon(LIVE_PROFILE);
+    await cdpFetch(cfg.port, '/pair/open', 'POST');
+    autoPairing = true;
+  } catch {
+    // Facade not reachable — fall back to the manual popup paste flow.
+  } finally {
+    if (prevProfile === undefined) delete process.env.CHROMUX_PROFILE;
+    else process.env.CHROMUX_PROFILE = prevProfile;
+  }
+
+  const out = {
+    paired: true,
+    port: cfg.port,
+    token: cfg.token,
+    extensionPath: installed ? EXTENSION_DIR : null,
+    autoPairing,
+    setup: autoPairing
+      ? [
+          installed
+            ? `1. Load the extension once at chrome://extensions (Developer mode -> Load unpacked -> select:\n     ${EXTENSION_DIR}), or reload it if already loaded.`
+            : '1. Extension folder not found next to chromux.mjs — reinstall chromux from the repo checkout.',
+          '2. That\'s it — a 60s pairing window is open and the extension connects automatically. The popup should show "Connected" within a few seconds (no token paste needed).',
+          '3. Run live commands with CHROMUX_PROFILE=live, e.g. CHROMUX_PROFILE=live chromux open work https://example.com',
+        ]
+      : [
+          installed
+            ? `1. Open chrome://extensions, enable "Developer mode", click "Load unpacked", and select:\n     ${EXTENSION_DIR}`
+            : '1. Extension folder not found next to chromux.mjs — reinstall chromux from the repo checkout.',
+          '2. Automatic pairing could not start the bridge. Open the extension popup, paste the token below into "Pair with chromux", and click "Pair & connect".',
+          '3. Run live commands with CHROMUX_PROFILE=live, e.g. CHROMUX_PROFILE=live chromux open work https://example.com',
+        ],
+    note: 'Keep the token private; it authorizes local control of your browser. Re-run "chromux pair --new-token" to rotate it.',
+  };
+  console.log(JSON.stringify(out, null, 2));
+  return out;
+}
+
+// Resolve --tab selector (active | <tabId> | url/title substring) against the
+// live bridge's current tab list; returns a facade targetId.
+async function resolveLiveTab(selector, facadePort) {
+  let tabs;
+  try { tabs = await cdpFetch(facadePort, '/json/list'); }
+  catch { throw new Error(liveDisconnectedMessage(null)); }
+  if (!Array.isArray(tabs)) throw new Error('live bridge returned no tab list');
+  const attachable = tabs.filter(t => t.attachable !== false);
+  // Resolve to the facade targetId used for attach; match on the raw tab id.
+  const pick = (list, label) => {
+    if (list.length === 1) return list[0].id;
+    if (list.length === 0) throw new Error(`No attachable tab matches ${label}`);
+    const lines = list.map(t => `  ${t.tabId}  ${t.active ? '* ' : '  '}${t.title || '(untitled)'} — ${t.url}`);
+    throw new Error(`Multiple tabs match ${label}; pass --tab <tabId>:\n${lines.join('\n')}`);
+  };
+  if (selector === 'active') return pick(attachable.filter(t => t.active), 'the active tab');
+  const direct = tabs.find(t => String(t.tabId) === String(selector));
+  if (direct) {
+    if (direct.attachable === false) throw new Error(`Tab ${selector} is a restricted page (chrome://, Web Store, or extension) and cannot be attached`);
+    return direct.id;
+  }
+  const needle = String(selector).toLowerCase();
+  const matches = attachable.filter(t =>
+    (t.url || '').toLowerCase().includes(needle) || (t.title || '').toLowerCase().includes(needle));
+  return pick(matches, `"${selector}"`);
+}
+
+async function cmdLiveTabs(args) {
+  const facadePort = ensureLiveConfig().port;
+  // Bring up the live daemon/bridge and relay so the list reflects reality.
+  const profileWas = process.env.CHROMUX_PROFILE;
+  process.env.CHROMUX_PROFILE = LIVE_PROFILE;
+  try {
+    await ensureDaemon(LIVE_PROFILE);
+    await ensureLiveRelayConnected(facadePort);
+    const tabs = await cdpFetch(facadePort, '/json/list');
+    const rows = (Array.isArray(tabs) ? tabs : []).map(t => ({
+      tabId: t.tabId,
+      active: !!t.active,
+      attachable: t.attachable !== false,
+      attachedByChromux: !!t.createdByChromux,
+      title: t.title || '',
+      url: t.url || '',
+    }));
+    const json = args.includes('--json');
+    if (json) { console.log(JSON.stringify(rows, null, 2)); return rows; }
+    if (rows.length === 0) { console.log('No tabs.'); return rows; }
+    for (const r of rows) {
+      const flag = r.active ? '*' : ' ';
+      const lock = r.attachable ? ' ' : '🔒';
+      console.log(`${flag}${lock} ${String(r.tabId).padEnd(6)} ${(r.title || '(untitled)').slice(0, 48).padEnd(48)} ${r.url}`);
+    }
+    console.log('\nAttach one with: CHROMUX_PROFILE=live chromux open <session> --tab <tabId>');
+    return rows;
+  } finally {
+    if (profileWas === undefined) delete process.env.CHROMUX_PROFILE;
+    else process.env.CHROMUX_PROFILE = profileWas;
+  }
+}
+
+// Kill live: detach every debugger session and stop the live daemon, but never
+// touch the user's Chrome process.
+async function cmdKillLive() {
+  const facadePort = ensureLiveConfig().port;
+  let detached = 0;
+  try {
+    const r = await cdpFetch(facadePort, '/relay/detach-all', 'POST');
+    detached = r?.detached || 0;
+  } catch {}
+  const endpoint = daemonEndpointFromState(readState(LIVE_PROFILE));
+  try { await cliReq('POST', '/stop', {}, endpoint); } catch {}
+  clearDaemonEndpointState(LIVE_PROFILE);
+  const out = { profile: LIVE_PROFILE, killed: true, detachedTabs: detached, browserProcessKept: true };
+  console.log(JSON.stringify(out, null, 2));
+  return out;
 }
 
 function cmdPause(profileName) {
@@ -6481,6 +7459,67 @@ async function reuseHealthyDaemon(profileName, desiredMode) {
   return null;
 }
 
+// Live cold start: the daemon spawned for the live profile hosts the CDP
+// facade in-process, so "the port is reachable" means "the facade is up".
+// Reachability of the facade does not imply the extension relay is connected;
+// callers that need the browser (open, tabs) additionally wait on relay
+// status and launch the user's Chrome when nothing is connected.
+async function liveBridgeStatus(port) {
+  try { return await cdpFetch(port, '/relay/status'); }
+  catch { return null; }
+}
+
+function launchUserChrome() {
+  const override = process.env.CHROMUX_LIVE_LAUNCH_CMD;
+  if (override) {
+    const parts = override.split(' ').filter(Boolean);
+    spawn(parts[0], parts.slice(1), { detached: true, stdio: 'ignore', env: chromeLaunchEnv() }).unref();
+    return true;
+  }
+  if (process.platform === 'darwin') {
+    spawn('open', ['-b', 'com.google.Chrome'], { detached: true, stdio: 'ignore' }).unref();
+    return true;
+  }
+  const chrome = findChrome(loadConfig());
+  if (!chrome) return false;
+  spawn(chrome, [], { detached: true, stdio: 'ignore', env: chromeLaunchEnv() }).unref();
+  return true;
+}
+
+// Resolve the facade port the live daemon should bind. The facade only comes
+// up once the daemon is spawned against this port; relay connection (and the
+// Chrome launch it needs) is handled separately at first browser command.
+async function ensureLiveReady() {
+  if (!readLiveConfig()?.token) {
+    console.error('live profile is not paired yet. Run: chromux pair');
+    process.exit(1);
+  }
+  return ensureLiveConfig().port;
+}
+
+// Before the first browser command on the live profile, make sure the
+// extension relay is connected. On a cold start (facade up, no relay) this
+// launches the user's real Chrome and waits for the extension to attach.
+async function ensureLiveRelayConnected(port) {
+  let status = await liveBridgeStatus(port);
+  if (status?.extensionConnected) return;
+  if (status?.killSwitchAt) {
+    throw new Error('live extension is blocked by its kill switch — re-enable it from the chromux extension popup');
+  }
+  process.stderr.write('Waiting for the chromux extension to connect...');
+  if (!launchUserChrome()) {
+    process.stderr.write('\n');
+    throw new Error('could not launch Chrome — open Chrome with the chromux extension, or set CHROMUX_LIVE_LAUNCH_CMD');
+  }
+  for (let i = 0; i < 60; i++) {
+    await sleep(500);
+    status = await liveBridgeStatus(port);
+    if (status?.extensionConnected) { process.stderr.write(' connected.\n'); return; }
+  }
+  process.stderr.write('\n');
+  throw new Error('timed out waiting for the chromux extension — confirm it is installed and enabled at chrome://extensions');
+}
+
 async function ensureDaemon(profileName) {
   const desiredMode = getMode();
 
@@ -6502,15 +7541,22 @@ async function ensureDaemon(profileName) {
     try { fs.unlinkSync(sockPath(profileName)); } catch {}
     clearDaemonEndpointState(profileName);
 
-    // Auto-launch profile if not running
-    let port = await resolveProfilePort(profileName);
-    if (!port) {
-      process.stderr.write(`Auto-launching profile [${profileName}]...\n`);
-      await cmdLaunch(profileName, null, autoLaunchMode());
+    // Auto-launch profile if not running. Live mode does not launch an
+    // isolated Chrome — it uses the fixed facade port and ensures the user's
+    // real Chrome (with the extension) is up and the relay is connected.
+    let port;
+    if (isLiveProfile(profileName)) {
+      port = await ensureLiveReady();
+    } else {
       port = await resolveProfilePort(profileName);
       if (!port) {
-        console.error(`Failed to launch profile "${profileName}".`);
-        process.exit(1);
+        process.stderr.write(`Auto-launching profile [${profileName}]...\n`);
+        await cmdLaunch(profileName, null, autoLaunchMode());
+        port = await resolveProfilePort(profileName);
+        if (!port) {
+          console.error(`Failed to launch profile "${profileName}".`);
+          process.exit(1);
+        }
       }
     }
 
@@ -6647,9 +7693,18 @@ async function runLoggedProfileCommand(cmd, args, profile, fn) {
 }
 
 async function runCli(cmd, args) {
+  // Live-mode setup commands (no daemon needed)
+  if (cmd === 'pair') return cmdPair(args);
+  if (cmd === 'tabs') return cmdLiveTabs(args);
+
   // Profile-level commands (no daemon needed)
   if (cmd === 'launch') {
     const name = args[0] || DEFAULT_PROFILE;
+    if (isLiveProfile(name)) {
+      console.error('The "live" profile is the user\'s own Chrome — it is not launched by chromux.');
+      console.error('Run "chromux pair" once, then use CHROMUX_PROFILE=live with open/snapshot/... commands.');
+      process.exit(1);
+    }
     const portIdx = args.indexOf('--port');
     const port = portIdx >= 0 ? parseInt(args[portIdx + 1]) : null;
     if (args.includes('--hidden')) {
@@ -6664,6 +7719,10 @@ async function runCli(cmd, args) {
   if (cmd === 'ps') return runLoggedProfileCommand(cmd, args, getProfile(), () => cmdPs(args));
   if (cmd === 'kill') {
     if (!args[0]) { console.error('Usage: chromux kill <profile>'); process.exit(1); }
+    if (isLiveProfile(args[0])) {
+      const r = await runLoggedProfileCommand(cmd, args, args[0], () => cmdKillLive());
+      return r;
+    }
     const r = await runLoggedProfileCommand(cmd, args, args[0], () => cmdKill(args[0]));
     printFailureLearningReminder(args[0]);
     return r;
@@ -6691,11 +7750,25 @@ async function runCli(cmd, args) {
   ]);
   if (!tabCommands.has(cmd)) { console.error(`Unknown: ${cmd}. Run: chromux help`); process.exit(1); }
 
+  const live = isLiveProfile(profile);
+  // Commands that chrome.debugger cannot support in the user's real browser.
+  if (live && cmd === 'show') {
+    console.error('Error: live mode cannot open DevTools — a tab allows only one debugger client, and chromux is using it.');
+    console.error('Use an isolated profile (CHROMUX_PROFILE=<name>) if you need chromux show.');
+    process.exit(1);
+  }
+
   const startedAt = Date.now();
   const session = inferActivitySession(cmd, args);
   let sock;
   try {
     sock = await ensureDaemon(profile);
+
+    // Live cold start: ensure the extension relay is connected (launching the
+    // user's Chrome if needed) before any command that touches the browser.
+    if (live && cmd !== 'stop') {
+      await ensureLiveRelayConnected(ensureLiveConfig().port);
+    }
 
     // Special: show — open DevTools in user's browser
     if (cmd === 'show') {
@@ -6710,8 +7783,19 @@ async function runCli(cmd, args) {
     }
 
     const routes = {
-      open:       () => {
+      open:       async () => {
         const openArgs = parseOpenArgs(args);
+        // Live: --tab active|<id>|<url/title match> attaches an existing user
+        // tab instead of creating a new one.
+        if (live && openArgs.tab) {
+          openArgs.attachTargetId = await resolveLiveTab(openArgs.tab, ensureLiveConfig().port);
+          delete openArgs.tab;
+        }
+        // Live mode creates visible foreground tabs by default: the user should
+        // see the agent's tab, and background tabs are unreliable to drive.
+        if (live && !args.includes('--background') && !args.includes('--no-focus')) {
+          openArgs.background = false;
+        }
         return cliReq('POST', '/open', openArgs, sock, defaultCliTimeoutMs());
       },
       snapshot:   () => {
@@ -7331,6 +8415,26 @@ Lifecycle:
   chromux close <session>            Close tab
   chromux list                       List active sessions
 
+Live mode (your real Chrome via the chromux extension):
+  Two routes to a browser: an isolated profile ("agent's browser", the default)
+  and the reserved "live" profile ("your browser"). Pick live when the task
+  needs your own logged-in session; pick a profile for isolated/parallel work.
+  chromux pair                       Set up live mode: start the bridge and open
+                                     a short auto-pairing window so the extension
+                                     connects on its own (no token paste needed)
+  chromux pair --new-token           Rotate the pairing token
+  chromux tabs                       List your Chrome's tabs (id/title/url/active)
+  CHROMUX_PROFILE=live chromux open <s> <url>   Work in a new tab in your Chrome
+  CHROMUX_PROFILE=live chromux open <s> --tab active|<tabId>|<match>
+                                     Attach the tab you are looking at instead
+  Live uses chrome.debugger, so it is a CDP subset: close on an attached tab
+                                     detaches (never closes your tab), kill live
+                                     stops the bridge without touching Chrome, and
+                                     show/launch --headless/chrome:// are
+                                     unsupported (they return a clear error).
+                                     A "chromux is debugging this browser" bar is
+                                     always visible while attached.
+
 Convenience shortcuts:
   chromux snapshot <session>         Accessibility tree with @ref (refs stay stable per document)
   chromux snapshot <s> --interactive Only interactive elements (smaller payload)
@@ -7483,6 +8587,10 @@ if (cmd === '--daemon') {
   const port = parseInt(args[1]);
   const daemonPort = parseInt(args[2]);
   if (!port || !daemonPort) { console.error('Usage: --daemon <profile> <chrome-cdp-port> <daemon-port>'); process.exit(1); }
+  // Live profile: the CDP endpoint is the in-process facade backed by the
+  // extension relay, not a launched Chrome. Start it before the daemon so
+  // the daemon's CDP reachability check passes.
+  if (isLiveProfile(profileName)) await startLiveBridge(port);
   await startDaemon(profileName, port, daemonPort);
 } else if (!cmd || cmd === 'help' || cmd === '--help') {
   console.log(HELP);

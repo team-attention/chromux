@@ -102,6 +102,20 @@ Default recommendation:
 - one running profile: use it
 - logged-in user site: prefer `default` or the known logged-in profile
 - risky/destructive/unknown site: propose a new task profile
+- the user's own live session is required (SSO/2FA, an already-open page, or
+  "do it on the page I'm looking at"): use the reserved `live` profile
+
+The `live` profile is a second route: instead of an isolated Chrome, the
+chromux extension bridges the user's real, logged-in Chrome. It shares the
+whole command surface (`CHROMUX_PROFILE=live chromux open ...`), plus
+`chromux tabs` to list the user's tabs and `open <s> --tab active|<tabId>|<match>`
+to attach the tab the user is on. It is a `chrome.debugger` subset: `close` on
+an attached tab only detaches it, `kill live` never closes the user's Chrome,
+and `show`/`launch --headless`/`chrome://` are unsupported. Live runs on the
+user's real session — prefer new tabs, avoid destructive actions, and never
+switch a task to `live` without a reason that needs the user's own session. If
+live commands error with "not paired", tell the user to run `chromux pair`
+(auto-pairing connects the extension on its own) instead of retrying.
 
 Launch or reuse the selected profile. Headed mode with background tab creation
 is the pragmatic default when login state and anti-bot behavior matter. New

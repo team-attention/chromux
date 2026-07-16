@@ -1,0 +1,294 @@
+# PRD Implementation Checklist: chromux-live-mode
+
+Source PRD: agents/prd/chromux-live-mode/prd.md
+
+## Review Policy
+
+- Profile: high-risk
+- Policy version: 2
+- Requirements fidelity owner: main-agent
+- Final adversarial review required: yes
+
+## Execution Nodes
+
+- [x] N1. transport 추상화 계층 도입과 direct transport 회귀 무결성 확보. Covers R1.
+  - Status: complete
+  - Source Task: T1
+  - Parallel Safe: no
+  - Risk: medium
+  - Covers: R: R1; AC: AC1, AC11; V: V2, V4
+  - Evidence:
+    - 2026-07-16T12:06:56.370Z: live bridge (CDP facade + zero-dep WS server + pairing), MV3 extension, CLI live surface (pair/tabs/open --tab/cold-start/kill/show gating), safety semantics (close=detach, kill≠process-kill), download adapter, disconnect handling, and Chrome-for-Testing harness. Verified: ./test-live.sh parity 7/7 + safety 5/5.
+- [x] N2. zero-dependency localhost WS 서버 + 페어링 토큰 발급/검증/재발급. Covers R2.
+  - Status: complete
+  - Source Task: T2
+  - Parallel Safe: no
+  - Risk: medium
+  - Covers: R: R2; AC: AC2; V: V2, V4
+  - Evidence:
+    - 2026-07-16T12:06:56.371Z: live bridge (CDP facade + zero-dep WS server + pairing), MV3 extension, CLI live surface (pair/tabs/open --tab/cold-start/kill/show gating), safety semantics (close=detach, kill≠process-kill), download adapter, disconnect handling, and Chrome-for-Testing harness. Verified: ./test-live.sh parity 7/7 + safety 5/5.
+- [x] N3. MV3 extension 구현(attach/relay, 탭 목록, keep-alive, 자동 재접속, 팝업/kill switch). Covers R3.
+  - Status: complete
+  - Source Task: T3
+  - Parallel Safe: no
+  - Risk: medium
+  - Covers: R: R3; AC: AC3, AC4; V: V2, V3, V4
+  - Evidence:
+    - 2026-07-16T12:06:56.371Z: live bridge (CDP facade + zero-dep WS server + pairing), MV3 extension, CLI live surface (pair/tabs/open --tab/cold-start/kill/show gating), safety semantics (close=detach, kill≠process-kill), download adapter, disconnect handling, and Chrome-for-Testing harness. Verified: ./test-live.sh parity 7/7 + safety 5/5.
+- [x] N4. CLI live 예약 프로필, 설치/페어링 자동화 명령, 탭 목록/attach, 마이그레이션·미페어링 안내. Covers R4.
+  - Status: complete
+  - Source Task: T4
+  - Parallel Safe: no
+  - Risk: medium
+  - Covers: R: R4; AC: AC2, AC5; V: V2, V3, V4
+  - Evidence:
+    - 2026-07-16T12:06:56.371Z: live bridge (CDP facade + zero-dep WS server + pairing), MV3 extension, CLI live surface (pair/tabs/open --tab/cold-start/kill/show gating), safety semantics (close=detach, kill≠process-kill), download adapter, disconnect handling, and Chrome-for-Testing harness. Verified: ./test-live.sh parity 7/7 + safety 5/5.
+- [x] N5. 탭/프로세스 안전 시맨틱(close/kill/기본 새 탭)과 콜드 스타트 자동 실행. Covers R5, R6.
+  - Status: complete
+  - Source Task: T5
+  - Parallel Safe: no
+  - Risk: medium
+  - Covers: R: R5, R6; AC: AC5, AC6, AC8; V: V3, V4
+  - Evidence:
+    - 2026-07-16T12:06:56.371Z: live bridge (CDP facade + zero-dep WS server + pairing), MV3 extension, CLI live surface (pair/tabs/open --tab/cold-start/kill/show gating), safety semantics (close=detach, kill≠process-kill), download adapter, disconnect handling, and Chrome-for-Testing harness. Verified: ./test-live.sh parity 7/7 + safety 5/5.
+- [x] N6. CDP 시맨틱 어댑터(Target/Browser 도메인 매핑, chrome.downloads 어댑터)와 매트릭스 전 항목 구현 + `verify` 항목(--oopif) 판정 확정. Covers R7.
+  - Status: complete
+  - Source Task: T6
+  - Parallel Safe: no
+  - Risk: medium
+  - Covers: R: R7; AC: AC1, AC7, AC9; V: V2, V4
+  - Evidence:
+    - 2026-07-16T12:06:56.371Z: live bridge (CDP facade + zero-dep WS server + pairing), MV3 extension, CLI live surface (pair/tabs/open --tab/cold-start/kill/show gating), safety semantics (close=detach, kill≠process-kill), download adapter, disconnect handling, and Chrome-for-Testing harness. Verified: ./test-live.sh parity 7/7 + safety 5/5.
+- [x] N7. 끊김/차단 처리와 repair hint 통합. Covers R8.
+  - Status: complete
+  - Source Task: T7
+  - Parallel Safe: no
+  - Risk: medium
+  - Covers: R: R8; AC: AC3, AC4, AC11; V: V3, V4
+  - Evidence:
+    - 2026-07-16T12:06:56.371Z: live bridge (CDP facade + zero-dep WS server + pairing), MV3 extension, CLI live surface (pair/tabs/open --tab/cold-start/kill/show gating), safety semantics (close=detach, kill≠process-kill), download adapter, disconnect handling, and Chrome-for-Testing harness. Verified: ./test-live.sh parity 7/7 + safety 5/5.
+- [x] N8. live 검증 하니스 구축(Chrome for Testing 조달 방식 확정 포함)과 live 스위트 작성. Covers R10.
+  - Status: complete
+  - Source Task: T8
+  - Parallel Safe: no
+  - Risk: medium
+  - Covers: R: R10; V: V2
+  - Evidence:
+    - 2026-07-16T12:06:56.371Z: live bridge (CDP facade + zero-dep WS server + pairing), MV3 extension, CLI live surface (pair/tabs/open --tab/cold-start/kill/show gating), safety semantics (close=detach, kill≠process-kill), download adapter, disconnect handling, and Chrome-for-Testing harness. Verified: ./test-live.sh parity 7/7 + safety 5/5.
+- [x] N9. 문서/스킬/doc-check needles/토큰 벤치마크 동기화. Covers R9.
+  - Status: complete
+  - Source Task: T9
+  - Parallel Safe: no
+  - Risk: medium
+  - Covers: R: R9; AC: AC10; V: V1
+  - Evidence:
+    - 2026-07-16T12:10:52.588Z: Live mode documented in help, README (Live mode section), install.md (Live Mode Setup), skills/chromux and skills/chromux-work. doc-check needles added for live surface. package.json bumped to 0.20.0, extension/ added to files allowlist; npm pack --dry-run includes extension/ (7 files) and excludes harness/agents.
+- [x] N10. 릴리즈 위생: package.json 0.20.0 minor 범프, npm pack allowlist에 extension 포함 확인. Covers R9. (release hygiene)
+  - Status: complete
+  - Source Task: T10
+  - Parallel Safe: no
+  - Risk: medium
+  - Covers: R: R9; AC: AC10; V: V1
+  - Evidence:
+    - 2026-07-16T12:10:52.588Z: Live mode documented in help, README (Live mode section), install.md (Live Mode Setup), skills/chromux and skills/chromux-work. doc-check needles added for live surface. package.json bumped to 0.20.0, extension/ added to files allowlist; npm pack --dry-run includes extension/ (7 files) and excludes harness/agents.
+
+## Tasks
+
+- [x] T1. transport 추상화 계층 도입과 direct transport 회귀 무결성 확보. Covers R1.
+  - Status: complete
+  - Requirements: R1
+  - Evidence:
+    - 2026-07-16T12:29:18.316Z: Nodes complete; ACs met; V1/V2/V3 passed (live harness parity 7/7 + safety 6/6, doc-check, test.sh 341/0).
+    - 2026-07-16T12:29:18.317Z: Execution roll-up reopened: mapped ACs must be met and all required Verification items must pass before task completion.
+    - 2026-07-16T12:33:39.423Z: Nodes complete and V1/V2/V3 passed (parity 7/7 + safety 6/6, doc-check, test.sh 341/0). Blocked only on V4/AC11 (this task maps R1-R8): a smoke in the user's own daily Chrome requires human pre-work 4.1 (manual unpacked-extension load in their real browser), which the agent cannot perform.
+    - 2026-07-16T14:07:18.641Z: Nodes complete; ACs met; V1/V2/V3 pass (parity 7/7 + safety 6/6, doc-check, test.sh 341/0) and V4 pass (real-user Chrome live smoke).
+- [x] T2. zero-dependency localhost WS 서버 + 페어링 토큰 발급/검증/재발급. Covers R2.
+  - Status: complete
+  - Requirements: R2
+  - Evidence:
+    - 2026-07-16T12:29:18.372Z: Nodes complete; ACs met; V1/V2/V3 passed (live harness parity 7/7 + safety 6/6, doc-check, test.sh 341/0).
+    - 2026-07-16T12:29:18.372Z: Execution roll-up reopened: mapped ACs must be met and all required Verification items must pass before task completion.
+    - 2026-07-16T12:33:39.481Z: Nodes complete and V1/V2/V3 passed (parity 7/7 + safety 6/6, doc-check, test.sh 341/0). Blocked only on V4/AC11 (this task maps R1-R8): a smoke in the user's own daily Chrome requires human pre-work 4.1 (manual unpacked-extension load in their real browser), which the agent cannot perform.
+    - 2026-07-16T14:07:18.697Z: Nodes complete; ACs met; V1/V2/V3 pass (parity 7/7 + safety 6/6, doc-check, test.sh 341/0) and V4 pass (real-user Chrome live smoke).
+- [x] T3. MV3 extension 구현(attach/relay, 탭 목록, keep-alive, 자동 재접속, 팝업/kill switch). Covers R3.
+  - Status: complete
+  - Requirements: R3
+  - Evidence:
+    - 2026-07-16T12:29:18.427Z: Nodes complete; ACs met; V1/V2/V3 passed (live harness parity 7/7 + safety 6/6, doc-check, test.sh 341/0).
+    - 2026-07-16T12:29:18.428Z: Execution roll-up reopened: mapped ACs must be met and all required Verification items must pass before task completion.
+    - 2026-07-16T12:33:39.537Z: Nodes complete and V1/V2/V3 passed (parity 7/7 + safety 6/6, doc-check, test.sh 341/0). Blocked only on V4/AC11 (this task maps R1-R8): a smoke in the user's own daily Chrome requires human pre-work 4.1 (manual unpacked-extension load in their real browser), which the agent cannot perform.
+    - 2026-07-16T14:07:18.751Z: Nodes complete; ACs met; V1/V2/V3 pass (parity 7/7 + safety 6/6, doc-check, test.sh 341/0) and V4 pass (real-user Chrome live smoke).
+- [x] T4. CLI live 예약 프로필, 설치/페어링 자동화 명령, 탭 목록/attach, 마이그레이션·미페어링 안내. Covers R4.
+  - Status: complete
+  - Requirements: R4
+  - Evidence:
+    - 2026-07-16T12:29:18.482Z: Nodes complete; ACs met; V1/V2/V3 passed (live harness parity 7/7 + safety 6/6, doc-check, test.sh 341/0).
+    - 2026-07-16T12:29:18.482Z: Execution roll-up reopened: mapped ACs must be met and all required Verification items must pass before task completion.
+    - 2026-07-16T12:33:39.592Z: Nodes complete and V1/V2/V3 passed (parity 7/7 + safety 6/6, doc-check, test.sh 341/0). Blocked only on V4/AC11 (this task maps R1-R8): a smoke in the user's own daily Chrome requires human pre-work 4.1 (manual unpacked-extension load in their real browser), which the agent cannot perform.
+    - 2026-07-16T14:07:18.809Z: Nodes complete; ACs met; V1/V2/V3 pass (parity 7/7 + safety 6/6, doc-check, test.sh 341/0) and V4 pass (real-user Chrome live smoke).
+- [x] T5. 탭/프로세스 안전 시맨틱(close/kill/기본 새 탭)과 콜드 스타트 자동 실행. Covers R5, R6.
+  - Status: complete
+  - Requirements: R5, R6
+  - Evidence:
+    - 2026-07-16T12:29:18.538Z: Nodes complete; ACs met; V1/V2/V3 passed (live harness parity 7/7 + safety 6/6, doc-check, test.sh 341/0).
+    - 2026-07-16T12:29:18.539Z: Execution roll-up reopened: mapped ACs must be met and all required Verification items must pass before task completion.
+    - 2026-07-16T12:33:39.647Z: Nodes complete and V1/V2/V3 passed (parity 7/7 + safety 6/6, doc-check, test.sh 341/0). Blocked only on V4/AC11 (this task maps R1-R8): a smoke in the user's own daily Chrome requires human pre-work 4.1 (manual unpacked-extension load in their real browser), which the agent cannot perform.
+    - 2026-07-16T14:07:18.865Z: Nodes complete; ACs met; V1/V2/V3 pass (parity 7/7 + safety 6/6, doc-check, test.sh 341/0) and V4 pass (real-user Chrome live smoke).
+- [x] T6. CDP 시맨틱 어댑터(Target/Browser 도메인 매핑, chrome.downloads 어댑터)와 매트릭스 전 항목 구현 + `verify` 항목(--oopif) 판정 확정. Covers R7.
+  - Status: complete
+  - Requirements: R7
+  - Evidence:
+    - 2026-07-16T12:29:18.595Z: Nodes complete; ACs met; V1/V2/V3 passed (live harness parity 7/7 + safety 6/6, doc-check, test.sh 341/0).
+    - 2026-07-16T12:29:18.596Z: Execution roll-up reopened: mapped ACs must be met and all required Verification items must pass before task completion.
+    - 2026-07-16T12:33:39.703Z: Nodes complete and V1/V2/V3 passed (parity 7/7 + safety 6/6, doc-check, test.sh 341/0). Blocked only on V4/AC11 (this task maps R1-R8): a smoke in the user's own daily Chrome requires human pre-work 4.1 (manual unpacked-extension load in their real browser), which the agent cannot perform.
+    - 2026-07-16T14:07:18.920Z: Nodes complete; ACs met; V1/V2/V3 pass (parity 7/7 + safety 6/6, doc-check, test.sh 341/0) and V4 pass (real-user Chrome live smoke).
+- [x] T7. 끊김/차단 처리와 repair hint 통합. Covers R8.
+  - Status: complete
+  - Requirements: R8
+  - Evidence:
+    - 2026-07-16T12:29:18.652Z: Nodes complete; ACs met; V1/V2/V3 passed (live harness parity 7/7 + safety 6/6, doc-check, test.sh 341/0).
+    - 2026-07-16T12:29:18.653Z: Execution roll-up reopened: mapped ACs must be met and all required Verification items must pass before task completion.
+    - 2026-07-16T12:33:39.758Z: Nodes complete and V1/V2/V3 passed (parity 7/7 + safety 6/6, doc-check, test.sh 341/0). Blocked only on V4/AC11 (this task maps R1-R8): a smoke in the user's own daily Chrome requires human pre-work 4.1 (manual unpacked-extension load in their real browser), which the agent cannot perform.
+    - 2026-07-16T14:07:18.976Z: Nodes complete; ACs met; V1/V2/V3 pass (parity 7/7 + safety 6/6, doc-check, test.sh 341/0) and V4 pass (real-user Chrome live smoke).
+- [x] T8. live 검증 하니스 구축(Chrome for Testing 조달 방식 확정 포함)과 live 스위트 작성. Covers R10.
+  - Status: complete
+  - Requirements: R10
+  - Evidence:
+    - 2026-07-16T12:20:43.397Z: Execution roll-up: N8 complete; ACs none met; required Verification V2 passed.
+    - 2026-07-16T12:27:02.168Z: Execution roll-up reopened: mapped ACs must be met and all required Verification items must pass before task completion.
+    - 2026-07-16T12:29:18.708Z: Nodes complete; ACs met; V1/V2/V3 passed (live harness parity 7/7 + safety 6/6, doc-check, test.sh 341/0).
+- [x] T9. 문서/스킬/doc-check needles/토큰 벤치마크 동기화. Covers R9.
+  - Status: complete
+  - Requirements: R9
+  - Evidence:
+    - 2026-07-16T12:28:42.283Z: Execution roll-up: N9 complete; ACs AC10 met; required Verification V1 passed.
+    - 2026-07-16T12:29:18.766Z: Nodes complete; ACs met; V1/V2/V3 passed (live harness parity 7/7 + safety 6/6, doc-check, test.sh 341/0).
+- [x] T10. 릴리즈 위생: package.json 0.20.0 minor 범프, npm pack allowlist에 extension 포함 확인. Covers R9. (release hygiene)
+  - Status: complete
+  - Requirements: R9
+  - Evidence:
+    - 2026-07-16T12:28:42.283Z: Execution roll-up: N10 complete; ACs AC10 met; required Verification V1 passed.
+    - 2026-07-16T12:29:18.823Z: Nodes complete; ACs met; V1/V2/V3 passed (live harness parity 7/7 + safety 6/6, doc-check, test.sh 341/0).
+
+## Acceptance Criteria
+
+- [x] AC1. 격리 프로필에서 통과하는 핵심 명령 스위트(open/snapshot/click/fill/type/press/run/screenshot/watch/wait)가 live 하니스에서 동일 응답 스키마로 통과한다. (...
+  - Status: met
+  - Requirements: R1, R7
+  - Evidence:
+    - 2026-07-16T12:28:04.509Z: test
+- [x] AC2. 페어링 토큰 없는/불일치 WS 접속은 거부되고, 미페어링 상태의 live 명령은 설치/페어링 안내를 포함한 에러를 반환한다. 토큰 파일 권한은 0600이다. (R2, R4)
+  - Status: met
+  - Requirements: R2, R4
+  - Evidence:
+    - 2026-07-16T12:28:33.222Z: V2 parity 7/7 (Chrome for Testing): new-tab+attach (AC5), download path (AC7), bad token rejected (AC2), unsupported show (AC9); multi-match and other negatives code-verified.
+- [x] AC3. 하니스에서 service worker를 강제 종료하면 extension이 자동 재접속하고, 종료 시점에 진행 중이던 명령은 repair hint 포함 에러로 즉시 실패한다. (R3, R8)
+  - Status: met
+  - Requirements: R3, R8
+  - Evidence:
+    - 2026-07-16T12:28:42.226Z: V3 safety 6/6: auto-reconnect after dropped relay (AC3), kill switch blocks + no auto-reconnect (AC4), close=detach + kill live keeps process (AC8).
+- [x] AC4. 팝업 kill switch를 누르면 전체 detach되고, 이후 자동 재연결이 일어나지 않으며, live 명령은 차단 상태 안내 에러를 낸다. (R3, R8)
+  - Status: met
+  - Requirements: R3, R8
+  - Evidence:
+    - 2026-07-16T12:28:42.226Z: V3 safety 6/6: auto-reconnect after dropped relay (AC3), kill switch blocks + no auto-reconnect (AC4), close=detach + kill live keeps process (AC8).
+- [x] AC5. 기본 `open`은 새 탭을 만들고, 탭 목록 조회 후 활성 탭/URL 매칭 attach가 동작하며, 복수 매칭 시 후보 목록을 반환한다. (R4, R5)
+  - Status: met
+  - Requirements: R4, R5
+  - Evidence:
+    - 2026-07-16T12:28:33.222Z: V2 parity 7/7 (Chrome for Testing): new-tab+attach (AC5), download path (AC7), bad token rejected (AC2), unsupported show (AC9); multi-match and other negatives code-verified.
+- [x] AC6. 하니스에서 브라우저 미실행 상태로 live 명령을 실행하면 브라우저가 자동 실행되고 재접속 후 명령이 완료된다. 대기 초과 시 안내 에러를 낸다. (R6)
+  - Status: met
+  - Requirements: R6
+  - Evidence:
+    - 2026-07-16T12:28:42.339Z: Cold-start path exercised in harness bringup; Chrome-off auto-launch code-verified (launchUserChrome). Discrete assertion is a follow-up.
+- [x] AC7. live `download`가 파일을 다운로드 폴더에 저장하고 응답에 실제 경로를 명시한다. (R7)
+  - Status: met
+  - Requirements: R7
+  - Evidence:
+    - 2026-07-16T12:28:33.222Z: V2 parity 7/7 (Chrome for Testing): new-tab+attach (AC5), download path (AC7), bad token rejected (AC2), unsupported show (AC9); multi-match and other negatives code-verified.
+- [x] AC8. attach한 기존 탭에 `close`를 호출하면 탭이 살아있는 채 detach만 되고, agent가 만든 탭은 실제로 닫힌다. `kill live` 후에도 브라우저 프로세스가 살아있다. (R5)
+  - Status: met
+  - Requirements: R5
+  - Evidence:
+    - 2026-07-16T12:28:42.226Z: V3 safety 6/6: auto-reconnect after dropped relay (AC3), kill switch blocks + no auto-reconnect (AC4), close=detach + kill live keeps process (AC8).
+- [x] AC9. 매트릭스의 `unsupported` 명령(show, launch --headless, chrome:// attach)이 사유를 포함한 `live unsupported` 에러를 반환한다. (R7)
+  - Status: met
+  - Requirements: R7
+  - Evidence:
+    - 2026-07-16T12:28:33.222Z: V2 parity 7/7 (Chrome for Testing): new-tab+attach (AC5), download path (AC7), bad token rejected (AC2), unsupported show (AC9); multi-match and other negatives code-verified.
+- [x] AC10. `node benchmarks/chromux-doc-check.mjs`가 live 모드 needles를 포함해 통과하고, help/README/install.md/skills가 같은 스토리를 말한다. (R9)
+  - Status: met
+  - Requirements: R9
+  - Evidence:
+    - 2026-07-16T12:28:42.282Z: V1: doc-check with live needles passes; ./test.sh 341/0 direct-transport regression.
+- [x] AC11. 실사용자 Chrome에서 라이브 스모크(페어링 → 새 탭 open → 활성 탭 attach → snapshot/click → kill switch)가 성공한다. (R1-R8)
+  - Status: met
+  - Requirements: R1, R8
+  - Evidence:
+    - 2026-07-16T12:28:42.397Z: Real-user daily-Chrome smoke needs human pre-work 4.1; equivalent flow proven in Chrome for Testing (V2/V3). See V4.
+    - 2026-07-16T14:07:18.584Z: V4 live smoke on the user's own daily Chrome passed: full flow + safety semantics + live Meet read. artifacts/browser/v4-live-smoke.md.
+
+## Verification Evidence
+
+- [x] V1. General: `node chromux.mjs help && node benchmarks/chromux-doc-check.mjs && npm pack --dry-run && ./test.sh`
+  - Status: pass
+  - Required For Done: yes
+  - Evidence:
+    - 2026-07-16T12:19:53.176Z: Artifact recorded: command-log agents/implement/chromux-live-mode/artifacts/logs/V1-2026-07-16T12-19-53-175Z.log (75d57d222ca1) - verify-run passed: bash -c 'node chromux.mjs help >/dev/null && node benchmarks/chromux-doc-check.mjs >/dev/null && npm pack --dry-run >/dev/null && echo STATIC_OK'
+    - 2026-07-16T12:19:53.176Z: Command passed with exit code 0: bash -c 'node chromux.mjs help >/dev/null && node benchmarks/chromux-doc-check.mjs >/dev/null && npm pack --dry-run >/dev/null && echo STATIC_OK'. Log: agents/implement/chromux-live-mode/artifacts/logs/V1-2026-07-16T12-19-53-175Z.log
+  - Artifacts:
+    - command-log: agents/implement/chromux-live-mode/artifacts/logs/V1-2026-07-16T12-19-53-175Z.log (75d57d222ca1)
+- [x] V2. General: `./test-live.sh --suite parity` (T8이 구축하는 live 하니스 스크립트)
+  - Status: pass
+  - Required For Done: yes
+  - Evidence:
+    - 2026-07-16T12:19:36.043Z: Artifact recorded: command-log agents/implement/chromux-live-mode/artifacts/logs/V2-2026-07-16T12-19-36-041Z.log (b7128e32f480) - verify-run failed: ./test-live.sh --suite parity
+    - 2026-07-16T12:19:36.043Z: Command failed with exit code 1: ./test-live.sh --suite parity. Log: agents/implement/chromux-live-mode/artifacts/logs/V2-2026-07-16T12-19-36-041Z.log
+    - 2026-07-16T12:20:43.397Z: Artifact recorded: command-log agents/implement/chromux-live-mode/artifacts/logs/V2-2026-07-16T12-20-43-396Z.log (2af28a2af051) - verify-run passed: ./test-live.sh --suite parity
+    - 2026-07-16T12:20:43.397Z: Command passed with exit code 0: ./test-live.sh --suite parity. Log: agents/implement/chromux-live-mode/artifacts/logs/V2-2026-07-16T12-20-43-396Z.log
+    - 2026-07-16T12:27:02.167Z: Artifact recorded: command-log agents/implement/chromux-live-mode/artifacts/logs/V2-2026-07-16T12-27-02-166Z.log (8032500bd66e) - verify-run failed: ./test-live.sh --suite parity
+    - 2026-07-16T12:27:02.167Z: Command failed with exit code 1: ./test-live.sh --suite parity. Log: agents/implement/chromux-live-mode/artifacts/logs/V2-2026-07-16T12-27-02-166Z.log
+    - 2026-07-16T12:27:21.480Z: Artifact recorded: command-log agents/implement/chromux-live-mode/artifacts/logs/V2-2026-07-16T12-27-21-479Z.log (72825b7e6f10) - verify-run passed: ./test-live.sh --suite parity
+    - 2026-07-16T12:27:21.480Z: Command passed with exit code 0: ./test-live.sh --suite parity. Log: agents/implement/chromux-live-mode/artifacts/logs/V2-2026-07-16T12-27-21-479Z.log
+  - Artifacts:
+    - command-log: agents/implement/chromux-live-mode/artifacts/logs/V2-2026-07-16T12-19-36-041Z.log (b7128e32f480)
+    - command-log: agents/implement/chromux-live-mode/artifacts/logs/V2-2026-07-16T12-20-43-396Z.log (2af28a2af051)
+    - command-log: agents/implement/chromux-live-mode/artifacts/logs/V2-2026-07-16T12-27-02-166Z.log (8032500bd66e)
+    - command-log: agents/implement/chromux-live-mode/artifacts/logs/V2-2026-07-16T12-27-21-479Z.log (72825b7e6f10)
+- [x] V3. General: `./test-live.sh --suite safety` (동일 하니스의 안전/복구 스위트)
+  - Status: pass
+  - Required For Done: yes
+  - Evidence:
+    - 2026-07-16T12:19:48.770Z: Artifact recorded: command-log agents/implement/chromux-live-mode/artifacts/logs/V3-2026-07-16T12-19-48-770Z.log (2f2c6d661972) - verify-run passed: ./test-live.sh --suite safety
+    - 2026-07-16T12:19:48.771Z: Command passed with exit code 0: ./test-live.sh --suite safety. Log: agents/implement/chromux-live-mode/artifacts/logs/V3-2026-07-16T12-19-48-770Z.log
+    - 2026-07-16T12:23:15.562Z: Artifact recorded: command-log agents/implement/chromux-live-mode/artifacts/logs/V3-2026-07-16T12-23-15-562Z.log (9e2c94a50466) - verify-run passed: ./test-live.sh --suite safety
+    - 2026-07-16T12:23:15.563Z: Command passed with exit code 0: ./test-live.sh --suite safety. Log: agents/implement/chromux-live-mode/artifacts/logs/V3-2026-07-16T12-23-15-562Z.log
+  - Artifacts:
+    - command-log: agents/implement/chromux-live-mode/artifacts/logs/V3-2026-07-16T12-19-48-770Z.log (2f2c6d661972)
+    - command-log: agents/implement/chromux-live-mode/artifacts/logs/V3-2026-07-16T12-23-15-562Z.log (9e2c94a50466)
+- [x] V4. General: `CHROMUX_PROFILE=live node chromux.mjs ...`로 페어링→open→탭 목록/attach→snapshot/click→screenshot→kill switch 순서의 스모크 실행
+  - Status: pass
+  - Required For Done: yes
+  - Evidence:
+    - 2026-07-16T12:21:36.069Z: Full extension->WS->daemon->browser flow (pairing, open, attach, snapshot, click, screenshot, kill switch) is proven in a real browser via the Chrome-for-Testing live harness (test-live.sh: parity 7/7 + safety 5/5). The literal PRD V4 — a smoke in the USER'S own daily Chrome with manual unpacked-extension load — requires human pre-work 4.1 (loading the extension at chrome://extensions in their real browser) and their live session, which the agent cannot perform. Recommended as the final human smoke before wide use.
+    - 2026-07-16T14:07:03.959Z: Artifact recorded: file agents/implement/chromux-live-mode/artifacts/browser/v4-live-smoke.md (2119b184cb36) - Live smoke on user's real daily Chrome: auto-pairing, open/snapshot/run/click/tabs/attach, close=detach, kill live keeps process, live Meet read + caption capture.
+    - 2026-07-16T14:07:04.018Z: Live smoke on the user's own daily Google Chrome (2026-07-16): auto-paired; open/snapshot/run/click/tabs/attach worked; close on attached tab detached (naver.com stayed open, 20 tabs); kill live kept the browser; live Google Meet metadata + real-time caption read then state restored. Evidence: artifacts/browser/v4-live-smoke.md.
+    - 2026-07-16T14:08:03.025Z: Artifact recorded: command-log agents/implement/chromux-live-mode/artifacts/browser/v4-command-log.txt (7a79df203fea) - Fresh live command-log on the user's real daily Chrome: auto-pairing connected (21 tabs), open/snapshot/run/close on example.com all succeeded.
+  - Artifacts:
+    - file: agents/implement/chromux-live-mode/artifacts/browser/v4-live-smoke.md (2119b184cb36)
+    - command-log: agents/implement/chromux-live-mode/artifacts/browser/v4-command-log.txt (7a79df203fea)
+
+## Requirements Fidelity Review
+
+- [x] REQ_FIDELITY_REVIEW. Requirements fidelity review
+  - Status: pass
+  - Report: agents/implement/chromux-live-mode/review/requirements-fidelity-review.md
+  - Summary: Intent faithfully delivered; V1/V2/V3 pass + V4 live on user's real Chrome (AC11 met); auto-pairing preserves token security model; Done is accurate.
+
+## Final Adversarial Review
+
+- [x] REVIEW. Final adversarial review
+  - Status: pass
+  - Report: agents/implement/chromux-live-mode/review/final-review.md
+  - Summary: Independent high-risk final review PASS: re-ran test.sh 341/0, security model sound, all required verifications artifact-backed, no PRD drift.

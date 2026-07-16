@@ -1,0 +1,383 @@
+# Task Graph: chromux-live-mode
+
+- PRD: agents/prd/chromux-live-mode/prd.md
+- Status: complete
+- Generated: 2026-07-16T14:23:31.122Z
+- Nodes: 40
+- Edges: 174
+- Open nodes: 0
+- Verification blocking gaps: 0
+
+## Nodes
+
+- [x] VP0 (verification_plan) - ready: Generate and resolve verification plan
+  - Evidence: 0
+  - Artifacts: 0
+- [x] EP0 (execution_plan) - ready: Generate execution plan from PRD tasks
+  - Evidence: 0
+  - Artifacts: 0
+- [x] T1 (task_rollup) - complete: transport 추상화 계층 도입과 direct transport 회귀 무결성 확보. Covers R1.
+  - Requirements: R1
+  - Evidence: 4
+  - Artifacts: 0
+- [x] T2 (task_rollup) - complete: zero-dependency localhost WS 서버 + 페어링 토큰 발급/검증/재발급. Covers R2.
+  - Requirements: R2
+  - Evidence: 4
+  - Artifacts: 0
+- [x] T3 (task_rollup) - complete: MV3 extension 구현(attach/relay, 탭 목록, keep-alive, 자동 재접속, 팝업/kill switch). Covers R3.
+  - Requirements: R3
+  - Evidence: 4
+  - Artifacts: 0
+- [x] T4 (task_rollup) - complete: CLI live 예약 프로필, 설치/페어링 자동화 명령, 탭 목록/attach, 마이그레이션·미페어링 안내. Covers R4.
+  - Requirements: R4
+  - Evidence: 4
+  - Artifacts: 0
+- [x] T5 (task_rollup) - complete: 탭/프로세스 안전 시맨틱(close/kill/기본 새 탭)과 콜드 스타트 자동 실행. Covers R5, R6.
+  - Requirements: R5, R6
+  - Evidence: 4
+  - Artifacts: 0
+- [x] T6 (task_rollup) - complete: CDP 시맨틱 어댑터(Target/Browser 도메인 매핑, chrome.downloads 어댑터)와 매트릭스 전 항목 구현 + `verify` 항목(--oopif) 판정 확정. Covers R7.
+  - Requirements: R7
+  - Evidence: 4
+  - Artifacts: 0
+- [x] T7 (task_rollup) - complete: 끊김/차단 처리와 repair hint 통합. Covers R8.
+  - Requirements: R8
+  - Evidence: 4
+  - Artifacts: 0
+- [x] T8 (task_rollup) - complete: live 검증 하니스 구축(Chrome for Testing 조달 방식 확정 포함)과 live 스위트 작성. Covers R10.
+  - Requirements: R10
+  - Evidence: 3
+  - Artifacts: 0
+- [x] T9 (task_rollup) - complete: 문서/스킬/doc-check needles/토큰 벤치마크 동기화. Covers R9.
+  - Requirements: R9
+  - Evidence: 2
+  - Artifacts: 0
+- [x] T10 (task_rollup) - complete: 릴리즈 위생: package.json 0.20.0 minor 범프, npm pack allowlist에 extension 포함 확인. Covers R9. (release hygiene)
+  - Requirements: R9
+  - Evidence: 2
+  - Artifacts: 0
+- [x] N1 (execution_node) - complete: transport 추상화 계층 도입과 direct transport 회귀 무결성 확보. Covers R1.
+  - Source Task: T1
+  - Risk: medium
+  - Parallel Safe: no
+  - Covers: R: R1; AC: AC1, AC11; V: V2, V4
+  - Evidence: 1
+  - Artifacts: 0
+- [x] N2 (execution_node) - complete: zero-dependency localhost WS 서버 + 페어링 토큰 발급/검증/재발급. Covers R2.
+  - Source Task: T2
+  - Risk: medium
+  - Parallel Safe: no
+  - Covers: R: R2; AC: AC2; V: V2, V4
+  - Evidence: 1
+  - Artifacts: 0
+- [x] N3 (execution_node) - complete: MV3 extension 구현(attach/relay, 탭 목록, keep-alive, 자동 재접속, 팝업/kill switch). Covers R3.
+  - Source Task: T3
+  - Risk: medium
+  - Parallel Safe: no
+  - Covers: R: R3; AC: AC3, AC4; V: V2, V3, V4
+  - Evidence: 1
+  - Artifacts: 0
+- [x] N4 (execution_node) - complete: CLI live 예약 프로필, 설치/페어링 자동화 명령, 탭 목록/attach, 마이그레이션·미페어링 안내. Covers R4.
+  - Source Task: T4
+  - Risk: medium
+  - Parallel Safe: no
+  - Covers: R: R4; AC: AC2, AC5; V: V2, V3, V4
+  - Evidence: 1
+  - Artifacts: 0
+- [x] N5 (execution_node) - complete: 탭/프로세스 안전 시맨틱(close/kill/기본 새 탭)과 콜드 스타트 자동 실행. Covers R5, R6.
+  - Source Task: T5
+  - Risk: medium
+  - Parallel Safe: no
+  - Covers: R: R5, R6; AC: AC5, AC6, AC8; V: V3, V4
+  - Evidence: 1
+  - Artifacts: 0
+- [x] N6 (execution_node) - complete: CDP 시맨틱 어댑터(Target/Browser 도메인 매핑, chrome.downloads 어댑터)와 매트릭스 전 항목 구현 + `verify` 항목(--oopif) 판정 확정. Covers R7.
+  - Source Task: T6
+  - Risk: medium
+  - Parallel Safe: no
+  - Covers: R: R7; AC: AC1, AC7, AC9; V: V2, V4
+  - Evidence: 1
+  - Artifacts: 0
+- [x] N7 (execution_node) - complete: 끊김/차단 처리와 repair hint 통합. Covers R8.
+  - Source Task: T7
+  - Risk: medium
+  - Parallel Safe: no
+  - Covers: R: R8; AC: AC3, AC4, AC11; V: V3, V4
+  - Evidence: 1
+  - Artifacts: 0
+- [x] N8 (execution_node) - complete: live 검증 하니스 구축(Chrome for Testing 조달 방식 확정 포함)과 live 스위트 작성. Covers R10.
+  - Source Task: T8
+  - Risk: medium
+  - Parallel Safe: no
+  - Covers: R: R10; V: V2
+  - Evidence: 1
+  - Artifacts: 0
+- [x] N9 (execution_node) - complete: 문서/스킬/doc-check needles/토큰 벤치마크 동기화. Covers R9.
+  - Source Task: T9
+  - Risk: medium
+  - Parallel Safe: no
+  - Covers: R: R9; AC: AC10; V: V1
+  - Evidence: 1
+  - Artifacts: 0
+- [x] N10 (execution_node) - complete: 릴리즈 위생: package.json 0.20.0 minor 범프, npm pack allowlist에 extension 포함 확인. Covers R9. (release hygiene)
+  - Source Task: T10
+  - Risk: medium
+  - Parallel Safe: no
+  - Covers: R: R9; AC: AC10; V: V1
+  - Evidence: 1
+  - Artifacts: 0
+- [x] AC1 (acceptance_criterion) - met: 격리 프로필에서 통과하는 핵심 명령 스위트(open/snapshot/click/fill/type/press/run/screenshot/watch/wait)가 live 하니스에서 동일 응답 스키마로 통과한다. (...
+  - Requirements: R1, R7
+  - Evidence: 1
+  - Artifacts: 0
+- [x] AC2 (acceptance_criterion) - met: 페어링 토큰 없는/불일치 WS 접속은 거부되고, 미페어링 상태의 live 명령은 설치/페어링 안내를 포함한 에러를 반환한다. 토큰 파일 권한은 0600이다. (R2, R4)
+  - Requirements: R2, R4
+  - Evidence: 1
+  - Artifacts: 0
+- [x] AC3 (acceptance_criterion) - met: 하니스에서 service worker를 강제 종료하면 extension이 자동 재접속하고, 종료 시점에 진행 중이던 명령은 repair hint 포함 에러로 즉시 실패한다. (R3, R8)
+  - Requirements: R3, R8
+  - Evidence: 1
+  - Artifacts: 0
+- [x] AC4 (acceptance_criterion) - met: 팝업 kill switch를 누르면 전체 detach되고, 이후 자동 재연결이 일어나지 않으며, live 명령은 차단 상태 안내 에러를 낸다. (R3, R8)
+  - Requirements: R3, R8
+  - Evidence: 1
+  - Artifacts: 0
+- [x] AC5 (acceptance_criterion) - met: 기본 `open`은 새 탭을 만들고, 탭 목록 조회 후 활성 탭/URL 매칭 attach가 동작하며, 복수 매칭 시 후보 목록을 반환한다. (R4, R5)
+  - Requirements: R4, R5
+  - Evidence: 1
+  - Artifacts: 0
+- [x] AC6 (acceptance_criterion) - met: 하니스에서 브라우저 미실행 상태로 live 명령을 실행하면 브라우저가 자동 실행되고 재접속 후 명령이 완료된다. 대기 초과 시 안내 에러를 낸다. (R6)
+  - Requirements: R6
+  - Evidence: 1
+  - Artifacts: 0
+- [x] AC7 (acceptance_criterion) - met: live `download`가 파일을 다운로드 폴더에 저장하고 응답에 실제 경로를 명시한다. (R7)
+  - Requirements: R7
+  - Evidence: 1
+  - Artifacts: 0
+- [x] AC8 (acceptance_criterion) - met: attach한 기존 탭에 `close`를 호출하면 탭이 살아있는 채 detach만 되고, agent가 만든 탭은 실제로 닫힌다. `kill live` 후에도 브라우저 프로세스가 살아있다. (R5)
+  - Requirements: R5
+  - Evidence: 1
+  - Artifacts: 0
+- [x] AC9 (acceptance_criterion) - met: 매트릭스의 `unsupported` 명령(show, launch --headless, chrome:// attach)이 사유를 포함한 `live unsupported` 에러를 반환한다. (R7)
+  - Requirements: R7
+  - Evidence: 1
+  - Artifacts: 0
+- [x] AC10 (acceptance_criterion) - met: `node benchmarks/chromux-doc-check.mjs`가 live 모드 needles를 포함해 통과하고, help/README/install.md/skills가 같은 스토리를 말한다. (R9)
+  - Requirements: R9
+  - Evidence: 1
+  - Artifacts: 0
+- [x] AC11 (acceptance_criterion) - met: 실사용자 Chrome에서 라이브 스모크(페어링 → 새 탭 open → 활성 탭 attach → snapshot/click → kill switch)가 성공한다. (R1-R8)
+  - Requirements: R1, R8
+  - Evidence: 2
+  - Artifacts: 0
+- [x] V1 (verification) - pass: `node chromux.mjs help && node benchmarks/chromux-doc-check.mjs && npm pack --dry-run && ./test.sh`
+  - Covers: R: R9; AC: AC10; T: T9, T10
+  - Tool: verify-run
+  - Required For Done: yes
+  - Evidence: 2
+  - Artifacts: 1
+- [x] V2 (verification) - pass: `./test-live.sh --suite parity` (T8이 구축하는 live 하니스 스크립트)
+  - Covers: R: R1, R2, R3, R7; AC: AC1, AC2, AC7, AC9; T: T8
+  - Tool: verify-run
+  - Required For Done: yes
+  - Evidence: 8
+  - Artifacts: 4
+- [x] V3 (verification) - pass: `./test-live.sh --suite safety` (동일 하니스의 안전/복구 스위트)
+  - Covers: R: R5, R6, R8; AC: AC3, AC4, AC5, AC6, AC8
+  - Tool: verify-run
+  - Required For Done: yes
+  - Evidence: 4
+  - Artifacts: 2
+- [x] V4 (verification) - pass: `CHROMUX_PROFILE=live node chromux.mjs ...`로 페어링→open→탭 목록/attach→snapshot/click→screenshot→kill switch 순서의 스모크 실행
+  - Covers: R: R1, R2, R3, R4, R5, R6, R7, R8; AC: AC11
+  - Tool: verify-run
+  - Required For Done: yes
+  - Evidence: 4
+  - Artifacts: 2
+- [x] REQ_FIDELITY_REVIEW (requirements_fidelity_review) - pass: Requirements fidelity review
+  - Evidence: 1
+  - Artifacts: 1
+- [x] REVIEW (final_review) - pass: Adversarial final review
+  - Required For Done: yes
+  - Evidence: 1
+  - Artifacts: 1
+- [x] FINALIZE (receipt) - complete: Final receipt
+  - Evidence: 1
+  - Artifacts: 1
+
+## Edges
+
+- VP0 -> EP0 (unblocks): execution planning starts after verification planning
+- EP0 -> N1 (unblocks): execution node comes from the execution plan
+- T1 -> N1 (decomposes_to): PRD task is executed through this implementation node
+- N1 -> AC1 (satisfies): execution node covers this acceptance criterion
+- N1 -> AC11 (satisfies): execution node covers this acceptance criterion
+- N1 -> V2 (verified_by): execution node is proven by this verification item
+- N1 -> V4 (verified_by): execution node is proven by this verification item
+- EP0 -> N2 (unblocks): execution node comes from the execution plan
+- T2 -> N2 (decomposes_to): PRD task is executed through this implementation node
+- N2 -> AC2 (satisfies): execution node covers this acceptance criterion
+- N2 -> V2 (verified_by): execution node is proven by this verification item
+- N2 -> V4 (verified_by): execution node is proven by this verification item
+- EP0 -> N3 (unblocks): execution node comes from the execution plan
+- T3 -> N3 (decomposes_to): PRD task is executed through this implementation node
+- N3 -> AC3 (satisfies): execution node covers this acceptance criterion
+- N3 -> AC4 (satisfies): execution node covers this acceptance criterion
+- N3 -> V2 (verified_by): execution node is proven by this verification item
+- N3 -> V3 (verified_by): execution node is proven by this verification item
+- N3 -> V4 (verified_by): execution node is proven by this verification item
+- EP0 -> N4 (unblocks): execution node comes from the execution plan
+- T4 -> N4 (decomposes_to): PRD task is executed through this implementation node
+- N4 -> AC2 (satisfies): execution node covers this acceptance criterion
+- N4 -> AC5 (satisfies): execution node covers this acceptance criterion
+- N4 -> V2 (verified_by): execution node is proven by this verification item
+- N4 -> V3 (verified_by): execution node is proven by this verification item
+- N4 -> V4 (verified_by): execution node is proven by this verification item
+- EP0 -> N5 (unblocks): execution node comes from the execution plan
+- T5 -> N5 (decomposes_to): PRD task is executed through this implementation node
+- N5 -> AC5 (satisfies): execution node covers this acceptance criterion
+- N5 -> AC6 (satisfies): execution node covers this acceptance criterion
+- N5 -> AC8 (satisfies): execution node covers this acceptance criterion
+- N5 -> V3 (verified_by): execution node is proven by this verification item
+- N5 -> V4 (verified_by): execution node is proven by this verification item
+- EP0 -> N6 (unblocks): execution node comes from the execution plan
+- T6 -> N6 (decomposes_to): PRD task is executed through this implementation node
+- N6 -> AC1 (satisfies): execution node covers this acceptance criterion
+- N6 -> AC7 (satisfies): execution node covers this acceptance criterion
+- N6 -> AC9 (satisfies): execution node covers this acceptance criterion
+- N6 -> V2 (verified_by): execution node is proven by this verification item
+- N6 -> V4 (verified_by): execution node is proven by this verification item
+- EP0 -> N7 (unblocks): execution node comes from the execution plan
+- T7 -> N7 (decomposes_to): PRD task is executed through this implementation node
+- N7 -> AC3 (satisfies): execution node covers this acceptance criterion
+- N7 -> AC4 (satisfies): execution node covers this acceptance criterion
+- N7 -> AC11 (satisfies): execution node covers this acceptance criterion
+- N7 -> V3 (verified_by): execution node is proven by this verification item
+- N7 -> V4 (verified_by): execution node is proven by this verification item
+- EP0 -> N8 (unblocks): execution node comes from the execution plan
+- T8 -> N8 (decomposes_to): PRD task is executed through this implementation node
+- N8 -> V2 (verified_by): execution node is proven by this verification item
+- EP0 -> N9 (unblocks): execution node comes from the execution plan
+- T9 -> N9 (decomposes_to): PRD task is executed through this implementation node
+- N9 -> AC10 (satisfies): execution node covers this acceptance criterion
+- N9 -> V1 (verified_by): execution node is proven by this verification item
+- EP0 -> N10 (unblocks): execution node comes from the execution plan
+- T10 -> N10 (decomposes_to): PRD task is executed through this implementation node
+- N10 -> AC10 (satisfies): execution node covers this acceptance criterion
+- N10 -> V1 (verified_by): execution node is proven by this verification item
+- VP0 -> V1 (plans): verification check comes from the verification plan
+- T9 -> V1 (verified_by): verification covers this task
+- T10 -> V1 (verified_by): verification covers this task
+- AC10 -> V1 (verified_by): verification covers this acceptance criterion
+- VP0 -> V2 (plans): verification check comes from the verification plan
+- T8 -> V2 (verified_by): verification covers this task
+- AC1 -> V2 (verified_by): verification covers this acceptance criterion
+- AC2 -> V2 (verified_by): verification covers this acceptance criterion
+- AC7 -> V2 (verified_by): verification covers this acceptance criterion
+- AC9 -> V2 (verified_by): verification covers this acceptance criterion
+- T1 -> V2 (verified_by): verification covers R1
+- AC11 -> V2 (verified_by): verification covers R1
+- T2 -> V2 (verified_by): verification covers R2
+- T3 -> V2 (verified_by): verification covers R3
+- AC3 -> V2 (verified_by): verification covers R3
+- AC4 -> V2 (verified_by): verification covers R3
+- T6 -> V2 (verified_by): verification covers R7
+- VP0 -> V3 (plans): verification check comes from the verification plan
+- AC3 -> V3 (verified_by): verification covers this acceptance criterion
+- AC4 -> V3 (verified_by): verification covers this acceptance criterion
+- AC5 -> V3 (verified_by): verification covers this acceptance criterion
+- AC6 -> V3 (verified_by): verification covers this acceptance criterion
+- AC8 -> V3 (verified_by): verification covers this acceptance criterion
+- T5 -> V3 (verified_by): verification covers R5
+- T7 -> V3 (verified_by): verification covers R8
+- AC11 -> V3 (verified_by): verification covers R8
+- VP0 -> V4 (plans): verification check comes from the verification plan
+- AC11 -> V4 (verified_by): verification covers this acceptance criterion
+- T1 -> V4 (verified_by): verification covers R1
+- AC1 -> V4 (verified_by): verification covers R1
+- T2 -> V4 (verified_by): verification covers R2
+- AC2 -> V4 (verified_by): verification covers R2
+- T3 -> V4 (verified_by): verification covers R3
+- AC3 -> V4 (verified_by): verification covers R3
+- AC4 -> V4 (verified_by): verification covers R3
+- T4 -> V4 (verified_by): verification covers R4
+- AC5 -> V4 (verified_by): verification covers R4
+- T5 -> V4 (verified_by): verification covers R5
+- AC8 -> V4 (verified_by): verification covers R5
+- AC6 -> V4 (verified_by): verification covers R6
+- T6 -> V4 (verified_by): verification covers R7
+- AC7 -> V4 (verified_by): verification covers R7
+- AC9 -> V4 (verified_by): verification covers R7
+- T7 -> V4 (verified_by): verification covers R8
+- T1 -> REQ_FIDELITY_REVIEW (requirements_review_input): requirements reviewer must audit this item against original user intent and PRD decisions
+- T1 -> REVIEW (review_input): final reviewer must audit this item and its evidence
+- T2 -> REQ_FIDELITY_REVIEW (requirements_review_input): requirements reviewer must audit this item against original user intent and PRD decisions
+- T2 -> REVIEW (review_input): final reviewer must audit this item and its evidence
+- T3 -> REQ_FIDELITY_REVIEW (requirements_review_input): requirements reviewer must audit this item against original user intent and PRD decisions
+- T3 -> REVIEW (review_input): final reviewer must audit this item and its evidence
+- T4 -> REQ_FIDELITY_REVIEW (requirements_review_input): requirements reviewer must audit this item against original user intent and PRD decisions
+- T4 -> REVIEW (review_input): final reviewer must audit this item and its evidence
+- T5 -> REQ_FIDELITY_REVIEW (requirements_review_input): requirements reviewer must audit this item against original user intent and PRD decisions
+- T5 -> REVIEW (review_input): final reviewer must audit this item and its evidence
+- T6 -> REQ_FIDELITY_REVIEW (requirements_review_input): requirements reviewer must audit this item against original user intent and PRD decisions
+- T6 -> REVIEW (review_input): final reviewer must audit this item and its evidence
+- T7 -> REQ_FIDELITY_REVIEW (requirements_review_input): requirements reviewer must audit this item against original user intent and PRD decisions
+- T7 -> REVIEW (review_input): final reviewer must audit this item and its evidence
+- T8 -> REQ_FIDELITY_REVIEW (requirements_review_input): requirements reviewer must audit this item against original user intent and PRD decisions
+- T8 -> REVIEW (review_input): final reviewer must audit this item and its evidence
+- T9 -> REQ_FIDELITY_REVIEW (requirements_review_input): requirements reviewer must audit this item against original user intent and PRD decisions
+- T9 -> REVIEW (review_input): final reviewer must audit this item and its evidence
+- T10 -> REQ_FIDELITY_REVIEW (requirements_review_input): requirements reviewer must audit this item against original user intent and PRD decisions
+- T10 -> REVIEW (review_input): final reviewer must audit this item and its evidence
+- N1 -> REQ_FIDELITY_REVIEW (requirements_review_input): requirements reviewer must audit this item against original user intent and PRD decisions
+- N1 -> REVIEW (review_input): final reviewer must audit this item and its evidence
+- N2 -> REQ_FIDELITY_REVIEW (requirements_review_input): requirements reviewer must audit this item against original user intent and PRD decisions
+- N2 -> REVIEW (review_input): final reviewer must audit this item and its evidence
+- N3 -> REQ_FIDELITY_REVIEW (requirements_review_input): requirements reviewer must audit this item against original user intent and PRD decisions
+- N3 -> REVIEW (review_input): final reviewer must audit this item and its evidence
+- N4 -> REQ_FIDELITY_REVIEW (requirements_review_input): requirements reviewer must audit this item against original user intent and PRD decisions
+- N4 -> REVIEW (review_input): final reviewer must audit this item and its evidence
+- N5 -> REQ_FIDELITY_REVIEW (requirements_review_input): requirements reviewer must audit this item against original user intent and PRD decisions
+- N5 -> REVIEW (review_input): final reviewer must audit this item and its evidence
+- N6 -> REQ_FIDELITY_REVIEW (requirements_review_input): requirements reviewer must audit this item against original user intent and PRD decisions
+- N6 -> REVIEW (review_input): final reviewer must audit this item and its evidence
+- N7 -> REQ_FIDELITY_REVIEW (requirements_review_input): requirements reviewer must audit this item against original user intent and PRD decisions
+- N7 -> REVIEW (review_input): final reviewer must audit this item and its evidence
+- N8 -> REQ_FIDELITY_REVIEW (requirements_review_input): requirements reviewer must audit this item against original user intent and PRD decisions
+- N8 -> REVIEW (review_input): final reviewer must audit this item and its evidence
+- N9 -> REQ_FIDELITY_REVIEW (requirements_review_input): requirements reviewer must audit this item against original user intent and PRD decisions
+- N9 -> REVIEW (review_input): final reviewer must audit this item and its evidence
+- N10 -> REQ_FIDELITY_REVIEW (requirements_review_input): requirements reviewer must audit this item against original user intent and PRD decisions
+- N10 -> REVIEW (review_input): final reviewer must audit this item and its evidence
+- AC1 -> REQ_FIDELITY_REVIEW (requirements_review_input): requirements reviewer must audit this item against original user intent and PRD decisions
+- AC1 -> REVIEW (review_input): final reviewer must audit this item and its evidence
+- AC2 -> REQ_FIDELITY_REVIEW (requirements_review_input): requirements reviewer must audit this item against original user intent and PRD decisions
+- AC2 -> REVIEW (review_input): final reviewer must audit this item and its evidence
+- AC3 -> REQ_FIDELITY_REVIEW (requirements_review_input): requirements reviewer must audit this item against original user intent and PRD decisions
+- AC3 -> REVIEW (review_input): final reviewer must audit this item and its evidence
+- AC4 -> REQ_FIDELITY_REVIEW (requirements_review_input): requirements reviewer must audit this item against original user intent and PRD decisions
+- AC4 -> REVIEW (review_input): final reviewer must audit this item and its evidence
+- AC5 -> REQ_FIDELITY_REVIEW (requirements_review_input): requirements reviewer must audit this item against original user intent and PRD decisions
+- AC5 -> REVIEW (review_input): final reviewer must audit this item and its evidence
+- AC6 -> REQ_FIDELITY_REVIEW (requirements_review_input): requirements reviewer must audit this item against original user intent and PRD decisions
+- AC6 -> REVIEW (review_input): final reviewer must audit this item and its evidence
+- AC7 -> REQ_FIDELITY_REVIEW (requirements_review_input): requirements reviewer must audit this item against original user intent and PRD decisions
+- AC7 -> REVIEW (review_input): final reviewer must audit this item and its evidence
+- AC8 -> REQ_FIDELITY_REVIEW (requirements_review_input): requirements reviewer must audit this item against original user intent and PRD decisions
+- AC8 -> REVIEW (review_input): final reviewer must audit this item and its evidence
+- AC9 -> REQ_FIDELITY_REVIEW (requirements_review_input): requirements reviewer must audit this item against original user intent and PRD decisions
+- AC9 -> REVIEW (review_input): final reviewer must audit this item and its evidence
+- AC10 -> REQ_FIDELITY_REVIEW (requirements_review_input): requirements reviewer must audit this item against original user intent and PRD decisions
+- AC10 -> REVIEW (review_input): final reviewer must audit this item and its evidence
+- AC11 -> REQ_FIDELITY_REVIEW (requirements_review_input): requirements reviewer must audit this item against original user intent and PRD decisions
+- AC11 -> REVIEW (review_input): final reviewer must audit this item and its evidence
+- V1 -> REQ_FIDELITY_REVIEW (requirements_review_input): requirements reviewer must audit this item against original user intent and PRD decisions
+- V1 -> REVIEW (review_input): final reviewer must audit this item and its evidence
+- V2 -> REQ_FIDELITY_REVIEW (requirements_review_input): requirements reviewer must audit this item against original user intent and PRD decisions
+- V2 -> REVIEW (review_input): final reviewer must audit this item and its evidence
+- V3 -> REQ_FIDELITY_REVIEW (requirements_review_input): requirements reviewer must audit this item against original user intent and PRD decisions
+- V3 -> REVIEW (review_input): final reviewer must audit this item and its evidence
+- V4 -> REQ_FIDELITY_REVIEW (requirements_review_input): requirements reviewer must audit this item against original user intent and PRD decisions
+- V4 -> REVIEW (review_input): final reviewer must audit this item and its evidence
+- REQ_FIDELITY_REVIEW -> REVIEW (review_input): final reviewer must audit the requirements fidelity verdict
+- REVIEW -> FINALIZE (gates): receipt can be written only after passing final review

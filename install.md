@@ -377,6 +377,40 @@ containing `https://example.com/`, the `CHROMUX_TASK=smoke` snapshot creates a
 local activity event with that Task label, `/tmp/chromux-smoke-receipt.json`
 exists without raw inline code or secrets, and the profile is killed at the end.
 
+## Live Mode Setup (optional: your real Chrome)
+
+Isolated profiles are the default. To let an agent work in your own logged-in
+Chrome, install the bundled unpacked extension once and pair it:
+
+1. In your real Chrome, open `chrome://extensions`, enable "Developer mode",
+   click "Load unpacked", and select the `extension/` folder in the repo
+   checkout (next to `chromux.mjs`).
+2. Run `chromux pair`. It starts the live bridge and opens a short (60s)
+   auto-pairing window; the extension fetches the token over loopback and
+   connects on its own. The popup should show "Connected" within a few seconds
+   — no token to paste.
+
+```bash
+chromux pair
+```
+
+If auto-pairing cannot start the bridge, `chromux pair` prints the token and you
+can paste it into the popup's "Pair with chromux" box as a fallback. After
+pairing, drive live mode with the reserved `live` profile:
+
+```bash
+chromux tabs                                   # list your Chrome's tabs
+CHROMUX_PROFILE=live chromux open work https://example.com
+CHROMUX_PROFILE=live chromux open work --tab active   # attach the tab you're on
+CHROMUX_PROFILE=live chromux kill live         # detach all; your Chrome stays open
+```
+
+The pairing token lives in `~/.chromux/live.json` (mode `0600`) and authorizes
+local control of your browser — keep it private and rotate it with
+`chromux pair --new-token`. Live mode uses `chrome.debugger`, so `show`,
+`launch --headless`, and `chrome://` pages are unsupported. Distribution is the
+unpacked extension in this repo; there is no Web Store listing.
+
 ## Builtin Helper Material
 
 Repo-local helper examples live under `snippets/_builtin/`. They are documentation

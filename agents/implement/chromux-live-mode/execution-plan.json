@@ -1,0 +1,742 @@
+{
+  "schema": "hoyeon.prd-implement.execution-plan.v1",
+  "status": "ready",
+  "generatedAt": "2026-07-16T10:28:53.613Z",
+  "prdPath": "agents/prd/chromux-live-mode/prd.md",
+  "statePath": "agents/implement/chromux-live-mode/state.json",
+  "nodes": [
+    {
+      "id": "N1",
+      "kind": "implementation",
+      "sourceTask": "T1",
+      "title": "transport 추상화 계층 도입과 direct transport 회귀 무결성 확보. Covers R1.",
+      "dependsOn": [],
+      "writeScope": [],
+      "covers": {
+        "requirements": [
+          "R1"
+        ],
+        "acceptanceCriteria": [
+          "AC1",
+          "AC11"
+        ],
+        "verification": [
+          "V2",
+          "V4"
+        ]
+      },
+      "parallelSafe": false,
+      "risk": "medium",
+      "owner": null,
+      "status": "complete",
+      "evidence": [
+        {
+          "ts": "2026-07-16T12:06:56.370Z",
+          "text": "live bridge (CDP facade + zero-dep WS server + pairing), MV3 extension, CLI live surface (pair/tabs/open --tab/cold-start/kill/show gating), safety semantics (close=detach, kill≠process-kill), download adapter, disconnect handling, and Chrome-for-Testing harness. Verified: ./test-live.sh parity 7/7 + safety 5/5."
+        }
+      ],
+      "artifacts": []
+    },
+    {
+      "id": "N2",
+      "kind": "implementation",
+      "sourceTask": "T2",
+      "title": "zero-dependency localhost WS 서버 + 페어링 토큰 발급/검증/재발급. Covers R2.",
+      "dependsOn": [],
+      "writeScope": [],
+      "covers": {
+        "requirements": [
+          "R2"
+        ],
+        "acceptanceCriteria": [
+          "AC2"
+        ],
+        "verification": [
+          "V2",
+          "V4"
+        ]
+      },
+      "parallelSafe": false,
+      "risk": "medium",
+      "owner": null,
+      "status": "complete",
+      "evidence": [
+        {
+          "ts": "2026-07-16T12:06:56.371Z",
+          "text": "live bridge (CDP facade + zero-dep WS server + pairing), MV3 extension, CLI live surface (pair/tabs/open --tab/cold-start/kill/show gating), safety semantics (close=detach, kill≠process-kill), download adapter, disconnect handling, and Chrome-for-Testing harness. Verified: ./test-live.sh parity 7/7 + safety 5/5."
+        }
+      ],
+      "artifacts": []
+    },
+    {
+      "id": "N3",
+      "kind": "implementation",
+      "sourceTask": "T3",
+      "title": "MV3 extension 구현(attach/relay, 탭 목록, keep-alive, 자동 재접속, 팝업/kill switch). Covers R3.",
+      "dependsOn": [],
+      "writeScope": [],
+      "covers": {
+        "requirements": [
+          "R3"
+        ],
+        "acceptanceCriteria": [
+          "AC3",
+          "AC4"
+        ],
+        "verification": [
+          "V2",
+          "V3",
+          "V4"
+        ]
+      },
+      "parallelSafe": false,
+      "risk": "medium",
+      "owner": null,
+      "status": "complete",
+      "evidence": [
+        {
+          "ts": "2026-07-16T12:06:56.371Z",
+          "text": "live bridge (CDP facade + zero-dep WS server + pairing), MV3 extension, CLI live surface (pair/tabs/open --tab/cold-start/kill/show gating), safety semantics (close=detach, kill≠process-kill), download adapter, disconnect handling, and Chrome-for-Testing harness. Verified: ./test-live.sh parity 7/7 + safety 5/5."
+        }
+      ],
+      "artifacts": []
+    },
+    {
+      "id": "N4",
+      "kind": "implementation",
+      "sourceTask": "T4",
+      "title": "CLI live 예약 프로필, 설치/페어링 자동화 명령, 탭 목록/attach, 마이그레이션·미페어링 안내. Covers R4.",
+      "dependsOn": [],
+      "writeScope": [],
+      "covers": {
+        "requirements": [
+          "R4"
+        ],
+        "acceptanceCriteria": [
+          "AC2",
+          "AC5"
+        ],
+        "verification": [
+          "V2",
+          "V3",
+          "V4"
+        ]
+      },
+      "parallelSafe": false,
+      "risk": "medium",
+      "owner": null,
+      "status": "complete",
+      "evidence": [
+        {
+          "ts": "2026-07-16T12:06:56.371Z",
+          "text": "live bridge (CDP facade + zero-dep WS server + pairing), MV3 extension, CLI live surface (pair/tabs/open --tab/cold-start/kill/show gating), safety semantics (close=detach, kill≠process-kill), download adapter, disconnect handling, and Chrome-for-Testing harness. Verified: ./test-live.sh parity 7/7 + safety 5/5."
+        }
+      ],
+      "artifacts": []
+    },
+    {
+      "id": "N5",
+      "kind": "implementation",
+      "sourceTask": "T5",
+      "title": "탭/프로세스 안전 시맨틱(close/kill/기본 새 탭)과 콜드 스타트 자동 실행. Covers R5, R6.",
+      "dependsOn": [],
+      "writeScope": [],
+      "covers": {
+        "requirements": [
+          "R5",
+          "R6"
+        ],
+        "acceptanceCriteria": [
+          "AC5",
+          "AC6",
+          "AC8"
+        ],
+        "verification": [
+          "V3",
+          "V4"
+        ]
+      },
+      "parallelSafe": false,
+      "risk": "medium",
+      "owner": null,
+      "status": "complete",
+      "evidence": [
+        {
+          "ts": "2026-07-16T12:06:56.371Z",
+          "text": "live bridge (CDP facade + zero-dep WS server + pairing), MV3 extension, CLI live surface (pair/tabs/open --tab/cold-start/kill/show gating), safety semantics (close=detach, kill≠process-kill), download adapter, disconnect handling, and Chrome-for-Testing harness. Verified: ./test-live.sh parity 7/7 + safety 5/5."
+        }
+      ],
+      "artifacts": []
+    },
+    {
+      "id": "N6",
+      "kind": "implementation",
+      "sourceTask": "T6",
+      "title": "CDP 시맨틱 어댑터(Target/Browser 도메인 매핑, chrome.downloads 어댑터)와 매트릭스 전 항목 구현 + `verify` 항목(--oopif) 판정 확정. Covers R7.",
+      "dependsOn": [],
+      "writeScope": [],
+      "covers": {
+        "requirements": [
+          "R7"
+        ],
+        "acceptanceCriteria": [
+          "AC1",
+          "AC7",
+          "AC9"
+        ],
+        "verification": [
+          "V2",
+          "V4"
+        ]
+      },
+      "parallelSafe": false,
+      "risk": "medium",
+      "owner": null,
+      "status": "complete",
+      "evidence": [
+        {
+          "ts": "2026-07-16T12:06:56.371Z",
+          "text": "live bridge (CDP facade + zero-dep WS server + pairing), MV3 extension, CLI live surface (pair/tabs/open --tab/cold-start/kill/show gating), safety semantics (close=detach, kill≠process-kill), download adapter, disconnect handling, and Chrome-for-Testing harness. Verified: ./test-live.sh parity 7/7 + safety 5/5."
+        }
+      ],
+      "artifacts": []
+    },
+    {
+      "id": "N7",
+      "kind": "implementation",
+      "sourceTask": "T7",
+      "title": "끊김/차단 처리와 repair hint 통합. Covers R8.",
+      "dependsOn": [],
+      "writeScope": [],
+      "covers": {
+        "requirements": [
+          "R8"
+        ],
+        "acceptanceCriteria": [
+          "AC3",
+          "AC4",
+          "AC11"
+        ],
+        "verification": [
+          "V3",
+          "V4"
+        ]
+      },
+      "parallelSafe": false,
+      "risk": "medium",
+      "owner": null,
+      "status": "complete",
+      "evidence": [
+        {
+          "ts": "2026-07-16T12:06:56.371Z",
+          "text": "live bridge (CDP facade + zero-dep WS server + pairing), MV3 extension, CLI live surface (pair/tabs/open --tab/cold-start/kill/show gating), safety semantics (close=detach, kill≠process-kill), download adapter, disconnect handling, and Chrome-for-Testing harness. Verified: ./test-live.sh parity 7/7 + safety 5/5."
+        }
+      ],
+      "artifacts": []
+    },
+    {
+      "id": "N8",
+      "kind": "implementation",
+      "sourceTask": "T8",
+      "title": "live 검증 하니스 구축(Chrome for Testing 조달 방식 확정 포함)과 live 스위트 작성. Covers R10.",
+      "dependsOn": [],
+      "writeScope": [],
+      "covers": {
+        "requirements": [
+          "R10"
+        ],
+        "acceptanceCriteria": [],
+        "verification": [
+          "V2"
+        ]
+      },
+      "parallelSafe": false,
+      "risk": "medium",
+      "owner": null,
+      "status": "complete",
+      "evidence": [
+        {
+          "ts": "2026-07-16T12:06:56.371Z",
+          "text": "live bridge (CDP facade + zero-dep WS server + pairing), MV3 extension, CLI live surface (pair/tabs/open --tab/cold-start/kill/show gating), safety semantics (close=detach, kill≠process-kill), download adapter, disconnect handling, and Chrome-for-Testing harness. Verified: ./test-live.sh parity 7/7 + safety 5/5."
+        }
+      ],
+      "artifacts": []
+    },
+    {
+      "id": "N9",
+      "kind": "implementation",
+      "sourceTask": "T9",
+      "title": "문서/스킬/doc-check needles/토큰 벤치마크 동기화. Covers R9.",
+      "dependsOn": [],
+      "writeScope": [],
+      "covers": {
+        "requirements": [
+          "R9"
+        ],
+        "acceptanceCriteria": [
+          "AC10"
+        ],
+        "verification": [
+          "V1"
+        ]
+      },
+      "parallelSafe": false,
+      "risk": "medium",
+      "owner": null,
+      "status": "complete",
+      "evidence": [
+        {
+          "ts": "2026-07-16T12:10:52.588Z",
+          "text": "Live mode documented in help, README (Live mode section), install.md (Live Mode Setup), skills/chromux and skills/chromux-work. doc-check needles added for live surface. package.json bumped to 0.20.0, extension/ added to files allowlist; npm pack --dry-run includes extension/ (7 files) and excludes harness/agents."
+        }
+      ],
+      "artifacts": []
+    },
+    {
+      "id": "N10",
+      "kind": "implementation",
+      "sourceTask": "T10",
+      "title": "릴리즈 위생: package.json 0.20.0 minor 범프, npm pack allowlist에 extension 포함 확인. Covers R9. (release hygiene)",
+      "dependsOn": [],
+      "writeScope": [],
+      "covers": {
+        "requirements": [
+          "R9"
+        ],
+        "acceptanceCriteria": [
+          "AC10"
+        ],
+        "verification": [
+          "V1"
+        ]
+      },
+      "parallelSafe": false,
+      "risk": "medium",
+      "owner": null,
+      "status": "complete",
+      "evidence": [
+        {
+          "ts": "2026-07-16T12:10:52.588Z",
+          "text": "Live mode documented in help, README (Live mode section), install.md (Live Mode Setup), skills/chromux and skills/chromux-work. doc-check needles added for live surface. package.json bumped to 0.20.0, extension/ added to files allowlist; npm pack --dry-run includes extension/ (7 files) and excludes harness/agents."
+        }
+      ],
+      "artifacts": []
+    }
+  ],
+  "rollups": {
+    "tasks": {
+      "T1": {
+        "nodes": [
+          "N1"
+        ],
+        "acceptanceCriteria": [
+          "AC1",
+          "AC11"
+        ],
+        "verification": [
+          "V2",
+          "V4"
+        ]
+      },
+      "T2": {
+        "nodes": [
+          "N2"
+        ],
+        "acceptanceCriteria": [
+          "AC2"
+        ],
+        "verification": [
+          "V2",
+          "V4"
+        ]
+      },
+      "T3": {
+        "nodes": [
+          "N3"
+        ],
+        "acceptanceCriteria": [
+          "AC3",
+          "AC4"
+        ],
+        "verification": [
+          "V2",
+          "V3",
+          "V4"
+        ]
+      },
+      "T4": {
+        "nodes": [
+          "N4"
+        ],
+        "acceptanceCriteria": [
+          "AC2",
+          "AC5"
+        ],
+        "verification": [
+          "V2",
+          "V3",
+          "V4"
+        ]
+      },
+      "T5": {
+        "nodes": [
+          "N5"
+        ],
+        "acceptanceCriteria": [
+          "AC5",
+          "AC6",
+          "AC8"
+        ],
+        "verification": [
+          "V3",
+          "V4"
+        ]
+      },
+      "T6": {
+        "nodes": [
+          "N6"
+        ],
+        "acceptanceCriteria": [
+          "AC1",
+          "AC7",
+          "AC9"
+        ],
+        "verification": [
+          "V2",
+          "V4"
+        ]
+      },
+      "T7": {
+        "nodes": [
+          "N7"
+        ],
+        "acceptanceCriteria": [
+          "AC3",
+          "AC4",
+          "AC11"
+        ],
+        "verification": [
+          "V3",
+          "V4"
+        ]
+      },
+      "T8": {
+        "nodes": [
+          "N8"
+        ],
+        "acceptanceCriteria": [],
+        "verification": [
+          "V2"
+        ]
+      },
+      "T9": {
+        "nodes": [
+          "N9"
+        ],
+        "acceptanceCriteria": [
+          "AC10"
+        ],
+        "verification": [
+          "V1"
+        ]
+      },
+      "T10": {
+        "nodes": [
+          "N10"
+        ],
+        "acceptanceCriteria": [
+          "AC10"
+        ],
+        "verification": [
+          "V1"
+        ]
+      }
+    }
+  },
+  "traceMatrix": [
+    {
+      "taskId": "T1",
+      "nodeIds": [
+        "N1"
+      ],
+      "requirements": [
+        "R1"
+      ],
+      "acceptanceCriteria": [
+        "AC1",
+        "AC11"
+      ],
+      "verification": [
+        "V2",
+        "V4"
+      ],
+      "requiredVerification": [
+        "V2",
+        "V4"
+      ],
+      "optionalVerification": [],
+      "nodeStatuses": [
+        {
+          "id": "N1",
+          "status": "complete"
+        }
+      ]
+    },
+    {
+      "taskId": "T2",
+      "nodeIds": [
+        "N2"
+      ],
+      "requirements": [
+        "R2"
+      ],
+      "acceptanceCriteria": [
+        "AC2"
+      ],
+      "verification": [
+        "V2",
+        "V4"
+      ],
+      "requiredVerification": [
+        "V2",
+        "V4"
+      ],
+      "optionalVerification": [],
+      "nodeStatuses": [
+        {
+          "id": "N2",
+          "status": "complete"
+        }
+      ]
+    },
+    {
+      "taskId": "T3",
+      "nodeIds": [
+        "N3"
+      ],
+      "requirements": [
+        "R3"
+      ],
+      "acceptanceCriteria": [
+        "AC3",
+        "AC4"
+      ],
+      "verification": [
+        "V2",
+        "V3",
+        "V4"
+      ],
+      "requiredVerification": [
+        "V2",
+        "V3",
+        "V4"
+      ],
+      "optionalVerification": [],
+      "nodeStatuses": [
+        {
+          "id": "N3",
+          "status": "complete"
+        }
+      ]
+    },
+    {
+      "taskId": "T4",
+      "nodeIds": [
+        "N4"
+      ],
+      "requirements": [
+        "R4"
+      ],
+      "acceptanceCriteria": [
+        "AC2",
+        "AC5"
+      ],
+      "verification": [
+        "V2",
+        "V3",
+        "V4"
+      ],
+      "requiredVerification": [
+        "V2",
+        "V3",
+        "V4"
+      ],
+      "optionalVerification": [],
+      "nodeStatuses": [
+        {
+          "id": "N4",
+          "status": "complete"
+        }
+      ]
+    },
+    {
+      "taskId": "T5",
+      "nodeIds": [
+        "N5"
+      ],
+      "requirements": [
+        "R5",
+        "R6"
+      ],
+      "acceptanceCriteria": [
+        "AC5",
+        "AC6",
+        "AC8"
+      ],
+      "verification": [
+        "V3",
+        "V4"
+      ],
+      "requiredVerification": [
+        "V3",
+        "V4"
+      ],
+      "optionalVerification": [],
+      "nodeStatuses": [
+        {
+          "id": "N5",
+          "status": "complete"
+        }
+      ]
+    },
+    {
+      "taskId": "T6",
+      "nodeIds": [
+        "N6"
+      ],
+      "requirements": [
+        "R7"
+      ],
+      "acceptanceCriteria": [
+        "AC1",
+        "AC7",
+        "AC9"
+      ],
+      "verification": [
+        "V2",
+        "V4"
+      ],
+      "requiredVerification": [
+        "V2",
+        "V4"
+      ],
+      "optionalVerification": [],
+      "nodeStatuses": [
+        {
+          "id": "N6",
+          "status": "complete"
+        }
+      ]
+    },
+    {
+      "taskId": "T7",
+      "nodeIds": [
+        "N7"
+      ],
+      "requirements": [
+        "R8"
+      ],
+      "acceptanceCriteria": [
+        "AC3",
+        "AC4",
+        "AC11"
+      ],
+      "verification": [
+        "V3",
+        "V4"
+      ],
+      "requiredVerification": [
+        "V3",
+        "V4"
+      ],
+      "optionalVerification": [],
+      "nodeStatuses": [
+        {
+          "id": "N7",
+          "status": "complete"
+        }
+      ]
+    },
+    {
+      "taskId": "T8",
+      "nodeIds": [
+        "N8"
+      ],
+      "requirements": [
+        "R10"
+      ],
+      "acceptanceCriteria": [],
+      "verification": [
+        "V2"
+      ],
+      "requiredVerification": [
+        "V2"
+      ],
+      "optionalVerification": [],
+      "nodeStatuses": [
+        {
+          "id": "N8",
+          "status": "complete"
+        }
+      ]
+    },
+    {
+      "taskId": "T9",
+      "nodeIds": [
+        "N9"
+      ],
+      "requirements": [
+        "R9"
+      ],
+      "acceptanceCriteria": [
+        "AC10"
+      ],
+      "verification": [
+        "V1"
+      ],
+      "requiredVerification": [
+        "V1"
+      ],
+      "optionalVerification": [],
+      "nodeStatuses": [
+        {
+          "id": "N9",
+          "status": "complete"
+        }
+      ]
+    },
+    {
+      "taskId": "T10",
+      "nodeIds": [
+        "N10"
+      ],
+      "requirements": [
+        "R9"
+      ],
+      "acceptanceCriteria": [
+        "AC10"
+      ],
+      "verification": [
+        "V1"
+      ],
+      "requiredVerification": [
+        "V1"
+      ],
+      "optionalVerification": [],
+      "nodeStatuses": [
+        {
+          "id": "N10",
+          "status": "complete"
+        }
+      ]
+    }
+  ],
+  "gaps": [
+    {
+      "severity": "warning",
+      "code": "task_without_acceptance_mapping",
+      "item": "T8",
+      "message": "Task has no acceptance-criterion mapping"
+    }
+  ]
+}

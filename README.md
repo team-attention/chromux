@@ -267,6 +267,47 @@ profile isolation, but the Chrome child process is launched with the real macOS
 account home so Chrome can initialize its per-user framework services and expose
 the DevTools/CDP port reliably.
 
+## Live mode: your real Chrome
+
+There are two ways to reach a browser. Isolated profiles above are the
+"agent's browser" — the default. The reserved `live` profile is "your
+browser": a Chrome extension bridges your real, logged-in Chrome so an agent
+can work alongside you in the session you are already using. Pick `live` when
+the task needs your own login (SSO, 2FA, an already-open page); pick a profile
+for isolated or parallel work. The CLI is identical for both — only the profile
+changes.
+
+```bash
+# One-time setup: load the unpacked extension once at chrome://extensions
+# (Developer mode → Load unpacked → select extension/), then run:
+chromux pair
+# This starts the bridge and opens a short auto-pairing window; the extension
+# fetches the token over loopback and connects on its own — no token to paste.
+# (The popup also has a manual token box as a fallback.)
+
+# List your Chrome's tabs
+chromux tabs
+
+# Work in a new tab in your real Chrome (visible; a debugging bar shows while attached)
+CHROMUX_PROFILE=live chromux open work https://example.com
+
+# "Do this on the page I'm looking at" — attach the active tab (or by tab id / URL match)
+CHROMUX_PROFILE=live chromux open work --tab active
+
+# Stop the bridge (detaches every tab; your Chrome process stays open)
+CHROMUX_PROFILE=live chromux kill live
+```
+
+Live mode uses `chrome.debugger`, so it is a CDP subset with deliberate safety
+semantics: `close` on a tab you attached detaches it rather than closing your
+tab, `kill live` never terminates your Chrome, and `show`, `launch --headless`,
+and `chrome://` pages are unsupported (each returns a clear error). Pairing is a
+one-time token exchange stored at `~/.chromux/live.json` (mode `0600`); the
+token still locks every relay connection — `chromux pair` only automates its
+delivery through a short loopback window, so nothing is weakened. The extension
+popup shows the attached tabs and a kill switch. Distribution is the unpacked
+extension shipped in this repo — there is no Web Store listing.
+
 ## Commands
 
 chromux intentionally keeps the visible command surface small. When a new browser

@@ -1,0 +1,397 @@
+{
+  "schema": "hoyeon.prd-implement.verification-plan.v1",
+  "status": "ready",
+  "generatedAt": "2026-07-16T10:28:31.325Z",
+  "prdPath": "agents/prd/chromux-live-mode/prd.md",
+  "prdSha256": "8910cc17e66066a10962273e9dfbbcdde2e3d45b49dd0773d3e886314695da23",
+  "verificationContractHash": "21ebae111177722cd6d026e898726e6bc07104f0d6e67d8d358b3b59172d907e",
+  "statePath": "agents/implement/chromux-live-mode/state.json",
+  "environment": {
+    "packageManager": "npm",
+    "packageScripts": [],
+    "browserTool": "chromux",
+    "serverStrategy": "no dev server script detected",
+    "serviceStrategy": "use repo-local dev/test commands; ask if services are required",
+    "dbStrategy": "no DB surface detected"
+  },
+  "checks": [
+    {
+      "id": "VP1",
+      "verificationId": "V1",
+      "level": "General",
+      "source": "verification_matrix",
+      "category": "command",
+      "tool": "verify-run",
+      "command": "node chromux.mjs help && node benchmarks/chromux-doc-check.mjs && npm pack --dry-run && ./test.sh",
+      "target": null,
+      "covers": {
+        "requirements": [
+          "R9"
+        ],
+        "acceptanceCriteria": [
+          "AC10"
+        ],
+        "tasks": [
+          "T9",
+          "T10"
+        ]
+      },
+      "artifactKinds": [
+        "command-log"
+      ],
+      "passCriteria": "help/doc-check/pack allowlist(extension 포함)/direct transport 회귀가 모두 통과한다",
+      "requiredForDone": true,
+      "canBeBlocked": false,
+      "testMode": "build/static",
+      "testModeContract": {
+        "id": "TM1",
+        "mode": "build/static",
+        "normalizedMode": "build-static",
+        "requiredForDone": true,
+        "requiredForDoneRaw": "yes",
+        "canBeBlocked": false,
+        "covers": "help/doc-check/npm pack 등 리포 건강",
+        "humanDecision": "none"
+      },
+      "contract": {
+        "mode": "build/static",
+        "covers": "R9, AC10, T9, T10",
+        "method": "`node chromux.mjs help && node benchmarks/chromux-doc-check.mjs && npm pack --dry-run && ./test.sh`",
+        "artifact": "command-log",
+        "passCriteria": "help/doc-check/pack allowlist(extension 포함)/direct transport 회귀가 모두 통과한다",
+        "environment": "",
+        "requiredForDone": true,
+        "requiredForDoneRaw": "yes",
+        "canBeBlocked": false,
+        "canBeBlockedRaw": "no",
+        "safeProbe": "로컬 전용, 외부 부작용 없음",
+        "liveProof": "",
+        "sideEffect": "",
+        "sensitiveDataPolicy": "비밀정보 없음"
+      },
+      "contractHash": "1164adeceb566c932115ec6ebe19d73ce72b0212247c8eca1d9d28a99d079a16",
+      "status": "planned",
+      "notes": []
+    },
+    {
+      "id": "VP2",
+      "verificationId": "V2",
+      "level": "General",
+      "source": "verification_matrix",
+      "category": "automated",
+      "tool": "verify-run",
+      "command": "`./test-live.sh --suite parity` (T8이 구축하는 live 하니스 스크립트)",
+      "target": null,
+      "covers": {
+        "requirements": [
+          "R1",
+          "R2",
+          "R3",
+          "R7"
+        ],
+        "acceptanceCriteria": [
+          "AC1",
+          "AC2",
+          "AC7",
+          "AC9"
+        ],
+        "tasks": [
+          "T8"
+        ]
+      },
+      "artifactKinds": [
+        "command-log"
+      ],
+      "passCriteria": "패리티 스위트, 페어링 인증 거부, download 경로, unsupported 에러가 자동 검증된다. 보호하는 회귀: transport 교체로 인한 기존 명령 의미 변화와 인증 우회",
+      "requiredForDone": true,
+      "canBeBlocked": false,
+      "testMode": "automated behavior",
+      "testModeContract": {
+        "id": "TM2",
+        "mode": "automated behavior",
+        "normalizedMode": "automated-behavior",
+        "requiredForDone": true,
+        "requiredForDoneRaw": "yes",
+        "canBeBlocked": false,
+        "covers": "하니스 기반 live 파이프라인 전체 회귀",
+        "humanDecision": "none"
+      },
+      "contract": {
+        "mode": "automated behavior",
+        "covers": "R1-R3, R7, AC1-AC2, AC7, AC9",
+        "method": "`./test-live.sh --suite parity` (T8이 구축하는 live 하니스 스크립트)",
+        "artifact": "command-log",
+        "passCriteria": "패리티 스위트, 페어링 인증 거부, download 경로, unsupported 에러가 자동 검증된다. 보호하는 회귀: transport 교체로 인한 기존 명령 의미 변화와 인증 우회",
+        "environment": "",
+        "requiredForDone": true,
+        "requiredForDoneRaw": "yes",
+        "canBeBlocked": false,
+        "canBeBlockedRaw": "no",
+        "safeProbe": "테스트 전용 브라우저/프로필만 사용, 로컬 픽스처 우선",
+        "liveProof": "",
+        "sideEffect": "",
+        "sensitiveDataPolicy": "테스트 토큰만 사용, 로그에 토큰 리댁션"
+      },
+      "contractHash": "ed15ad6c0f53e7d31ba30e1351b4f8ee096f5aa10826fb8d61e4915125ff942c",
+      "status": "planned",
+      "notes": []
+    },
+    {
+      "id": "VP3",
+      "verificationId": "V3",
+      "level": "General",
+      "source": "verification_matrix",
+      "category": "automated",
+      "tool": "verify-run",
+      "command": "`./test-live.sh --suite safety` (동일 하니스의 안전/복구 스위트)",
+      "target": null,
+      "covers": {
+        "requirements": [
+          "R5",
+          "R6",
+          "R8"
+        ],
+        "acceptanceCriteria": [
+          "AC3",
+          "AC4",
+          "AC5",
+          "AC6",
+          "AC8"
+        ],
+        "tasks": []
+      },
+      "artifactKinds": [
+        "command-log"
+      ],
+      "passCriteria": "워커 강제 종료 재접속, kill switch 차단, 탭 목록/attach, close=detach, kill 후 프로세스 생존, 콜드 스타트가 자동 검증된다. 보호하는 회귀: 사용자 탭/프로세스를 파괴하는 안전 시맨틱 붕괴",
+      "requiredForDone": true,
+      "canBeBlocked": false,
+      "testMode": "automated behavior",
+      "testModeContract": {
+        "id": "TM2",
+        "mode": "automated behavior",
+        "normalizedMode": "automated-behavior",
+        "requiredForDone": true,
+        "requiredForDoneRaw": "yes",
+        "canBeBlocked": false,
+        "covers": "하니스 기반 live 파이프라인 전체 회귀",
+        "humanDecision": "none"
+      },
+      "contract": {
+        "mode": "automated behavior",
+        "covers": "R5, R6, R8, AC3-AC6, AC8",
+        "method": "`./test-live.sh --suite safety` (동일 하니스의 안전/복구 스위트)",
+        "artifact": "command-log",
+        "passCriteria": "워커 강제 종료 재접속, kill switch 차단, 탭 목록/attach, close=detach, kill 후 프로세스 생존, 콜드 스타트가 자동 검증된다. 보호하는 회귀: 사용자 탭/프로세스를 파괴하는 안전 시맨틱 붕괴",
+        "environment": "",
+        "requiredForDone": true,
+        "requiredForDoneRaw": "yes",
+        "canBeBlocked": false,
+        "canBeBlockedRaw": "no",
+        "safeProbe": "테스트 전용 브라우저 프로세스만 종료/재시작",
+        "liveProof": "",
+        "sideEffect": "",
+        "sensitiveDataPolicy": "테스트 토큰만 사용, 로그에 토큰 리댁션"
+      },
+      "contractHash": "c0bb699acad756447274f59235fad2df35e61049f597a57868ddcf3b97e80c9f",
+      "status": "planned",
+      "notes": []
+    },
+    {
+      "id": "VP4",
+      "verificationId": "V4",
+      "level": "General",
+      "source": "verification_matrix",
+      "category": "command",
+      "tool": "verify-run",
+      "command": "`CHROMUX_PROFILE=live node chromux.mjs ...`로 페어링→open→탭 목록/attach→snapshot/click→screenshot→kill switch 순서의 스모크 실행",
+      "target": null,
+      "covers": {
+        "requirements": [
+          "R1",
+          "R2",
+          "R3",
+          "R4",
+          "R5",
+          "R6",
+          "R7",
+          "R8"
+        ],
+        "acceptanceCriteria": [
+          "AC11"
+        ],
+        "tasks": []
+      },
+      "artifactKinds": [
+        "command-log",
+        "screenshot",
+        "console-log"
+      ],
+      "passCriteria": "실사용자 Chrome에서 전체 스모크가 성공한다 (AGENTS.md 라이브 스모크 케이던스)",
+      "requiredForDone": true,
+      "canBeBlocked": false,
+      "testMode": "browser/runtime",
+      "testModeContract": {
+        "id": "TM3",
+        "mode": "browser/runtime",
+        "normalizedMode": "browser-runtime",
+        "requiredForDone": true,
+        "requiredForDoneRaw": "yes",
+        "canBeBlocked": false,
+        "covers": "실사용자 Chrome 라이브 스모크",
+        "humanDecision": "extension 수동 로드 필요 (4.1)"
+      },
+      "contract": {
+        "mode": "browser/runtime",
+        "covers": "R1-R8, AC11",
+        "method": "`CHROMUX_PROFILE=live node chromux.mjs ...`로 페어링→open→탭 목록/attach→snapshot/click→screenshot→kill switch 순서의 스모크 실행",
+        "artifact": "screenshot + command-log",
+        "passCriteria": "실사용자 Chrome에서 전체 스모크가 성공한다 (AGENTS.md 라이브 스모크 케이던스)",
+        "environment": "",
+        "requiredForDone": true,
+        "requiredForDoneRaw": "yes",
+        "canBeBlocked": false,
+        "canBeBlockedRaw": "yes (4.1 사전 작업 대기 시)",
+        "safeProbe": "스모크는 example.com 등 무해 사이트 + 사용자가 지정한 탭만 조작, 로그인 액션 없음",
+        "liveProof": "",
+        "sideEffect": "",
+        "sensitiveDataPolicy": "실세션 쿠키/토큰 미기록, 스크린샷에 개인 정보 노출 시 리댁션"
+      },
+      "contractHash": "9fe402b34ee256d2371824d80e78289f584ab2bd4bf5864859abf34779d86a80",
+      "status": "planned",
+      "notes": []
+    }
+  ],
+  "coverage": {
+    "AC1": {
+      "title": "격리 프로필에서 통과하는 핵심 명령 스위트(open/snapshot/click/fill/type/press/run/screenshot/watch/wait)가 live 하니스에서 동일 응답 스키마로 통과한다. (...",
+      "requirements": [
+        "R1",
+        "R7"
+      ],
+      "coveredBy": [
+        "VP2",
+        "VP4"
+      ],
+      "status": "covered"
+    },
+    "AC2": {
+      "title": "페어링 토큰 없는/불일치 WS 접속은 거부되고, 미페어링 상태의 live 명령은 설치/페어링 안내를 포함한 에러를 반환한다. 토큰 파일 권한은 0600이다. (R2, R4)",
+      "requirements": [
+        "R2",
+        "R4"
+      ],
+      "coveredBy": [
+        "VP2",
+        "VP4"
+      ],
+      "status": "covered"
+    },
+    "AC3": {
+      "title": "하니스에서 service worker를 강제 종료하면 extension이 자동 재접속하고, 종료 시점에 진행 중이던 명령은 repair hint 포함 에러로 즉시 실패한다. (R3, R8)",
+      "requirements": [
+        "R3",
+        "R8"
+      ],
+      "coveredBy": [
+        "VP2",
+        "VP3",
+        "VP4"
+      ],
+      "status": "covered"
+    },
+    "AC4": {
+      "title": "팝업 kill switch를 누르면 전체 detach되고, 이후 자동 재연결이 일어나지 않으며, live 명령은 차단 상태 안내 에러를 낸다. (R3, R8)",
+      "requirements": [
+        "R3",
+        "R8"
+      ],
+      "coveredBy": [
+        "VP2",
+        "VP3",
+        "VP4"
+      ],
+      "status": "covered"
+    },
+    "AC5": {
+      "title": "기본 `open`은 새 탭을 만들고, 탭 목록 조회 후 활성 탭/URL 매칭 attach가 동작하며, 복수 매칭 시 후보 목록을 반환한다. (R4, R5)",
+      "requirements": [
+        "R4",
+        "R5"
+      ],
+      "coveredBy": [
+        "VP3",
+        "VP4"
+      ],
+      "status": "covered"
+    },
+    "AC6": {
+      "title": "하니스에서 브라우저 미실행 상태로 live 명령을 실행하면 브라우저가 자동 실행되고 재접속 후 명령이 완료된다. 대기 초과 시 안내 에러를 낸다. (R6)",
+      "requirements": [
+        "R6"
+      ],
+      "coveredBy": [
+        "VP3",
+        "VP4"
+      ],
+      "status": "covered"
+    },
+    "AC7": {
+      "title": "live `download`가 파일을 다운로드 폴더에 저장하고 응답에 실제 경로를 명시한다. (R7)",
+      "requirements": [
+        "R7"
+      ],
+      "coveredBy": [
+        "VP2",
+        "VP4"
+      ],
+      "status": "covered"
+    },
+    "AC8": {
+      "title": "attach한 기존 탭에 `close`를 호출하면 탭이 살아있는 채 detach만 되고, agent가 만든 탭은 실제로 닫힌다. `kill live` 후에도 브라우저 프로세스가 살아있다. (R5)",
+      "requirements": [
+        "R5"
+      ],
+      "coveredBy": [
+        "VP3",
+        "VP4"
+      ],
+      "status": "covered"
+    },
+    "AC9": {
+      "title": "매트릭스의 `unsupported` 명령(show, launch --headless, chrome:// attach)이 사유를 포함한 `live unsupported` 에러를 반환한다. (R7)",
+      "requirements": [
+        "R7"
+      ],
+      "coveredBy": [
+        "VP2",
+        "VP4"
+      ],
+      "status": "covered"
+    },
+    "AC10": {
+      "title": "`node benchmarks/chromux-doc-check.mjs`가 live 모드 needles를 포함해 통과하고, help/README/install.md/skills가 같은 스토리를 말한다. (R9)",
+      "requirements": [
+        "R9"
+      ],
+      "coveredBy": [
+        "VP1"
+      ],
+      "status": "covered"
+    },
+    "AC11": {
+      "title": "실사용자 Chrome에서 라이브 스모크(페어링 → 새 탭 open → 활성 탭 attach → snapshot/click → kill switch)가 성공한다. (R1-R8)",
+      "requirements": [
+        "R1",
+        "R8"
+      ],
+      "coveredBy": [
+        "VP2",
+        "VP3",
+        "VP4"
+      ],
+      "status": "covered"
+    }
+  },
+  "gaps": []
+}

@@ -1,6 +1,6 @@
 {
   "name": "@team-attention/chromux",
-  "version": "0.19.1",
+  "version": "0.20.0",
   "description": "tmux for Chrome tabs — zero-dependency parallel Chrome tab controller via raw CDP",
   "type": "module",
   "repository": {
@@ -30,7 +30,8 @@
     "install.md",
     "status-app",
     "snippets/_builtin",
-    "benchmarks"
+    "benchmarks",
+    "extension"
   ],
   "engines": {
     "node": ">=22"

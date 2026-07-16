@@ -197,9 +197,28 @@ assertContains(checks, 'visual topic OOPIF limits', docs.visualTopic, 'ref-based
 assertContains(checks, 'visual topic OOPIF crash cleanup', docs.visualTopic, '`list` reports `crashedTotal`');
 
 {
+  // Live mode (extension bridge) surface must stay consistent across help,
+  // README, install, and both skills.
+  assertContains(checks, 'help live pair', docs.help, 'chromux pair');
+  assertContains(checks, 'help live tabs', docs.help, 'chromux tabs');
+  assertContains(checks, 'help live profile', docs.help, 'CHROMUX_PROFILE=live');
+  assertContains(checks, 'help live attach tab', docs.help, '--tab active|<tabId>|<match>');
+  assertContains(checks, 'readme live mode', docs.readme, 'CHROMUX_PROFILE=live chromux open');
+  assertContains(checks, 'readme live kill semantics', docs.readme, 'kill live` never terminates your Chrome');
+  assertContains(checks, 'install live pair', docs.install, 'chromux pair');
+  assertContains(checks, 'install live load unpacked', docs.install, 'Load unpacked');
+  assertContains(checks, 'help live auto-pairing', docs.help, 'auto-pairing window');
+  assertContains(checks, 'readme live auto-pairing', docs.readme, 'auto-pairing window');
+  assertContains(checks, 'install live auto-pairing', docs.install, 'auto-pairing window');
+  assertContains(checks, 'chromux skill live mode', docs.chromuxSkill, 'CHROMUX_PROFILE=live');
+  assertContains(checks, 'chromux skill live unsupported', docs.chromuxSkill, 'live unsupported');
+  assertContains(checks, 'work skill live profile', docs.workSkill, 'reserved `live` profile');
+}
+
+{
   const pkg = JSON.parse(read('package.json'));
-  const ok = pkg.version === '0.19.1' && !pkg.dependencies;
-  checks.push({ label: 'package remains zero-dependency at 0.19.1', needle: '0.19.1 with no dependencies', ok });
+  const ok = pkg.version === '0.20.0' && !pkg.dependencies;
+  checks.push({ label: 'package remains zero-dependency at 0.20.0', needle: '0.20.0 with no dependencies', ok });
   if (!ok) throw new Error(`package contract drift: version=${pkg.version}, dependencies=${JSON.stringify(pkg.dependencies)}`);
 }
 
