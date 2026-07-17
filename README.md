@@ -1,11 +1,11 @@
 <p align="center">
-  <img src="assets/hero/chromux-hero.svg" alt="chromux — the agent-native browser control plane" width="900">
+  <img src="assets/hero/chromux-hero.png" alt="chromux - the only browser tool your agent needs" width="900">
 </p>
 
 <p align="center">
-  <b>The agent-native browser control plane.</b><br>
-  <i>tmux for Chrome tabs, grown up</i> — your real, logged-in Chrome split into a fleet of parallel agent sessions<br>
-  that verify actions in ~47 tokens, learn every site they touch, and replay proven flows with zero model calls.
+  <b>The only browser tool your agent needs.</b><br>
+  Real Chrome, in your agent's hands - its own private browsers, a headless crawl fleet,<br>
+  or the tab you're looking at right now. Every action verified. Every site remembered.
 </p>
 
 <p align="center">
@@ -17,7 +17,7 @@
 ```bash
 git clone https://github.com/team-attention/chromux && cd chromux && npm install -g .
 
-# three agents, one logged-in Chrome — separate tabs, zero collisions
+# The agent's browser: three agents, one logged-in profile, zero collisions
 chromux open inbox    https://mail.example.com &
 chromux open research https://news.ycombinator.com &
 chromux open docs     https://developer.mozilla.org &
@@ -27,42 +27,67 @@ chromux snapshot inbox --interactive    # page structure with @refs, ~36 tokens
 chromux click inbox @3                  # act on a ref…
 chromux snapshot inbox --diff           # …verify what changed for ~47 tokens
 
-# freeze a working flow once — every later run replays it with zero model calls
+# Your browser: the same commands on the Chrome you are using right now
+chromux pair                                          # one-time: the companion Chrome extension pairs itself
+CHROMUX_PROFILE=live chromux open helper --tab active # "do this on the page I'm looking at"
+
+# The fleet: point 10 worker tabs at a URL queue
+chromux batch --file urls.txt --workers 10 --out results.jsonl
+
+# Freeze a working flow once - every later run replays it with zero model calls
 chromux script save mail.example.com/triage --file triage.js
 chromux run inbox --script mail.example.com/triage
-
-# or point 10 worker tabs at a URL queue
-chromux batch --file urls.txt --workers 10 --out results.jsonl
 ```
 
-## Why this is the best browser tool for agents
+## One CLI, three browsers
 
-Most AI browser tools give your agent **a browser**. chromux gives it
-**judgment** — on your real, logged-in Chrome. Every answer it hands back is a
-decision the agent would otherwise have to guess: *did that work, am I stuck,
-can I trust this, have I been here before.* Cheap, certain, and wiser every run.
-Six design bets do the rest:
+Browser work for agents comes in three shapes, and until now each shape needed a different tool.
+chromux covers the whole spectrum with one zero-dependency CLI, and the commands are identical across all three - only the profile changes.
 
-1. **Your browser, awake.** Your real, logged-in Chrome — not a cloud stranger
-   wearing a bot's fingerprint. Log in once; it runs unattended forever,
-   anywhere a shell runs: macOS, Linux, native Windows, WSL, servers, and CI.
-2. **It answers back.** Every action reports whether it *actually* changed
-   anything, so the agent confirms like a human glancing at the screen — and
-   when it's going in circles, chromux says so instead of letting it thrash.
-   Extractions can be held to a contract so drift fails loudly, and sensitive
-   fields mask themselves so the agent knows what not to read.
-3. **It gets wiser, not just bigger.** It remembers every site it touches and
-   freezes proven flows to replay for free — then grades those memories by what
-   still works, so trust compounds and dead flows fade. Most tools restart from
-   zero each session; chromux carries what it learned.
-4. **Many hands, one identity.** Ten agents share one logged-in profile in their
-   own tabs, never colliding — parallelism by architecture, not luck.
-5. **The whole page, not the easy half.** Shadow DOM, cross-origin frames,
-   canvas, dialogs, popups, upload/download, drag — where the accessibility tree
-   ends, real pixels and pointers begin.
-6. **No brain of its own — by design.** chromux is the deterministic hand; your
-   coding agent is the brain. No per-step token bill, no vendor lock-in, nothing
-   leaving your machine.
+| Route | The job | How chromux does it |
+|---|---|---|
+| **The fleet** | Crawl thousands of URLs with disposable identity | `crawl` mode: `batch` worker-tab pools, resource guards, `pause`/`resume` as the wave kill switch |
+| **The agent's browser** | Logged-in, persistent, parallel automation | Isolated profiles: real Chrome user-data-dirs, a daemon per profile, N agents in N tabs that never collide |
+| **Your browser** | SSO, 2FA, "the page I'm looking at right now" | [`live` mode](#live-mode-your-real-chrome): an extension bridges your real, running Chrome, with safety semantics built in |
+
+Log in once and a profile stays logged in forever - or skip logging in entirely and borrow the session you already have open.
+Everything runs anywhere a shell runs: macOS, Linux, native Windows, WSL, servers, and CI.
+
+## Four pillars
+
+Most AI browser tools give your agent **a browser**.
+chromux gives it **judgment**: every answer it hands back is a decision the agent would otherwise have to guess - *did that work, am I stuck, can I trust this, have I been here before*.
+Four design pillars carry that.
+
+### 1. Coverage - every browser, the whole page
+
+The three routes above are one pillar, not three products: the same `open`/`snapshot`/`click`/`run` verbs drive a headless crawl worker, a logged-in automation profile, and your own live Chrome.
+Page reach matches that breadth.
+Snapshots pierce open shadow DOM and same-origin iframes; cross-origin OOPIFs attach on demand.
+Where the accessibility tree ends, real pixels and pointers begin: canvas targets, `hover`, bounded `drag`, native dialogs, popup adoption, upload, and download.
+Nothing on a page is "out of scope for the tool you picked".
+
+### 2. Economics - tokens buy judgment, not scenery
+
+Agents pay for every byte they read back, so observation payload size is a first-class metric with its own benchmark.
+Verifying an action costs ~47 tokens (`snapshot --diff`), finding one item on a 200-story page costs ~59 (`snapshot --grep`), and a shaped extraction costs ~27 - roughly constant no matter how large the page grows.
+A flow that works gets frozen as a script and replays with **zero model calls**.
+Measured head-to-head against @playwright/cli and agent-browser, chromux was the only tool to pass all 35 sessions and had the lowest tokens, wall time, and cost - including the Google bot check both competitors failed ([full tables below](#how-it-compares)).
+
+### 3. Memory - it gets cheaper every run
+
+Most browser tools restart from zero each session.
+chromux remembers every site it touches: durable facts land in per-host site notes (`chromux note`), proven flows land in per-host replay scripts (`chromux script`), and both surface automatically in the next `open` response for that host.
+Replay stats grade those memories by what still works, so trust compounds and dead flows fade.
+The second visit to a site is cheaper than the first, and the tenth can be nearly free.
+
+### 4. Trust - deterministic, local, zero dependencies
+
+chromux has no brain of its own, by design: it is the deterministic hand, and your coding agent is the brain.
+No agent loop, no bundled LLM, no per-step token bill, no vendor lock-in, and nothing leaves your machine.
+The runtime is one file on Node >= 22 with zero dependencies - no Playwright, no Chromium download.
+Every action answers back with what actually changed, extractions can be held to a `--schema` contract so drift fails loudly, receipts redact typed text and secrets, and sensitive fields mask themselves in snapshots.
+In live mode the safety semantics are explicit: `close` detaches instead of closing your tab, `kill live` never touches your Chrome process, and the extension popup has a kill switch.
 
 ## How it compares
 
@@ -87,29 +112,9 @@ Honest summary: the current official comparison is one 20-task, three-tool run u
 chromux was the only tool to pass all 35 sessions and had the lowest aggregate wall time, turns, tokens, and cost.
 All three tools passed every deterministic local and [MiniWoB++](https://github.com/Farama-Foundation/miniwob-plusplus) session, while task-level speed remained mixed.
 The largest separation was Google: chromux completed the task in real Chrome while both competitor browsers failed to return the expected result.
-These head-to-head numbers are from the 0.18.0-era run; 0.19.0 has since added cross-origin OOPIF routing, `drag`/`hover`, and DPR-correct visual pixel clicks (bet 5 above), which are not yet reflected in the comparison table.
+These head-to-head numbers are from the 0.18.0-era run; 0.19.0 has since added cross-origin OOPIF routing, `drag`/`hover`, and DPR-correct visual pixel clicks (pillar 1 above), and 0.20.0 added live mode, which are not yet reflected in the comparison table.
 The historical v1/v2 tables, perception-upgrade loop disclosure, raw task cells, live-site caveats, and a Sonnet 5 cross-model check are in [docs/benchmark-2026-07.md](docs/benchmark-2026-07.md).
-
-Design principles, sharpened against the 2026 agent-browser landscape (see
-`docs/competitive-analysis-2026-07.md` in the repo):
-
-- **No agent loop, no bundled LLM.** chromux is the deterministic hand; the
-  coding agent driving it is the brain. Tools that embed per-step model calls
-  fight cost and flakiness; a saved chromux flow replays for zero tokens, and
-  when it breaks, the calling agent is the self-healing layer.
-- **The user's real, logged-in profiles, locally.** Cloud browsers rebuild
-  identity server-side and extension bridges are fragile; raw CDP over
-  persistent local profiles works anywhere a shell works — WSL, servers, CI.
-- **Observation payloads are the product.** Agents pay per byte they read
-  back: stable snapshot refs, `--interactive`, `snapshot --diff`, and shaped
-  `page(...)` extraction under `--schema` keep per-step reading near-constant
-  even on large pages (see Token Footprint below).
-- **Learning compounds per host.** Site notes (`chromux note`) store durable
-  facts, replay scripts (`chromux script`) store proven flows, and both
-  surface automatically in `open` responses on the next visit.
-- **Parallelism is one profile, many sessions.** A daemon per profile keeps N
-  independent tabs live for concurrent agents, with crawl-mode resource caps,
-  `batch` worker pools, and `pause`/`resume` as the wave kill switch.
+The design rationale against the 2026 agent-browser landscape is in `docs/competitive-analysis-2026-07.md`.
 
 ## Prerequisites
 

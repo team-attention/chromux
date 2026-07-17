@@ -217,8 +217,8 @@ assertContains(checks, 'visual topic OOPIF crash cleanup', docs.visualTopic, '`l
 
 {
   const pkg = JSON.parse(read('package.json'));
-  const ok = pkg.version === '0.20.0' && !pkg.dependencies;
-  checks.push({ label: 'package remains zero-dependency at 0.20.0', needle: '0.20.0 with no dependencies', ok });
+  const ok = pkg.version === '0.20.1' && !pkg.dependencies;
+  checks.push({ label: 'package remains zero-dependency at 0.20.1', needle: '0.20.1 with no dependencies', ok });
   if (!ok) throw new Error(`package contract drift: version=${pkg.version}, dependencies=${JSON.stringify(pkg.dependencies)}`);
 }
 

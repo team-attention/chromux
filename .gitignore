@@ -4,3 +4,4 @@ apps/macos-status-bar/dist/
 apps/macos-status-bar/release/
 .hoyeon/implement/
 .hoyeon/prd/
+.DS_Store
