@@ -197,6 +197,14 @@ assertContains(checks, 'visual topic OOPIF limits', docs.visualTopic, 'ref-based
 assertContains(checks, 'visual topic OOPIF crash cleanup', docs.visualTopic, '`list` reports `crashedTotal`');
 
 {
+  // Quick Start keeps the agent-first path: install, load the skill, then a
+  // first real task through a real browser.
+  assertContains(checks, 'readme quick start skill step', docs.readme, 'invoke the `chromux` skill');
+  assertContains(checks, 'readme quick start first task', docs.readme, 'Using chromux, google');
+  assertContains(checks, 'readme quick start by hand', docs.readme, '### By hand');
+}
+
+{
   // Live mode (extension bridge) surface must stay consistent across help,
   // README, install, and both skills.
   assertContains(checks, 'help live pair', docs.help, 'chromux pair');
@@ -219,8 +227,8 @@ assertContains(checks, 'visual topic OOPIF crash cleanup', docs.visualTopic, '`l
 
 {
   const pkg = JSON.parse(read('package.json'));
-  const ok = pkg.version === '0.21.0' && !pkg.dependencies;
-  checks.push({ label: 'package remains zero-dependency at 0.21.0', needle: '0.21.0 with no dependencies', ok });
+  const ok = pkg.version === '0.21.1' && !pkg.dependencies;
+  checks.push({ label: 'package remains zero-dependency at 0.21.1', needle: '0.21.1 with no dependencies', ok });
   if (!ok) throw new Error(`package contract drift: version=${pkg.version}, dependencies=${JSON.stringify(pkg.dependencies)}`);
 }
 

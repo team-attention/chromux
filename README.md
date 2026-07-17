@@ -135,10 +135,32 @@ repo-local skills with Codex, Claude Code, or Hermes:
 
 ## Quick Start
 
+The fastest path is to let your agent set everything up and try it on a real task.
+In Claude Code, Codex, or any agent with shell access:
+
+1. **Install** — paste this to your agent:
+   > Clone https://github.com/team-attention/chromux, run `npm install -g .` in it,
+   > then follow install.md to register the `chromux` and `chromux-work` skills.
+2. **Load the skill** — in a fresh session, invoke the `chromux` skill
+   (`/chromux` in Claude Code), or just ask for browser work and let it trigger.
+3. **First task** — give it a real search to run through a real browser:
+   > Using chromux, google "zero-dependency CDP CLI", open the most relevant
+   > result, and summarize what the project does.
+
+The agent launches its own isolated Chrome profile, runs the search, snapshots
+the results into token-cheap @refs, clicks through, and verifies each step —
+the same loop it will use on your actual work.
+
+### By hand
+
 ```bash
 # Launch Chrome with an isolated profile (auto-finds Chrome, auto-assigns port)
 chromux launch
 chromux launch work
+
+# First taste: a Google search through a real browser
+chromux open search "https://www.google.com/search?q=zero+dependency+cdp+cli"
+chromux snapshot search --interactive   # results as @refs, ready to click
 
 # Open tabs for two agents
 chromux open agent-a https://news.ycombinator.com
