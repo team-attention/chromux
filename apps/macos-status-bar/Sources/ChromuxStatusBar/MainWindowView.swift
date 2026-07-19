@@ -1,7 +1,9 @@
 import SwiftUI
+import AppKit
 
 struct MainWindowView: View {
     @ObservedObject var model: AppModel
+    let onWindowResolved: (NSWindow) -> Void
 
     var body: some View {
         NavigationSplitView {
@@ -12,7 +14,6 @@ struct MainWindowView: View {
         }
         .navigationTitle("chromux")
         .background(DesignTokens.canvas)
-        .onAppear { model.markWindowVisible() }
-        .onDisappear { model.markWindowHidden() }
+        .background(WindowAccessor(onResolve: onWindowResolved))
     }
 }

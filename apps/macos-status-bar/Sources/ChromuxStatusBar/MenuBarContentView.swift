@@ -7,6 +7,10 @@ struct MenuBarContentView: View {
     @ObservedObject var model: AppModel
     @Environment(\.openWindow) private var openWindow
 
+    // Visibility-gated polling (R6, AC9) is driven by AppDelegate observing
+    // NSMenu.didBeginTracking/didEndTracking for this menu, not by SwiftUI
+    // view lifecycle: MenuBarExtra's `.menu` style content is converted into
+    // native NSMenuItems with no onAppear/onDisappear of its own.
     var body: some View {
         if !model.isServerReachable {
             Text("Server not running")

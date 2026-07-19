@@ -14,8 +14,8 @@ struct ChromuxApp: App {
             Text("cx").font(.system(size: 13, weight: .bold, design: .monospaced))
         }
 
-        WindowGroup(id: "main") {
-            MainWindowView(model: appDelegate.model)
+        Window("chromux", id: "main") {
+            MainWindowView(model: appDelegate.model, onWindowResolved: appDelegate.attachMainWindow)
         }
         .defaultSize(width: 1120, height: 760)
 
