@@ -1,7 +1,7 @@
 # chromux macOS app
 
 This folder contains the native macOS companion app for chromux: a SwiftUI
-`MenuBarExtra` "cx" item plus a real `WindowGroup` main window, so the app
+`MenuBarExtra` "cx" item plus a real `Window` main window, so the app
 appears in the Dock and Cmd+Tab switcher like a normal desktop app, not just
 as a background accessory. It starts the local `chromux app` HTTP server and
 talks to it as a plain REST client — no profile-management logic is
@@ -24,7 +24,7 @@ split into two targets:
   (ported from `status-app/app.js`), byte formatting, and the delete-dialog
   name-truncation and result-summary formatting. Covered by
   `ChromuxStatusBarCoreTests` (Swift Testing).
-- `ChromuxStatusBar` — the SwiftUI app: `MenuBarExtra` + `WindowGroup` +
+- `ChromuxStatusBar` — the SwiftUI app: `MenuBarExtra` + `Window` +
   `Settings` under one `@main App`, the HTTP client, and the local server
   process supervisor.
 

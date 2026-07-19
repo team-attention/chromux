@@ -825,7 +825,7 @@ chromux status app (local HTTP)
   Chrome Stable from normal Program Files or LocalAppData installations, while
   explicit `chromePath` remains available for custom locations
 - **macOS app** — `apps/macos-status-bar` builds a native SwiftUI menu bar
-  app (`MenuBarExtra` + a `WindowGroup` main window) that starts the local
+  app (`MenuBarExtra` + a `Window` main window) that starts the local
   status server and manages profiles natively; native app packaging is
   macOS-only
 - **macOS release package** — `apps/macos-status-bar/package-release.sh` creates

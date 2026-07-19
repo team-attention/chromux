@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// SwiftUI replacement for the previous AppKit + WKWebView wrapper (R1): a
-/// `MenuBarExtra` "cx" item plus a real `WindowGroup` main window under one
+/// `MenuBarExtra` "cx" item plus a real `Window` main window under one
 /// `@main App`, so the app appears in the Dock and Cmd+Tab switcher.
 @main
 struct ChromuxApp: App {

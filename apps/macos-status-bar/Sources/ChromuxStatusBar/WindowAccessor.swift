@@ -1,7 +1,7 @@
 import SwiftUI
 import AppKit
 
-/// Retrieves the real `NSWindow` hosting a SwiftUI view. `WindowGroup`
+/// Retrieves the real `NSWindow` hosting a SwiftUI view. `Window`
 /// windows are not reliably observable via `NSApp.windows` or global
 /// `NSWindow` notifications in this app's SwiftUI runtime, so visibility
 /// tracking for the main window (R6, AC9) hooks the window instance found

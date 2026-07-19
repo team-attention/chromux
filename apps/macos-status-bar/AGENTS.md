@@ -1,7 +1,7 @@
 # macOS status bar app agent guide
 
 This directory holds the native SwiftUI companion app for chromux: a
-`MenuBarExtra` "cx" item plus a real `WindowGroup` main window, built as a
+`MenuBarExtra` "cx" item plus a real `Window` main window, built as a
 Swift Package Manager executable target. It is a pure REST client of the
 local `chromux app` HTTP server; profile-management logic lives only in
 `chromux.mjs`, never in Swift.
