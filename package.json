@@ -5,7 +5,7 @@
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "https://github.com/team-attention/chromux"
+    "url": "https://github.com/modakbul-gongbang/chromux"
   },
   "bin": {
     "chromux": "chromux.mjs"

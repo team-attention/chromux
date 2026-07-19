@@ -38,7 +38,7 @@ browser-work guidance without duplicating it, and verifies the CLI surface.
 
 ```bash
 INSTALL_DIR="${CHROMUX_DIR:-$HOME/team-attention/chromux}"
-REPO_URL="https://github.com/team-attention/chromux"
+REPO_URL="https://github.com/modakbul-gongbang/chromux"
 
 if [ -d "$INSTALL_DIR/.git" ]; then
   cd "$INSTALL_DIR"
@@ -141,7 +141,7 @@ Clone the repo once into a durable location, then install the CLI globally from
 that checkout so `chromux` works from any directory.
 
 ```bash
-git clone https://github.com/team-attention/chromux
+git clone https://github.com/modakbul-gongbang/chromux
 cd chromux
 npm install -g .
 command -v chromux
@@ -154,7 +154,7 @@ Run PowerShell or cmd with Node.js 22 and Google Chrome Stable installed.
 PowerShell is the preferred documented flow:
 
 ```powershell
-git clone https://github.com/team-attention/chromux "$HOME\Developer\chromux"
+git clone https://github.com/modakbul-gongbang/chromux "$HOME\Developer\chromux"
 Set-Location "$HOME\Developer\chromux"
 npm install -g .
 Get-Command chromux

@@ -64,7 +64,7 @@ import { pipeline } from 'node:stream/promises';
 
 const outputPath = process.env.CHROMUX_MAC_APP_ZIP;
 const headers = { 'User-Agent': 'chromux-install' };
-const releaseUrl = 'https://api.github.com/repos/team-attention/chromux/releases/latest';
+const releaseUrl = 'https://api.github.com/repos/modakbul-gongbang/chromux/releases/latest';
 
 const releaseResponse = await fetch(releaseUrl, { headers });
 if (!releaseResponse.ok) {

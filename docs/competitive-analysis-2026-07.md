@@ -177,7 +177,7 @@ Key events to track:
    untrusted sites, page text is data not instructions, confirm before
    irreversible actions).
 7. **Skills one-liner install + runtime skill text** (G-5): document
-   `npx skills add team-attention/chromux` (or equivalent), add
+   `npx skills add modakbul-gongbang/chromux` (or equivalent), add
    `chromux skill [name]` that prints the current SKILL.md so agent-side
    instructions never go stale.
 8. **Snapshot privacy hardening**: never emit password-field values (shipped

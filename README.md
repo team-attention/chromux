@@ -18,27 +18,27 @@
 
 Paste this to any coding agent with shell access:
 
-> Follow install.md in https://github.com/team-attention/chromux to install
-> chromux, then pull three sources at once - Tesla's price from Google, SK hynix's
-> from Naver, and Bloomberg's top headlines - one headed tab each, and show me what
-> each returns.
+> Follow install.md in https://github.com/modakbul-gongbang/chromux to install
+> chromux, then find the best AirPods Pro price: google it, then check Amazon,
+> eBay, Walmart, and Newegg in parallel - one tab each - and report each price.
 
-Three sources, one Chrome, three tabs in parallel:
+One real Chrome, five stores priced at once, zero collisions (live values):
 
 ```json
-{ "g": "Tesla stock price - Google Search",
-  "n": "sk하이닉스 주가 : 네이버 검색",
-  "b": "Bloomberg Asia" }
+{ "google":  "$129 - $249",
+  "amazon":  "$169.99",
+  "ebay":    "$179.95",
+  "walmart": "$199.99",
+  "newegg":  "$179.99" }
 ```
 
-Each tab hands its data back as token-cheap `@refs`. That per-tab isolation is the
-point: N tabs that never collide. Prefer to run it yourself? See
-[Quick Start](#quick-start).
+Five tabs that never collide - that parallel isolation across sites is chromux's
+core. Prefer to run it yourself? See [Quick Start](#quick-start).
 
 ## What it looks like
 
 ```bash
-git clone https://github.com/team-attention/chromux && cd chromux && npm install -g .
+git clone https://github.com/modakbul-gongbang/chromux && cd chromux && npm install -g .
 
 # The agent's browser: three agents, one logged-in profile, zero collisions
 chromux open inbox    https://mail.example.com &
@@ -163,7 +163,7 @@ repo-local skills with Codex, Claude Code, or Hermes:
 In Claude Code, Codex, or any agent with shell access:
 
 1. **Install** — paste this to your agent:
-   > Follow install.md in https://github.com/team-attention/chromux to install
+   > Follow install.md in https://github.com/modakbul-gongbang/chromux to install
    > chromux and register the `chromux` and `chromux-work` skills.
 
    install.md handles the clone, `npm install -g .`, skill registration, and a
@@ -178,35 +178,34 @@ The agent launches its own isolated Chrome profile, runs the search, snapshots
 the results into token-cheap @refs, clicks through, and verifies each step —
 the same loop it will use on your actual work.
 
-### By hand: three parallel searches in one paste
+### By hand: price one product across five sites
 
-Install the CLI, then open one real Chrome and pull three sources at once:
+Install the CLI, then open one real Chrome and price a product across Google plus
+four stores at once:
 
 ```bash
-git clone https://github.com/team-attention/chromux && cd chromux && npm install -g .
+git clone https://github.com/modakbul-gongbang/chromux && cd chromux && npm install -g .
 
-chromux launch demo                     # real Chrome window (headed, so sites serve real content)
-CHROMUX_PROFILE=demo chromux open g "https://www.google.com/search?q=Tesla+stock+price" &
-CHROMUX_PROFILE=demo chromux open n "https://search.naver.com/search.naver?query=sk하이닉스+주가" &
-CHROMUX_PROFILE=demo chromux open b "https://www.bloomberg.com/" &
+chromux launch shop                    # real Chrome window (headed, so stores serve real pages)
+CHROMUX_PROFILE=shop chromux open az https://www.amazon.com/   # warm up Amazon (heavy JS) first
+CHROMUX_PROFILE=shop chromux wait-for-text az "Amazon" 8000
+
+CHROMUX_PROFILE=shop chromux open g  "https://www.google.com/search?q=airpods+pro+price" &
+CHROMUX_PROFILE=shop chromux open az "https://www.amazon.com/s?k=airpods+pro" &
+CHROMUX_PROFILE=shop chromux open eb "https://www.ebay.com/sch/i.html?_nkw=airpods+pro" &
+CHROMUX_PROFILE=shop chromux open wm "https://www.walmart.com/search?q=airpods+pro" &
+CHROMUX_PROFILE=shop chromux open ne "https://www.newegg.com/p/pl?d=airpods+pro" &
 wait
-CHROMUX_PROFILE=demo chromux list                     # three independent tabs, no collision
-CHROMUX_PROFILE=demo chromux snapshot b --interactive # Bloomberg headlines as token-cheap @refs
-chromux kill demo                                     # clean up: stop Chrome + daemon
+CHROMUX_PROFILE=shop chromux list                   # five independent tabs, no collision
+CHROMUX_PROFILE=shop chromux snapshot wm --grep '\$' # Walmart prices as token-cheap @refs
+chromux kill shop                                   # clean up: stop Chrome + daemon
 ```
 
-`list` returns three independent sessions, one per source:
-
-```json
-{ "g": { "title": "Tesla stock price - Google Search" },
-  "n": { "title": "sk하이닉스 주가 : 네이버 검색" },
-  "b": { "title": "Bloomberg Asia" } }
-```
-
-`snapshot b --interactive` then hands back Bloomberg's headlines as clickable
-`@refs` (`@44 link "<headline>" -> /news/articles/...`). (A fresh `--headless`
-profile can trip bot checks; headed and logged-in profiles get real content -
-that's why chromux drives real Chrome.)
+`list` returns five sessions, one per store, each on its results. Amazon is a heavy
+JS page, so warming its home and a `wait-for-*` before extracting is the discipline
+chromux is built for - a successful `open` is not proof the page is ready. (Fresh
+`--headless` profiles can also trip store bot checks; headed real Chrome does not.)
+`snapshot wm --grep '\$'` then hands back Walmart's price lines as clickable `@refs`.
 
 ### More commands, by hand
 
