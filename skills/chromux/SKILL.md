@@ -247,6 +247,10 @@ I'm looking at". Otherwise use an isolated profile.
   Chrome process. `show`, `launch --headless`, and `chrome://`/Web Store pages
   are unsupported and return a clear `live unsupported` error — do not retry
   them, switch to an isolated profile if you truly need them.
+- Attached tabs are visibly badged: they sit in a green "chromux" tab group
+  while an agent drives them and return to their previous group on detach.
+  If the user asks "which tab are you on", that group is the answer; browsers
+  without tab-group APIs skip the badge.
 - Everything runs on the user's real session, so treat destructive actions with
   extra care and prefer new tabs over reusing the user's tabs unless asked.
 

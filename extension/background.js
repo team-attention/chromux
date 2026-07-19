@@ -113,6 +113,76 @@ async function reconcileDebuggerContext(tabId, timeoutMs) {
   }
 }
 
+// Visual "an agent is driving this tab" badge: while attached, the tab sits in
+// a green "chromux" tab group so the tab strip shows who is being controlled.
+// Feature-detected because not every Chromium-based browser exposes tab-group
+// APIs (or renders the group UI); those browsers just skip the badge — the
+// badge is best-effort and must never fail or delay an attach/detach.
+const BADGE_GROUP_TITLE = "chromux";
+const BADGE_GROUP_COLOR = "green";
+// tabId -> groupId the tab was in before we badged it, so detach can restore
+// the user's own grouping instead of just ungrouping.
+const priorGroup = new Map();
+
+function tabGroupsSupported() {
+  return !!(chrome.tabs && chrome.tabs.group && chrome.tabs.ungroup &&
+    chrome.tabGroups && chrome.tabGroups.query && chrome.tabGroups.update);
+}
+
+function noGroupId() {
+  return (chrome.tabGroups && chrome.tabGroups.TAB_GROUP_ID_NONE) ?? -1;
+}
+
+// Groups are per-window; reuse this window's chromux group when one exists so
+// multiple attached tabs share a single badge chip.
+async function findBadgeGroup(windowId) {
+  const groups = await chrome.tabGroups.query({ windowId, title: BADGE_GROUP_TITLE });
+  return groups && groups[0] ? groups[0].id : null;
+}
+
+async function badgeTab(tabId) {
+  if (!tabGroupsSupported()) return;
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    const existing = await findBadgeGroup(tab.windowId);
+    if (existing != null && tab.groupId === existing) return;
+    if (!priorGroup.has(tabId)) priorGroup.set(tabId, tab.groupId ?? noGroupId());
+    if (existing != null) {
+      await chrome.tabs.group({ tabIds: [tabId], groupId: existing });
+    } else {
+      const groupId = await chrome.tabs.group({ tabIds: [tabId] });
+      await chrome.tabGroups.update(groupId, { title: BADGE_GROUP_TITLE, color: BADGE_GROUP_COLOR });
+    }
+  } catch {
+    // Tab gone, group APIs rejected mid-drag, etc. — the attach still stands.
+  }
+}
+
+async function unbadgeTab(tabId) {
+  const prev = priorGroup.get(tabId);
+  priorGroup.delete(tabId);
+  if (!tabGroupsSupported()) return;
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (tab.groupId === noGroupId()) return;
+    // Only undo our own badge: if the user moved the tab into another group
+    // while it was attached, respect that and leave it there.
+    const badgeGroup = await findBadgeGroup(tab.windowId);
+    if (badgeGroup == null || tab.groupId !== badgeGroup) return;
+    if (prev != null && prev !== noGroupId()) {
+      try {
+        await chrome.tabs.group({ tabIds: [tabId], groupId: prev });
+        return;
+      } catch {
+        // Original group vanished (or lives in another window) — fall through.
+      }
+    }
+    await chrome.tabs.ungroup(tabId);
+  } catch {
+    // Tab already closed.
+  }
+}
+
 async function detachTab(tabId) {
   if (!attached.has(tabId)) return;
   attached.delete(tabId);
@@ -121,6 +191,7 @@ async function detachTab(tabId) {
   } catch {
     // Already gone (tab closed, navigated to a restricted page, etc.).
   }
+  await unbadgeTab(tabId);
 }
 
 async function detachAll() {
@@ -170,6 +241,7 @@ async function handleCall(msg) {
         // Don't report attached until the debugger's own location.href agrees
         // with the tab's committed URL, so the first evaluate reads the page.
         await reconcileDebuggerContext(msg.tabId, 8000);
+        await badgeTab(msg.tabId);
         reply(id, { attached: true });
         break;
       }
@@ -231,6 +303,7 @@ function onDebuggerDetach(source, reason) {
   if (attached.has(source.tabId)) {
     attached.delete(source.tabId);
     emit("detached", { tabId: source.tabId, reason });
+    unbadgeTab(source.tabId);
   }
 }
 
@@ -294,6 +367,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 });
 chrome.tabs.onRemoved.addListener((tabId) => {
   attached.delete(tabId);
+  priorGroup.delete(tabId);
   emit("tabRemoved", { tabId });
 });
 

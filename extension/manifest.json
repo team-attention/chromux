@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "chromux live bridge",
-  "version": "0.20.0",
-  "description": "Lets the chromux CLI drive this Chrome profile through chrome.debugger. Attaches only while an agent is working; the popup shows attached tabs and a kill switch.",
-  "permissions": ["debugger", "tabs", "downloads", "storage", "alarms"],
+  "version": "0.22.0",
+  "description": "Lets the chromux CLI drive this Chrome profile through chrome.debugger. Attaches only while an agent is working; attached tabs sit in a green \"chromux\" tab group, and the popup shows attached tabs and a kill switch.",
+  "permissions": ["debugger", "tabs", "tabGroups", "downloads", "storage", "alarms"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js",

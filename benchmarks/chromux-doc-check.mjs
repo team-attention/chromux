@@ -223,12 +223,18 @@ assertContains(checks, 'visual topic OOPIF crash cleanup', docs.visualTopic, '`l
   assertContains(checks, 'chromux skill live mode', docs.chromuxSkill, 'CHROMUX_PROFILE=live');
   assertContains(checks, 'chromux skill live unsupported', docs.chromuxSkill, 'live unsupported');
   assertContains(checks, 'work skill live profile', docs.workSkill, 'reserved `live` profile');
+  // The attached-tab badge (green "chromux" tab group) is a user-facing live
+  // surface: docs and the extension manifest permission must stay in sync.
+  assertContains(checks, 'readme live tab-group badge', docs.readme, 'green "chromux" tab group');
+  assertContains(checks, 'install live tab-group badge', docs.install, 'green "chromux" tab group');
+  assertContains(checks, 'chromux skill live tab-group badge', docs.chromuxSkill, 'green "chromux" tab group');
+  assertContains(checks, 'extension manifest tabGroups permission', read('extension/manifest.json'), '"tabGroups"');
 }
 
 {
   const pkg = JSON.parse(read('package.json'));
-  const ok = pkg.version === '0.21.1' && !pkg.dependencies;
-  checks.push({ label: 'package remains zero-dependency at 0.21.1', needle: '0.21.1 with no dependencies', ok });
+  const ok = pkg.version === '0.22.0' && !pkg.dependencies;
+  checks.push({ label: 'package remains zero-dependency at 0.22.0', needle: '0.22.0 with no dependencies', ok });
   if (!ok) throw new Error(`package contract drift: version=${pkg.version}, dependencies=${JSON.stringify(pkg.dependencies)}`);
 }
 

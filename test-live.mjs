@@ -341,12 +341,22 @@ async function safetySuite() {
     fail('attach existing tab', 'could not create user tab');
   }
 
+  // attached tab is badged: it must sit in the green "chromux" tab group
+  const badge = await swEval(`(async()=>{const t=await chrome.tabs.get(${userTabId});if(t.groupId==null||t.groupId===chrome.tabGroups.TAB_GROUP_ID_NONE)return 'no-group';const g=await chrome.tabGroups.get(t.groupId);return JSON.stringify({title:g.title,color:g.color});})()`);
+  let badgeInfo = null;
+  try { badgeInfo = JSON.parse(badge); } catch {}
+  if (badgeInfo && badgeInfo.title === 'chromux' && badgeInfo.color === 'green') ok('attached tab badged with chromux tab group'); else fail('attached tab badged with chromux tab group', String(badge).slice(0, 200));
+
   // close on attached user tab = detach (tab stays open)
   const userTabAliveBefore = await swEval(`chrome.tabs.get(${userTabId}).then(()=>true).catch(()=>false)`);
   runCli(['close', 's2'], { allowFail: true });
   await sleep(500);
   const userTabAliveAfter = await swEval(`chrome.tabs.get(${userTabId}).then(()=>true).catch(()=>false)`);
   if (userTabAliveBefore && userTabAliveAfter) ok('close on attached tab detaches (tab survives)'); else fail('close on attached tab detaches (tab survives)', `tab alive before=${userTabAliveBefore} after=${userTabAliveAfter}`);
+
+  // detach removes the badge: the tab must leave the chromux group
+  const unbadged = await swEval(`chrome.tabs.get(${userTabId}).then(t=>t.groupId==null||t.groupId===chrome.tabGroups.TAB_GROUP_ID_NONE?'ungrouped':('still-grouped:'+t.groupId)).catch(()=>'tab-gone')`);
+  if (unbadged === 'ungrouped') ok('detached tab leaves chromux tab group'); else fail('detached tab leaves chromux tab group', String(unbadged));
 
   // orphan recovery: lose the live daemon's endpoint record (.state) while the
   // daemon keeps running; the next command must re-adopt the running daemon

@@ -406,7 +406,10 @@ CHROMUX_PROFILE=live chromux kill live         # detach all; your Chrome stays o
 The bridge binds `127.0.0.1` and trusts local processes (the same model as
 Chrome's own remote-debugging port); requests carrying a web `Origin` header
 are rejected so web pages cannot reach it. The extension popup has a kill
-switch that blocks the bridge until re-enabled. Live mode uses
+switch that blocks the bridge until re-enabled. While a tab is attached it
+sits in a green "chromux" tab group so you can see which tabs an agent is
+driving; on detach it returns to its previous group. Browsers without
+tab-group APIs skip this badge. Live mode uses
 `chrome.debugger`, so `show`, `launch --headless`, and `chrome://` pages are
 unsupported. Distribution is the unpacked extension in this repo; there is no
 Web Store listing. If your live browser is not Google Chrome (e.g. a
