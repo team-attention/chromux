@@ -824,9 +824,10 @@ chromux status app (local HTTP)
 - **Windows Chrome discovery** — native Windows CLI runs auto-discover Google
   Chrome Stable from normal Program Files or LocalAppData installations, while
   explicit `chromePath` remains available for custom locations
-- **macOS app** — `apps/macos-status-bar` builds a native AppKit
-  menu bar app that starts the local status server and opens the dashboard in a
-  WebKit window; native app packaging is macOS-only
+- **macOS app** — `apps/macos-status-bar` builds a native SwiftUI menu bar
+  app (`MenuBarExtra` + a `WindowGroup` main window) that starts the local
+  status server and manages profiles natively; native app packaging is
+  macOS-only
 - **macOS release package** — `apps/macos-status-bar/package-release.sh` creates
   a zipped `.app` bundle for GitHub Releases and manual downloads
 

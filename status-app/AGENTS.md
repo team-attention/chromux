@@ -1,7 +1,10 @@
 # status-app agent guide
 
-This directory is the chromux status dashboard UI (plain HTML/CSS/JS, served by
-`chromux app` and wrapped by the macOS app in `apps/macos-status-bar/`).
+This directory is the chromux status dashboard UI (plain HTML/CSS/JS, served
+by `chromux app`). The native macOS app in `apps/macos-status-bar/` no longer
+wraps this UI in a WebView; it reimplements profile list/detail/actions
+natively and only falls back to opening this dashboard in a browser for
+Timeline, Raw log, and Lifecycle, which are not yet native.
 
 ## Design source of truth
 

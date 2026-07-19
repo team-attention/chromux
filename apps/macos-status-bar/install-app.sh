@@ -29,9 +29,9 @@ if [ "$(uname -s)" != "Darwin" ]; then
   exit 0
 fi
 
-if ! xcrun --find swiftc >/dev/null 2>&1; then
-  echo "Cannot build chromux.app: swiftc is required (install the Xcode Command Line Tools)." >&2
-  echo "Without them, use ./apps/macos-status-bar/install-release-app.sh instead." >&2
+if ! xcrun --find swift >/dev/null 2>&1; then
+  echo "Cannot build chromux.app: the Swift toolchain is required (install the Xcode Command Line Tools)." >&2
+  echo "Without it, use ./apps/macos-status-bar/install-release-app.sh instead." >&2
   exit 1
 fi
 
@@ -57,6 +57,24 @@ if [ "$YES" -ne 1 ]; then
       ;;
   esac
 fi
+
+quit_running_instance() {
+  local pattern="chromux.app/Contents/MacOS/chromux"
+  if ! pgrep -f "$pattern" >/dev/null 2>&1; then
+    return 0
+  fi
+  echo "Quitting the running chromux app before reinstalling..."
+  osascript -e 'tell application id "com.teamattention.chromux" to quit' >/dev/null 2>&1 || true
+  for _ in $(seq 1 20); do
+    pgrep -f "$pattern" >/dev/null 2>&1 || return 0
+    sleep 0.25
+  done
+  echo "chromux app did not quit gracefully; forcing termination." >&2
+  pkill -9 -f "$pattern" 2>/dev/null || true
+  sleep 0.5
+}
+
+quit_running_instance
 
 "$ROOT/apps/macos-status-bar/build.sh"
 

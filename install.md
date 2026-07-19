@@ -124,7 +124,7 @@ shells, so an agent must collect the user's answer and pass `--yes` explicitly.
 If the user says yes, run from the checkout:
 
 ```bash
-if xcrun --find swiftc >/dev/null 2>&1; then
+if xcrun --find swift >/dev/null 2>&1; then
   ./apps/macos-status-bar/install-app.sh --yes
 else
   ./apps/macos-status-bar/install-release-app.sh --yes

@@ -2,6 +2,8 @@ artifacts/
 .playwright-cli/
 apps/macos-status-bar/dist/
 apps/macos-status-bar/release/
+apps/macos-status-bar/.build/
+apps/macos-status-bar/.swiftpm/
 .DS_Store
 
 # PRD pipeline artifacts (local only, entire namespaces)

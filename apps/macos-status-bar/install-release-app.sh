@@ -97,6 +97,24 @@ then
   exit 0
 fi
 
+quit_running_instance() {
+  local pattern="chromux.app/Contents/MacOS/chromux"
+  if ! pgrep -f "$pattern" >/dev/null 2>&1; then
+    return 0
+  fi
+  echo "Quitting the running chromux app before reinstalling..."
+  osascript -e 'tell application id "com.teamattention.chromux" to quit' >/dev/null 2>&1 || true
+  for _ in $(seq 1 20); do
+    pgrep -f "$pattern" >/dev/null 2>&1 || return 0
+    sleep 0.25
+  done
+  echo "chromux app did not quit gracefully; forcing termination." >&2
+  pkill -9 -f "$pattern" 2>/dev/null || true
+  sleep 0.5
+}
+
+quit_running_instance
+
 unzip -q "$ZIP_PATH" -d "$TMP_DIR/unpacked"
 
 APP_SOURCE="$(find "$TMP_DIR/unpacked" -maxdepth 3 -name 'chromux.app' -type d -print -quit)"

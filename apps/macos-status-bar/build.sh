@@ -2,26 +2,26 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+PKG_DIR="$ROOT/apps/macos-status-bar"
 APP_NAME="chromux"
-APP_DIR="$ROOT/apps/macos-status-bar/dist/$APP_NAME.app"
-LEGACY_APP_DIR="$ROOT/apps/macos-status-bar/dist/Chromux Status.app"
+APP_DIR="$PKG_DIR/dist/$APP_NAME.app"
+LEGACY_APP_DIR="$PKG_DIR/dist/Chromux Status.app"
 CONTENTS="$APP_DIR/Contents"
 MACOS="$CONTENTS/MacOS"
 RESOURCES="$CONTENTS/Resources"
 VERSION="${CHROMUX_STATUS_APP_VERSION:-$(PACKAGE_JSON="$ROOT/package.json" node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(process.env.PACKAGE_JSON, 'utf8')).version)")}"
 BUILD_NUMBER="${CHROMUX_STATUS_APP_BUILD:-1}"
+CONFIGURATION="${CHROMUX_STATUS_APP_CONFIGURATION:-release}"
 
 rm -rf "$APP_DIR" "$LEGACY_APP_DIR"
 mkdir -p "$MACOS" "$RESOURCES/status-app"
 
-swiftc \
-  "$ROOT/apps/macos-status-bar/src/ChromuxStatusBar/main.swift" \
-  -o "$MACOS/$APP_NAME" \
-  -framework AppKit \
-  -framework WebKit \
-  -framework ServiceManagement
+swift build --package-path "$PKG_DIR" -c "$CONFIGURATION" --product ChromuxStatusBar
+BIN_PATH="$(swift build --package-path "$PKG_DIR" -c "$CONFIGURATION" --show-bin-path)/ChromuxStatusBar"
 
-cp "$ROOT/apps/macos-status-bar/assets/chromux.icns" "$RESOURCES/chromux.icns"
+cp "$BIN_PATH" "$MACOS/$APP_NAME"
+
+cp "$PKG_DIR/assets/chromux.icns" "$RESOURCES/chromux.icns"
 cp "$ROOT/chromux.mjs" "$RESOURCES/chromux.mjs"
 cp "$ROOT/status-app/index.html" "$RESOURCES/status-app/index.html"
 cp "$ROOT/status-app/app.js" "$RESOURCES/status-app/app.js"
@@ -52,7 +52,7 @@ cat > "$CONTENTS/Info.plist" <<PLIST
   <key>LSMinimumSystemVersion</key>
   <string>13.0</string>
   <key>LSUIElement</key>
-  <true/>
+  <false/>
   <key>NSHighResolutionCapable</key>
   <true/>
 </dict>
