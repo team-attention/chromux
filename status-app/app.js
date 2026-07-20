@@ -73,6 +73,43 @@ function toast(message) {
   toast.timer = setTimeout(() => el.classList.remove('is-visible'), 3200);
 }
 
+// In-page confirmation. window.confirm() returns false without prompting inside
+// an unconfigured WKWebView (the menu bar app), which silently swallowed every
+// destructive action; this modal works in any browser or embedded webview.
+function confirmModalOpen() {
+  return !$('#confirmModal').hidden;
+}
+
+function confirmDialog(message) {
+  return new Promise((resolve) => {
+    const overlay = $('#confirmModal');
+    const okBtn = $('#confirmModalConfirm');
+    const cancelBtn = $('#confirmModalCancel');
+    $('#confirmModalMessage').textContent = message;
+    overlay.hidden = false;
+    const cleanup = (result) => {
+      overlay.hidden = true;
+      okBtn.removeEventListener('click', onOk);
+      cancelBtn.removeEventListener('click', onCancel);
+      overlay.removeEventListener('mousedown', onBackdrop);
+      document.removeEventListener('keydown', onKey);
+      resolve(result);
+    };
+    const onOk = () => cleanup(true);
+    const onCancel = () => cleanup(false);
+    const onBackdrop = (event) => { if (event.target === overlay) cleanup(false); };
+    const onKey = (event) => {
+      if (event.key === 'Escape') cleanup(false);
+      else if (event.key === 'Enter') cleanup(true);
+    };
+    okBtn.addEventListener('click', onOk);
+    cancelBtn.addEventListener('click', onCancel);
+    overlay.addEventListener('mousedown', onBackdrop);
+    document.addEventListener('keydown', onKey);
+    okBtn.focus();
+  });
+}
+
 async function api(path, options = {}) {
   const res = await fetch(path, {
     ...options,
@@ -294,7 +331,7 @@ async function deleteSelectedProfiles() {
   if (!profiles.length) return;
   const preview = profiles.slice(0, 6).join(', ');
   const suffix = profiles.length > 6 ? ` and ${profiles.length - 6} more` : '';
-  if (!confirm(`Delete ${profiles.length} profile${profiles.length === 1 ? '' : 's'} and local profile files?\n\n${preview}${suffix}`)) return;
+  if (!(await confirmDialog(`Delete ${profiles.length} profile${profiles.length === 1 ? '' : 's'} and local profile files?\n\n${preview}${suffix}`))) return;
   try {
     const body = await api('/api/profiles/delete', {
       method: 'POST',
@@ -412,7 +449,7 @@ async function runLifecycle(kind) {
     toast('No Task selected');
     return;
   }
-  if (action === 'delete' && !confirm(`Confirm ${kind.replace('-', ' ')}?`)) return;
+  if (action === 'delete' && !(await confirmDialog(`Confirm ${kind.replace('-', ' ')}?`))) return;
   try {
     const result = await api(`/api/activity/${action}`, {
       method: 'POST',
@@ -460,3 +497,22 @@ $$('[data-lifecycle]').forEach(button => {
 });
 
 refresh().catch(err => toast(err.message));
+
+// Keep the open dashboard live: poll state so profiles created or deleted
+// elsewhere show up without a manual reload. Skip while the user is mid-search,
+// mid-confirm, or the tab is hidden, and never overlap in-flight refreshes.
+const AUTO_REFRESH_MS = 5000;
+let autoRefreshInFlight = false;
+setInterval(async () => {
+  if (document.hidden || confirmModalOpen()) return;
+  if (document.activeElement === $('#profileSearch')) return;
+  if (autoRefreshInFlight) return;
+  autoRefreshInFlight = true;
+  try {
+    await refresh();
+  } catch {
+    // Silent for background polls; the manual refresh button surfaces errors.
+  } finally {
+    autoRefreshInFlight = false;
+  }
+}, AUTO_REFRESH_MS);

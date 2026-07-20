@@ -897,3 +897,49 @@ th {
     display: none;
   }
 }
+
+/* In-page confirm dialog. Replaces window.confirm(), which returns false
+   without prompting inside an unconfigured WKWebView (menu bar app), so
+   destructive actions silently no-op there. */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-lg);
+  background: color-mix(in srgb, var(--canvas) 72%, transparent);
+  z-index: 50;
+}
+
+.modal-overlay[hidden] {
+  display: none;
+}
+
+.modal-card {
+  width: min(440px, 100%);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-lg);
+  background: var(--surface-2);
+  color: var(--ink);
+  padding: var(--space-lg);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+}
+
+.modal-message {
+  margin: 0 0 var(--space-lg);
+  font-size: 14px;
+  line-height: 1.5;
+  white-space: pre-line;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-xs);
+}
+
+.modal-actions button {
+  min-height: 34px;
+  padding: 0 var(--space-md);
+}

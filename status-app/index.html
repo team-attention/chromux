@@ -138,6 +138,15 @@
         </section>
       </main>
     </div>
+    <div id="confirmModal" class="modal-overlay" hidden>
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="confirmModalMessage">
+        <p id="confirmModalMessage" class="modal-message"></p>
+        <div class="modal-actions">
+          <button id="confirmModalCancel" class="modal-cancel">Cancel</button>
+          <button id="confirmModalConfirm" class="danger">Confirm</button>
+        </div>
+      </div>
+    </div>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
     <script src="/app.js"></script>
   </body>
