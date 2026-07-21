@@ -633,6 +633,42 @@ text without a clickable `@ref` — take a snapshot to get its ref.
 | `watch <session> network --all` | Capture all requests |
 | `watch <session> network --off` | Disable network capture |
 
+### Screen Recording
+
+`chromux record` captures a session's tab content as agent/QA evidence — bug
+repro, PR verification, regression proof. It requires `ffmpeg` as a system binary
+(set `chromePath`-style via `ffmpegPath` in `~/.chromux/config.json` if it is
+not on `PATH`); like Chrome, it is never an npm dependency.
+
+| Command | Description |
+|---------|-------------|
+| `record <session> start [--fps N] [--quality N]` | Start capturing the tab to mp4 |
+| `record <session> stop [path] [--discard]` | Finalize to mp4, or cancel with `--discard` |
+
+```bash
+chromux record s1 start
+chromux click s1 @1
+chromux record s1 stop            # -> ~/.chromux/recordings/<profile>/chromux-record-s1-<ts>.mp4
+```
+
+- A cursor/click overlay is injected while recording: a dot + ripple track
+  click/hover/drag, a border flash marks fill/type/press targets, and
+  scroll/wait get no overlay — the finished video shows what was clicked, not
+  just what changed.
+- The video starts at the first tracked action after `start`, not the `start`
+  call itself, so a lead-in before the agent's first real action never
+  appears in the output; idle time *between* actions is left untouched.
+- A forgotten recording auto-stops: idle-timeout (default 60s,
+  `--idle-timeout MS`) fires once no command is in flight on the session, and
+  an absolute `--max-duration` cap (default 30min) fires regardless of
+  activity.
+- If ffmpeg crashes or disk fills mid-recording, `stop` still salvages
+  whatever was captured into a valid, playable mp4 rather than discarding it.
+- One active recording per session; a second `start` returns a clear
+  "already recording" error instead of stacking.
+- `~/.chromux/recordings/<profile>/` has no auto-cleanup — recordings are
+  larger than screenshots/downloads and can accumulate; clean up manually.
+
 ### Compatibility Aliases
 
 The older `eval`, `scroll`, `wait`, `console`, `network`, and `scroll-until`

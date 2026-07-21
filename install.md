@@ -527,6 +527,20 @@ Program Files and LocalAppData. If Chrome is installed somewhere else, set
 `chromePath` in `~/.chromux/config.json` on macOS/Linux or
 `%USERPROFILE%\.chromux\config.json` on Windows.
 
+### `chromux record` says ffmpeg is not found
+
+`chromux record` needs `ffmpeg` as a system binary (never an npm dependency),
+the same way chromux needs Chrome itself. Install it:
+
+```bash
+brew install ffmpeg          # macOS
+apt install ffmpeg           # Debian/Ubuntu
+winget install ffmpeg        # Windows
+```
+
+If it is installed somewhere not on `PATH`, set `ffmpegPath` in
+`~/.chromux/config.json`, following the same pattern as `chromePath` above.
+
 ### Chrome starts but CDP/DevTools never opens on macOS
 
 If `chromux open` hangs or `http://127.0.0.1:<port>/json/version` refuses a

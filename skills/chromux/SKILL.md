@@ -273,6 +273,15 @@ I'm looking at". Otherwise use an isolated profile.
   (`fill`/`type` text and inline code are never stored raw). `chromux app`
   serves the local profile/activity dashboard. Set `CHROMUX_TASK=<label>`
   (short, non-secret) to group related commands into a Task timeline.
+- `record <s> start` / `record <s> stop [path] [--discard]` capture the whole
+  session as evidence for a bug report or PR — a single mp4 beats a
+  screenshot sequence for showing what was clicked, in what order, and when.
+  Requires `ffmpeg` on `PATH` or `ffmpegPath` in `~/.chromux/config.json`.
+  Recording starts at the first action after `start`, not the `start` call
+  itself, so open with `record start` before the real work rather than
+  timing it around a specific step. It auto-stops if forgotten (idle-timeout,
+  default 60s) and salvages whatever was captured if ffmpeg crashes. One
+  active recording per session — `stop` before starting another.
 
 ## Site Knowledge
 

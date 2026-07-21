@@ -368,6 +368,11 @@ Prefer this order:
    sequence into one fast round-trip.
 7. `cdp` for precise protocol operations
 8. `screenshot` for visual evidence a text snapshot cannot capture
+9. `record <s> start` before a multi-step flow and `record <s> stop [path]`
+   after it, when a single screenshot can't show what was clicked, in what
+   order, or when — e.g. a bug repro or PR-verification handoff. Requires
+   `ffmpeg`; the video starts at the first action after `start`, so open the
+   recording before the real work rather than around one specific step.
 
 Record enough evidence to distinguish:
 - actually verified page content

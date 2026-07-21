@@ -754,6 +754,43 @@ function findChrome(cfg, platform = process.platform, env = process.env) {
   return null;
 }
 
+// ffmpeg is a required external binary for `chromux record` (like Chrome
+// itself), never an npm dependency. Same override-then-PATH-search pattern
+// as findChrome/chromePath above.
+function findFfmpeg(cfg = {}, platform = process.platform, env = process.env) {
+  if (cfg.ffmpegPath && fs.existsSync(cfg.ffmpegPath)) return cfg.ffmpegPath;
+  const dirs = String(env.PATH || '').split(path.delimiter).filter(Boolean);
+  const names = platform === 'win32' ? ['ffmpeg.exe', 'ffmpeg.cmd', 'ffmpeg'] : ['ffmpeg'];
+  for (const dir of dirs) {
+    for (const name of names) {
+      const candidate = path.join(dir, name);
+      if (fs.existsSync(candidate)) return candidate;
+    }
+  }
+  return null;
+}
+
+function ffmpegInstallHint(platform = process.platform) {
+  if (platform === 'darwin') return 'brew install ffmpeg';
+  if (platform === 'win32') return 'winget install ffmpeg (or see https://ffmpeg.org/download.html)';
+  return 'apt install ffmpeg (Debian/Ubuntu) or your distro package manager (see https://ffmpeg.org/download.html)';
+}
+
+function ffmpegNotFoundError() {
+  return httpErr(503, `ffmpeg not found. Install it (${ffmpegInstallHint()}) or set ffmpegPath in ~/.chromux/config.json`);
+}
+
+// Recordings get their own directory (not downloads/) since they're a
+// different kind of artifact with no auto-cleanup policy — see AGENTS.md /
+// the record PRD for the no-retention-in-v1 decision.
+function recordingsDir(profileName) {
+  return path.join(CHROMUX_HOME, 'recordings', profileName);
+}
+
+function defaultRecordingPath(profileName, session) {
+  return path.join(recordingsDir(profileName), `chromux-record-${session}-${Date.now()}.mp4`);
+}
+
 // ============================================================
 // State file helpers (per-profile cache: pid, Chrome CDP port, daemon endpoint)
 // ============================================================
@@ -3609,6 +3646,22 @@ async function startDaemon(profileName, port, daemonPort) {
     const url = new URL(req.url, 'http://x');
     const body = ['POST', 'PUT'].includes(req.method) ? await readBody(req) : null;
 
+    // Every session-bearing request bumps an in-flight counter and, while a
+    // recording is active, stamps firstActionAt on the first non-record-*
+    // request — this is the single hook point the record idle-timeout
+    // watchdog and head-trim both read (see finalizeRecording/startRecording
+    // above and the recording watchdog below). Reusing this one wrapper
+    // instead of touching every action handler keeps click/fill/eval/etc.
+    // completely unaware of recording state.
+    const recordSession = body && typeof body.session === 'string' ? sessions.get(body.session) : null;
+    if (recordSession) {
+      recordSession._inFlight = (recordSession._inFlight || 0) + 1;
+      if (recordSession._recording && recordSession._recording.firstActionAt == null
+        && url.pathname !== '/record-start' && url.pathname !== '/record-stop') {
+        recordSession._recording.firstActionAt = Date.now();
+      }
+    }
+
     // Wrap handler with timeout to prevent daemon hang
     const handlerPromise = routeWithGate(gate, () =>
       route(port, req.method, url.pathname + url.search, body, sessions, isHeadless, settings, gate, browserState)
@@ -3627,6 +3680,8 @@ async function startDaemon(profileName, port, daemonPort) {
       if (res.writableEnded) return;
       res.writeHead(err.status || 500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: err.message }));
+    } finally {
+      if (recordSession) recordSession._inFlight = Math.max(0, (recordSession._inFlight || 1) - 1);
     }
   });
 
@@ -3644,12 +3699,31 @@ async function startDaemon(profileName, port, daemonPort) {
       const tooOld = settings.sessionTtlMs > 0 && now - s.createdAt > settings.sessionTtlMs;
       const idle = settings.idleTtlMs > 0 && now - s.lastUsedAt > settings.idleTtlMs;
       if (dead || tooOld || idle) {
+        if (s._recording) await finalizeRecording(s).catch(() => {});
         s.cdp.close();
         if (!dead) await closeTab(port, s.targetId).catch(() => {});
         sessions.delete(id);
       }
     }
   }, settings.mode === 'crawl' ? 5000 : 30000);
+
+  // Watchdog: forgotten-recording safety net. Idle-timeout only fires once
+  // no session command is in flight (a single long-running command must not
+  // be mistaken for inactivity); the absolute max-duration cap fires
+  // regardless, even if actions keep trickling in. Runs every second so
+  // tests can use short --idle-timeout/--max-duration overrides.
+  setInterval(async () => {
+    const now = Date.now();
+    for (const s of sessions.values()) {
+      const rec = s._recording;
+      if (!rec || rec.stopping) continue;
+      const idleExceeded = now - s.lastUsedAt > rec.idleTimeoutMs && (s._inFlight || 0) === 0;
+      const maxDurationExceeded = now - rec.startedAt > rec.maxDurationMs;
+      if (idleExceeded || maxDurationExceeded) {
+        await finalizeRecording(s).catch(() => {});
+      }
+    }
+  }, 1000);
 
   // Watchdog: verify Chrome CDP is alive every 60s, exit if dead. Also
   // re-establish the browser-level connection if it dropped.
@@ -4127,6 +4201,115 @@ const DEEP_QUERY_JS = `
   }
 `;
 
+// ---- Recording cursor/click overlay ----
+// chromux dispatches synthetic Input.dispatchMouseEvent calls, so no real OS
+// cursor moves while recording. This in-page overlay makes click/hover/drag
+// locations and fill/type/press targets visible in the finished video —
+// injected on `record start`, removed on `record stop`. Best-effort only:
+// callers below swallow failures so a broken overlay never breaks the actual
+// action.
+const RECORD_OVERLAY_BOOTSTRAP_JS = `(() => {
+  if (window.__chromuxOverlay) return true;
+  const root = document.createElement('div');
+  root.id = '__chromux_overlay_root';
+  root.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:2147483647;';
+  const cursor = document.createElement('div');
+  cursor.style.cssText = 'position:absolute;width:16px;height:16px;margin:-8px 0 0 -8px;border-radius:50%;background:rgba(255,64,64,.85);border:2px solid #fff;box-shadow:0 0 4px rgba(0,0,0,.5);display:none;transition:left 60ms linear,top 60ms linear;';
+  root.appendChild(cursor);
+  const style = document.createElement('style');
+  style.textContent = '@keyframes __chromux_ripple{from{transform:scale(1);opacity:1}to{transform:scale(4);opacity:0}}@keyframes __chromux_flash{from{opacity:1}to{opacity:0}}';
+  root.appendChild(style);
+  (document.documentElement || document.body).appendChild(root);
+  function cursorTo(x, y) {
+    cursor.style.left = x + 'px';
+    cursor.style.top = y + 'px';
+    cursor.style.display = 'block';
+  }
+  function ripple(x, y) {
+    cursorTo(x, y);
+    const r = document.createElement('div');
+    r.style.cssText = 'position:absolute;left:' + x + 'px;top:' + y + 'px;width:8px;height:8px;margin:-4px 0 0 -4px;border-radius:50%;border:2px solid rgba(255,64,64,.9);animation:__chromux_ripple 500ms ease-out forwards;';
+    root.appendChild(r);
+    setTimeout(() => r.remove(), 550);
+  }
+  function flash(x, y, w, h) {
+    const f = document.createElement('div');
+    f.style.cssText = 'position:absolute;left:' + x + 'px;top:' + y + 'px;width:' + w + 'px;height:' + h + 'px;border:2px solid rgba(255,180,0,.9);border-radius:4px;animation:__chromux_flash 500ms ease-out forwards;';
+    root.appendChild(f);
+    setTimeout(() => f.remove(), 550);
+  }
+  window.__chromuxOverlay = {
+    cursor: cursorTo,
+    ripple,
+    flash,
+    destroy() {
+      root.remove();
+      delete window.__chromuxOverlay;
+    },
+  };
+  return true;
+})()`;
+
+async function overlayInject(s) {
+  if (!s?._recording) return;
+  try { await s.cdp.send('Runtime.evaluate', { expression: RECORD_OVERLAY_BOOTSTRAP_JS }, 3000); } catch {}
+}
+
+async function overlayRemove(s) {
+  try {
+    await s.cdp.send('Runtime.evaluate', {
+      expression: 'window.__chromuxOverlay && window.__chromuxOverlay.destroy()',
+    }, 3000);
+  } catch {}
+}
+
+async function overlayCursor(s, x, y) {
+  if (!s?._recording || !Number.isFinite(x) || !Number.isFinite(y)) return;
+  try {
+    await s.cdp.send('Runtime.evaluate', {
+      expression: `window.__chromuxOverlay && window.__chromuxOverlay.cursor(${Number(x)}, ${Number(y)})`,
+    }, 3000);
+  } catch {}
+}
+
+async function overlayRipple(s, x, y) {
+  if (!s?._recording || !Number.isFinite(x) || !Number.isFinite(y)) return;
+  try {
+    await s.cdp.send('Runtime.evaluate', {
+      expression: `window.__chromuxOverlay && window.__chromuxOverlay.ripple(${Number(x)}, ${Number(y)})`,
+    }, 3000);
+  } catch {}
+}
+
+async function overlayFlashSelector(s, selector) {
+  if (!s?._recording || !selector) return;
+  try {
+    const sel = refToSelector(selector);
+    await s.cdp.send('Runtime.evaluate', {
+      expression: `(() => { ${DEEP_QUERY_JS}
+        const el = deepQuery(${JSON.stringify(sel)});
+        if (!el || !window.__chromuxOverlay) return;
+        const r = el.getBoundingClientRect();
+        window.__chromuxOverlay.flash(r.left, r.top, r.width, r.height);
+      })()`,
+    }, 3000);
+  } catch {}
+}
+
+async function overlayFlashActiveElement(s) {
+  if (!s?._recording) return;
+  try {
+    await s.cdp.send('Runtime.evaluate', {
+      expression: `(() => {
+        const el = document.activeElement;
+        if (!el || !window.__chromuxOverlay) return;
+        const r = el.getBoundingClientRect();
+        window.__chromuxOverlay.flash(r.left, r.top, r.width, r.height);
+      })()`,
+    }, 3000);
+  } catch {}
+}
+
 // Where autocomplete/dropdown suggestions usually render; shared by the
 // daemon fill --pick path (see also snippets/_builtin/search-and-pick.js).
 const PICK_CANDIDATE_SEL = '[role="option"],[role="menuitem"],li,[class*="suggest"] *,[class*="autocomplete"] *,[class*="option"]';
@@ -4315,6 +4498,213 @@ async function readPageInfo(port, targetId, cdp, settings) {
   }
 }
 
+// ============================================================
+// Screen recording (`chromux record start|stop`) — CDP screencast frames
+// piped into a spawned ffmpeg process. Design notes:
+//  - ffmpeg writes continuously to a temp file with per-frame mp4
+//    fragmentation (+frag_every_frame+empty_moov), so the temp file is a
+//    valid, playable mp4 at (almost) any point in time — including after an
+//    ffmpeg crash or a disk-full abort. That is the whole crash/disk-full
+//    "best-effort salvage" story: there is no separate salvage code path,
+//    the streaming format itself is already salvage-safe.
+//  - Head-trim (start the finished video at the first tracked action, not
+//    the `record start` call) is a second, fast `-c copy -ss <offset>`
+//    remux pass on stop — cheap because it never re-encodes.
+//  - `firstActionAt` is stamped by the daemon's request wrapper (see
+//    startDaemon) the first time any other command touches the session
+//    while a recording is active, reusing the exact touchSession/lastUsedAt
+//    activity signal the idle-timeout watchdog also reads.
+//  - Frames are captured by POLLING Page.captureScreenshot on a fixed
+//    `1000/fps` interval rather than subscribing to Page.screencastFrame:
+//    CDP's screencast only pushes a frame when the compositor produces a new
+//    one, so a mostly-static page (the common case) yields almost no frames
+//    and an encoded video whose duration is nowhere near the real elapsed
+//    time. Polling guarantees a frame every tick regardless of page
+//    activity, so idle stretches (an inserted `wait`, per D-08) show up in
+//    the output at their real length, and a plain fixed `-r <fps>` on the
+//    ffmpeg side is enough — no wallclock-timestamp tricks needed.
+// ============================================================
+
+const RECORD_DEFAULT_FPS = 10;
+const RECORD_DEFAULT_QUALITY = 70;
+const RECORD_DEFAULT_IDLE_TIMEOUT_MS = 60000;
+const RECORD_DEFAULT_MAX_DURATION_MS = 30 * 60 * 1000;
+const RECORD_TRIM_THRESHOLD_MS = 300;
+
+// ffprobe isn't guaranteed alongside a minimal ffmpeg install, so read the
+// "Duration: HH:MM:SS.cc" line ffmpeg itself prints for any input instead of
+// requiring a second binary.
+function probeDurationMs(ffmpeg, filePath) {
+  const result = spawnSync(ffmpeg, ['-i', filePath], { encoding: 'utf8' });
+  const match = /Duration:\s*(\d+):(\d+):(\d+\.\d+)/.exec(result.stderr || '');
+  if (!match) return null;
+  const [, h, m, sec] = match;
+  return Math.round((Number(h) * 3600 + Number(m) * 60 + Number(sec)) * 1000);
+}
+
+function ffmpegRecordArgs(tempPath, fps) {
+  // A keyframe roughly every second (rather than x264's default ~250-frame
+  // GOP) keeps the head-trim `-ss ... -c copy` remux pass in finalizeRecording
+  // accurate to within about a second instead of snapping to a far-off
+  // keyframe.
+  return [
+    '-y',
+    '-f', 'mjpeg',
+    '-r', String(fps),
+    '-i', 'pipe:0',
+    '-vf', 'pad=ceil(iw/2)*2:ceil(ih/2)*2',
+    '-pix_fmt', 'yuv420p',
+    '-c:v', 'libx264',
+    '-preset', 'ultrafast',
+    '-crf', '28',
+    '-g', String(fps),
+    '-keyint_min', String(fps),
+    '-movflags', '+frag_every_frame+empty_moov+default_base_moof',
+    tempPath,
+  ];
+}
+
+async function startRecording(s, { session, profileName, fps, quality, idleTimeoutMs, maxDurationMs, outputPath }) {
+  if (s._recording) throw httpErr(409, 'already recording — call `chromux record stop` first');
+  const cfg = loadConfig();
+  const ffmpeg = findFfmpeg(cfg);
+  if (!ffmpeg) throw ffmpegNotFoundError();
+
+  const resolvedOutput = resolveSafeArtifactPath(
+    outputPath || defaultRecordingPath(profileName, session),
+    'Recording',
+  );
+  const tempPath = path.join(path.dirname(resolvedOutput), `.chromux-record-${session}-${process.pid}-${Date.now()}.tmp.mp4`);
+
+  const rec = {
+    tempPath, outputPath: resolvedOutput, session,
+    startedAt: Date.now(), firstActionAt: null,
+    idleTimeoutMs: idleTimeoutMs > 0 ? idleTimeoutMs : RECORD_DEFAULT_IDLE_TIMEOUT_MS,
+    maxDurationMs: maxDurationMs > 0 ? maxDurationMs : RECORD_DEFAULT_MAX_DURATION_MS,
+    fps: fps > 0 ? fps : RECORD_DEFAULT_FPS,
+    quality: quality > 0 ? Math.min(100, quality) : RECORD_DEFAULT_QUALITY,
+    frameCount: 0, capturing: false,
+    stderr: [], exited: null, stopping: false, timer: null,
+  };
+
+  let proc;
+  try {
+    proc = spawn(ffmpeg, ffmpegRecordArgs(tempPath, rec.fps), { stdio: ['pipe', 'ignore', 'pipe'] });
+  } catch (err) {
+    throw httpErr(500, `Failed to start ffmpeg: ${err.message}`);
+  }
+  rec.proc = proc;
+  proc.stderr?.on('data', (chunk) => {
+    rec.stderr.push(String(chunk));
+    if (rec.stderr.length > 40) rec.stderr.shift();
+  });
+  proc.on('exit', (code, signal) => { rec.exited = { code, signal }; });
+  proc.on('error', (err) => { rec.exited = { code: null, signal: null, error: err.message }; });
+
+  s._recording = rec;
+
+  const captureFrame = async () => {
+    if (!s._recording || s._recording !== rec || rec.exited || rec.stopping || rec.capturing) return;
+    rec.capturing = true;
+    try {
+      const shot = await s.cdp.send('Page.captureScreenshot', { format: 'jpeg', quality: rec.quality }, 3000);
+      if (rec.exited || rec.stopping) return;
+      rec.proc.stdin.write(Buffer.from(shot.data, 'base64'));
+      rec.frameCount++;
+    } catch (err) {
+      // A single missed frame (e.g. navigation in flight) just means the
+      // previous frame holds a beat longer — never worth failing the
+      // recording over.
+      if (process.env.CHROMUX_RECORD_DEBUG) process.stderr.write(`[record-debug] captureFrame error: ${err.message}\n`);
+    } finally {
+      rec.capturing = false;
+    }
+  };
+  rec.timer = setInterval(captureFrame, Math.max(1, Math.round(1000 / rec.fps)));
+  captureFrame();
+
+  await overlayInject(s);
+  return rec;
+}
+
+// Shared by explicit `record stop` and the idle/max-duration watchdog.
+async function finalizeRecording(s, { discard = false } = {}) {
+  const rec = s._recording;
+  if (!rec) return null;
+  rec.stopping = true;
+
+  if (rec.timer) clearInterval(rec.timer);
+  await overlayRemove(s);
+
+  if (!rec.exited) {
+    await new Promise((resolve) => {
+      const proc = rec.proc;
+      const timer = setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} resolve(); }, 5000);
+      proc.once('exit', () => { clearTimeout(timer); resolve(); });
+      try { proc.stdin.end(); } catch { clearTimeout(timer); resolve(); }
+    });
+  }
+
+  delete s._recording;
+
+  if (discard) {
+    for (const p of [rec.tempPath, rec.outputPath]) {
+      try { fs.unlinkSync(p); } catch {}
+    }
+    return { discarded: true, session: rec.session };
+  }
+
+  let tempStat = null;
+  try { tempStat = fs.statSync(rec.tempPath); } catch {}
+  if (!tempStat || tempStat.size === 0) {
+    const detail = rec.stderr.join('').slice(-500);
+    throw httpErr(500, `Recording produced no output (ffmpeg may have failed)${detail ? `: ${detail}` : ''}`);
+  }
+
+  const offsetMs = rec.firstActionAt ? Math.max(0, rec.firstActionAt - rec.startedAt) : 0;
+  const cfg = loadConfig();
+  const ffmpeg = findFfmpeg(cfg);
+  // Always re-encode tempPath -> outputPath rather than just renaming it,
+  // even with no head-trim offset: a SIGKILLed ffmpeg (D-24 crash salvage)
+  // leaves a torn final fragment, and a plain `-c copy` remux just copies
+  // those corrupt trailing bytes through unchanged. Decoding and re-encoding
+  // (with corrupt-frame errors ignored) naturally stops at the last frame
+  // it could actually decode, dropping the unusable tail instead of
+  // shipping it. The recording is already ultrafast/CRF-encoded, so a
+  // second ultrafast pass over what's normally a short clip is cheap.
+  let remuxed = false;
+  if (ffmpeg) {
+    const args = offsetMs > RECORD_TRIM_THRESHOLD_MS ? ['-ss', String(offsetMs / 1000)] : [];
+    const result = spawnSync(ffmpeg, [
+      '-y', '-fflags', '+discardcorrupt', '-err_detect', 'ignore_err', ...args, '-i', rec.tempPath,
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28',
+      '-movflags', '+frag_every_frame+empty_moov+default_base_moof',
+      rec.outputPath,
+    ], { stdio: 'ignore' });
+    if (result.status === 0) {
+      try {
+        const remuxedStat = fs.statSync(rec.outputPath);
+        if (remuxedStat.size > 0) remuxed = true;
+      } catch {}
+    }
+  }
+  const trimmed = remuxed && offsetMs > RECORD_TRIM_THRESHOLD_MS;
+  if (!remuxed) {
+    try { fs.renameSync(rec.tempPath, rec.outputPath); }
+    catch { fs.copyFileSync(rec.tempPath, rec.outputPath); }
+  }
+  try { fs.unlinkSync(rec.tempPath); } catch {}
+
+  const finalStat = fs.statSync(rec.outputPath);
+  const probed = ffmpeg ? probeDurationMs(ffmpeg, rec.outputPath) : null;
+  return {
+    path: rec.outputPath,
+    durationMs: probed ?? Math.max(0, Date.now() - rec.startedAt - (trimmed ? offsetMs : 0)),
+    bytes: finalStat.size,
+    discarded: false,
+  };
+}
+
 async function route(port, method, routePath, body, sessions, isHeadless = false, settings = modeSettings('default'), gate = null, browserState = null) {
 
   if (routePath === '/health')
@@ -4422,7 +4812,12 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
           await cdp.send('Network.setBlockedURLs', { urls: CRAWL_BLOCK_URLS });
         }
         cdp.onDisconnect = (reason) => {
-          if (s) disposeOopifRouting(s);
+          if (s) {
+            disposeOopifRouting(s);
+            // Unexpected disconnect (crash, tab closed outside chromux) while
+            // recording: same best-effort salvage as an explicit stop/prune.
+            if (s._recording) finalizeRecording(s).catch(() => {});
+          }
           sessions.delete(session);
         };
         const now = Date.now();
@@ -4742,6 +5137,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
       y: point.y,
       button: 'none',
     });
+    await overlayCursor(s, point.x, point.y);
     await sleep(100);
     const result = {
       hovered: point.target,
@@ -4779,8 +5175,10 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
       end = await resolveActionTarget(s.cdp, to, 'Drag destination', end.coordinateSpace, { scrollIntoView: false });
     }
     const selectedMode = mode === 'auto' ? (start.geometry?.draggable ? 'html5' : 'pointer') : mode;
+    await overlayCursor(s, start.x, start.y);
     if (selectedMode === 'html5') await dispatchHtml5Drag(s.cdp, start, end, steps, holdMs);
     else await dispatchPointerDrag(s.cdp, start, end, steps, holdMs);
+    await overlayRipple(s, end.x, end.y);
     await sleep(150);
     const result = {
       dragged: {
@@ -4849,6 +5247,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
       await s.cdp.send('Input.dispatchMouseEvent', {
         type: 'mouseReleased', x, y, button, buttons: 0, clickCount, pointerType: 'mouse',
       });
+      await overlayRipple(s, x, y);
       await sleep(100);
       const xyVerifyMs = resolveVerifyMs(body, settings);
       const clicked = {
@@ -5013,6 +5412,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
       await s.cdp.send('Input.dispatchMouseEvent', {
         type: 'mouseReleased', x: point.x, y: point.y, button, buttons: 0, clickCount, pointerType: 'mouse',
       });
+      await overlayRipple(s, point.x, point.y);
     }
     await sleep(500);
     const clickedValue = selector || { text: body.text };
@@ -5162,6 +5562,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
         throw httpErr(400, `Contenteditable fill was rejected: expected ${JSON.stringify(text)}, observed ${JSON.stringify(fillDetails.observedText ?? '')}`);
       }
     }
+    await overlayFlashSelector(s, selector);
     let picked = null;
     let pickEffect = null;
     if (wantsPick) ({ picked, pickEffect } = await pickSuggestion(s, sel, selector, text, body));
@@ -5188,6 +5589,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     touchSession(s);
     await s.cdp.send('Page.bringToFront', {});
     await typeFocusedText(s.cdp, text);
+    await overlayFlashActiveElement(s);
     const verifyMs = resolveVerifyMs(body, settings);
     if (verifyMs != null) {
       const changed = await captureVerifyDiff(s, verifyMs);
@@ -5203,6 +5605,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     touchSession(s);
     const finishPress = actionFinisher(port, sessions, session, s, browserState, settings);
     await pressKey(s.cdp, key);
+    await overlayFlashActiveElement(s);
     const verifyMs = resolveVerifyMs(body, settings);
     if (verifyMs != null) {
       const changed = await captureVerifyDiff(s, verifyMs);
@@ -5548,6 +5951,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     let pageInfo = null;
     let cleanup = null;
     if (s) {
+      if (s._recording) await finalizeRecording(s).catch(() => {});
       try {
         pageInfo = await readPageInfo(port, s.targetId, s.cdp, settings);
         knowledgeHint = siteKnowledgeHintForUrl(pageInfo.url);
@@ -5565,6 +5969,35 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     if (knowledgeHint) result.knowledgeHint = knowledgeHint;
     if (cleanup) result.cleanup = cleanup;
     return result;
+  }
+
+  // ---- Screen recording (on-demand, agent/QA evidence capture) ----
+
+  if (routePath === '/record-start' && method === 'POST') {
+    const { session, path: outputPath, fps, quality, idleTimeoutMs, maxDurationMs } = body;
+    const s = getSession(sessions, session);
+    touchSession(s);
+    await startRecording(s, {
+      session, profileName: settings.profileName, fps: Number(fps), quality: Number(quality),
+      idleTimeoutMs: Number(idleTimeoutMs), maxDurationMs: Number(maxDurationMs), outputPath,
+    });
+    return {
+      recording: true,
+      session,
+      startedAt: s._recording.startedAt,
+      next: `chromux record ${session} stop  # finalize and get the mp4 path`,
+    };
+  }
+
+  if (routePath === '/record-stop' && method === 'POST') {
+    const { session, path: outputPath, discard } = body;
+    const s = getSession(sessions, session);
+    touchSession(s);
+    if (!s._recording) throw httpErr(400, 'not recording — call `chromux record start` first');
+    if (outputPath && !discard) s._recording.outputPath = resolveSafeArtifactPath(outputPath, 'Recording');
+    const result = await finalizeRecording(s, { discard: !!discard });
+    if (result.discarded) return { discarded: true, session };
+    return { ...result, next: 'Play back the file, or attach it as PR/bug-report evidence' };
   }
 
   // ---- Console capture (on-demand, opt-in to preserve stealth) ----
@@ -5710,7 +6143,7 @@ async function route(port, method, routePath, body, sessions, isHeadless = false
     return { stopping: true };
   }
 
-  throw httpErr(404, `Not found: ${method} ${routePath}. Known routes: POST /open /run /eval /cdp /click /hover /drag /fill /type /press /screenshot /scroll /scroll-until /wait /wait-for-text /console /network /stop, GET /health /list /snapshot/<session> /show/<session>, DELETE /session/<session>`);
+  throw httpErr(404, `Not found: ${method} ${routePath}. Known routes: POST /open /run /eval /cdp /click /hover /drag /fill /type /press /screenshot /scroll /scroll-until /wait /wait-for-text /console /network /record-start /record-stop /stop, GET /health /list /snapshot/<session> /show/<session>, DELETE /session/<session>`);
 }
 
 // ============================================================
@@ -7372,6 +7805,36 @@ async function cmdWatch(args, sock) {
   process.exit(1);
 }
 
+// record: agent/QA evidence capture. start begins a CDP screencast -> ffmpeg
+// pipeline for the session's tab content; stop finalizes it to an mp4 (or
+// discards it with --discard). See skills/chromux for the full contract.
+async function cmdRecord(args, sock) {
+  const session = args[0];
+  const what = args[1];
+  if (!session || !what || !['start', 'stop'].includes(what)) {
+    console.error('Usage: chromux record <session> start [--fps N] [--quality N] [--idle-timeout MS] [--max-duration MS]');
+    console.error('       chromux record <session> stop [path] [--discard]');
+    process.exit(1);
+  }
+  if (what === 'start') {
+    const fps = getArgValue(args, '--fps');
+    const quality = getArgValue(args, '--quality');
+    const idleTimeoutMs = getArgValue(args, '--idle-timeout');
+    const maxDurationMs = getArgValue(args, '--max-duration');
+    return cliReq('POST', '/record-start', {
+      session,
+      fps: fps != null ? Number(fps) : undefined,
+      quality: quality != null ? Number(quality) : undefined,
+      idleTimeoutMs: idleTimeoutMs != null ? Number(idleTimeoutMs) : undefined,
+      maxDurationMs: maxDurationMs != null ? Number(maxDurationMs) : undefined,
+    }, sock);
+  }
+  const discard = args.includes('--discard');
+  const positional = args.slice(2).filter(a => !a.startsWith('--'));
+  const outPath = positional[0] ? path.resolve(positional[0]) : undefined;
+  return cliReq('POST', '/record-stop', { session, path: outPath, discard }, sock, defaultCliTimeoutMs() + 10000);
+}
+
 /**
  * scroll-until — scroll an inner scroller (auto-detected) until N elements match selector.
  * Examples:
@@ -7767,7 +8230,7 @@ async function runCli(cmd, args) {
     'show', 'open', 'snapshot', 'cdp', 'run', 'batch', 'click', 'hover', 'drag', 'fill', 'type',
     'press', 'download', 'wait-for-text', 'wait-for-selector', 'eval',
     'scroll-until', 'screenshot', 'scroll', 'wait', 'watch', 'console',
-    'network', 'close', 'list', 'stop',
+    'network', 'close', 'list', 'stop', 'record',
   ]);
   if (!tabCommands.has(cmd)) { console.error(`Unknown: ${cmd}. Run: chromux help`); process.exit(1); }
 
@@ -7878,6 +8341,7 @@ async function runCli(cmd, args) {
       scroll:     () => cliReq('POST', '/scroll', { session: args[0], direction: args[1] || 'down' }, sock),
       wait:       () => cliReq('POST', '/wait', { session: args[0], ms: parseInt(args[1]) || 1000 }, sock),
       watch:      () => cmdWatch(args, sock),
+      record:     () => cmdRecord(args, sock),
       console:    () => cliReq('POST', '/console', { session: args[0], off: args.includes('--off') }, sock),
       network:    () => cliReq('POST', '/network', { session: args[0], off: args.includes('--off'), all: args.includes('--all') }, sock),
       close:      () => cliReq('DELETE', `/session/${args[0]}`, null, sock),
@@ -8515,6 +8979,18 @@ Watch / debug:
   chromux watch <session> network    Capture failed requests (4xx/5xx/errors)
   chromux watch <session> network --all
   chromux watch <session> network --off
+
+Screen recording (agent/QA evidence, requires ffmpeg on PATH or config.json ffmpegPath):
+  chromux record <session> start [--fps N] [--quality N]
+                                     Start capturing the tab to mp4; injects a cursor/click
+                                     overlay so click/hover/drag/fill/type/press are visible
+  chromux record <session> stop [path] [--discard]
+                                     Finalize to mp4 (default ~/.chromux/recordings/<profile>/),
+                                     or cancel and write nothing with --discard
+  Recording starts from the first tracked action after start, not the start call itself.
+  A forgotten recording auto-stops after idle-timeout (default 60s, --idle-timeout MS) or
+  max-duration (default 30min, --max-duration MS); a crashed ffmpeg still salvages whatever
+  was captured. One active recording per session; no separate status command.
 
 Site knowledge:
   chromux note                       List hosts with saved site notes

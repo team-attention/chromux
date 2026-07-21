@@ -232,6 +232,22 @@ assertContains(checks, 'visual topic OOPIF crash cleanup', docs.visualTopic, '`l
 }
 
 {
+  // Screen recording (`chromux record`) surface must stay consistent across
+  // help, README, install, and both skills — same discipline as live mode.
+  assertContains(checks, 'help record verb', docs.help, 'chromux record <session> start');
+  assertContains(checks, 'help record discard', docs.help, '--discard');
+  assertContains(checks, 'help record idle-timeout', docs.help, '--idle-timeout MS');
+  assertContains(checks, 'help record head-trim', docs.help, 'not the start call itself');
+  assertContains(checks, 'readme record section', docs.readme, '### Screen Recording');
+  assertContains(checks, 'readme record ffmpeg requirement', docs.readme, 'requires `ffmpeg` as a system binary');
+  assertContains(checks, 'readme record overlay', docs.readme, 'cursor/click overlay is injected');
+  assertContains(checks, 'install record ffmpeg troubleshooting', docs.install, '`chromux record` says ffmpeg is not found');
+  assertContains(checks, 'install record ffmpegPath', docs.install, 'ffmpegPath');
+  assertContains(checks, 'chromux skill record verb', docs.chromuxSkill, 'record <s> start');
+  assertContains(checks, 'work skill record evidence', docs.workSkill, 'record <s> start');
+}
+
+{
   const pkg = JSON.parse(read('package.json'));
   const ok = !pkg.dependencies;
   checks.push({ label: `package remains zero-dependency at ${pkg.version}`, needle: 'no dependencies', ok });

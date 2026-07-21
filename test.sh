@@ -1449,6 +1449,179 @@ else
 fi
 rm -f /tmp/chromux-test.png
 
+# --- Test 7b: Screen recording ---
+echo ""
+echo "--- Test 7b: Screen recording ---"
+CHROMUX_PROFILE=$PROFILE node "$CT" open tab-record https://example.com 2>/dev/null > /dev/null
+RECORD_LINK_REF=$(CHROMUX_PROFILE=$PROFILE node "$CT" snapshot tab-record --interactive 2>/dev/null | grep -o '@[0-9]*' | head -1)
+RECORD_LINK_REF="${RECORD_LINK_REF:-@1}"
+
+if command -v ffmpeg >/dev/null 2>&1; then
+  # Happy path + response shape (AC1, AC4, AC10): start/stop round-trip
+  # produces a valid mp4 in the default ~/.chromux/recordings/<profile>/
+  # location, with the documented start/stop response fields.
+  START_OUT=$(CHROMUX_PROFILE=$PROFILE node "$CT" record tab-record start 2>&1)
+  check "record start reports recording:true" '"recording": true' "$START_OUT"
+  check "record start reports startedAt" "startedAt" "$START_OUT"
+  CHROMUX_PROFILE=$PROFILE node "$CT" click tab-record "$RECORD_LINK_REF" 2>/dev/null > /dev/null
+  CHROMUX_PROFILE=$PROFILE node "$CT" wait tab-record 1500 2>/dev/null > /dev/null
+  STOP_OUT=$(CHROMUX_PROFILE=$PROFILE node "$CT" record tab-record stop 2>&1)
+  check "record stop reports a path" '"path":' "$STOP_OUT"
+  check "record stop reports durationMs" "durationMs" "$STOP_OUT"
+  check "record stop reports bytes" '"bytes":' "$STOP_OUT"
+  check "record stop default path uses recordings/<profile>/" "recordings/$PROFILE/chromux-record-tab-record-" "$STOP_OUT"
+  RECORD_PATH=$(printf '%s' "$STOP_OUT" | node -e 'let raw="";process.stdin.on("data",c=>raw+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(raw).path||""))')
+  if [ -n "$RECORD_PATH" ] && ffmpeg -v error -i "$RECORD_PATH" -f null - >/tmp/chromux-record-decode-$$.txt 2>&1; then
+    echo "  ✓ recorded mp4 decodes cleanly"
+    PASS=$((PASS+1))
+  else
+    echo "  ✗ recorded mp4 failed to decode: $(cat /tmp/chromux-record-decode-$$.txt 2>/dev/null)"
+    FAIL=$((FAIL+1))
+  fi
+  rm -f /tmp/chromux-record-decode-$$.txt "$RECORD_PATH"
+
+  # Concurrency guard (AC3): a second start while one is active must fail
+  # clearly and must not disturb the first recording.
+  CHROMUX_PROFILE=$PROFILE node "$CT" record tab-record start 2>/dev/null > /dev/null
+  if CHROMUX_PROFILE=$PROFILE node "$CT" record tab-record start >/tmp/chromux-record-dup-$$.txt 2>&1; then
+    echo "  ✗ duplicate record start unexpectedly succeeded"
+    FAIL=$((FAIL+1))
+  else
+    DUP_OUT=$(cat /tmp/chromux-record-dup-$$.txt)
+    check "duplicate record start fails clearly" "already recording" "$DUP_OUT"
+  fi
+  rm -f /tmp/chromux-record-dup-$$.txt
+
+  # Discard (AC3): --discard must leave no output file.
+  DISCARD_PATH="/tmp/chromux-record-discard-$$.mp4"
+  DISCARD_OUT=$(CHROMUX_PROFILE=$PROFILE node "$CT" record tab-record stop "$DISCARD_PATH" --discard 2>&1)
+  check "record stop --discard reports discarded" '"discarded": true' "$DISCARD_OUT"
+  if [ -f "$DISCARD_PATH" ]; then
+    echo "  ✗ --discard left an output file behind"
+    FAIL=$((FAIL+1))
+  else
+    echo "  ✓ --discard left no output file"
+    PASS=$((PASS+1))
+  fi
+
+  # Head-trim (AC6): idle time before the first tracked action must not
+  # appear in the finished video. Compare the reported duration against the
+  # ACTUAL measured wall-clock window (not a guessed absolute threshold —
+  # CLI/verify overhead varies by machine) and require it to be meaningfully
+  # shorter than the 3s idle gap that preceded the first action.
+  TRIM_START_MS=$(node -e 'process.stdout.write(String(Date.now()))')
+  CHROMUX_PROFILE=$PROFILE node "$CT" record tab-record start 2>/dev/null > /dev/null
+  sleep 3
+  CHROMUX_PROFILE=$PROFILE node "$CT" click tab-record "$RECORD_LINK_REF" 2>/dev/null > /dev/null
+  TRIM_OUT=$(CHROMUX_PROFILE=$PROFILE node "$CT" record tab-record stop 2>&1)
+  TRIM_END_MS=$(node -e 'process.stdout.write(String(Date.now()))')
+  TRIM_DURATION_MS=$(printf '%s' "$TRIM_OUT" | node -e 'let raw="";process.stdin.on("data",c=>raw+=c);process.stdin.on("end",()=>process.stdout.write(String(JSON.parse(raw).durationMs||99999)))')
+  TRIM_PATH=$(printf '%s' "$TRIM_OUT" | node -e 'let raw="";process.stdin.on("data",c=>raw+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(raw).path||""))')
+  TRIM_ELAPSED_MS=$((TRIM_END_MS - TRIM_START_MS))
+  TRIM_SAVED_MS=$((TRIM_ELAPSED_MS - TRIM_DURATION_MS))
+  if [ "$TRIM_SAVED_MS" -gt 1500 ]; then
+    echo "  ✓ head-trim excludes idle lead-in (elapsed=${TRIM_ELAPSED_MS}ms, video=${TRIM_DURATION_MS}ms, trimmed=${TRIM_SAVED_MS}ms)"
+    PASS=$((PASS+1))
+  else
+    echo "  ✗ head-trim did not exclude idle lead-in (elapsed=${TRIM_ELAPSED_MS}ms, video=${TRIM_DURATION_MS}ms, trimmed=${TRIM_SAVED_MS}ms)"
+    FAIL=$((FAIL+1))
+  fi
+  rm -f "$TRIM_PATH"
+
+  # Forgotten-stop safety net (AC7): idle-timeout auto-finalizes without any
+  # explicit stop; a single in-flight command longer than the idle-timeout
+  # must NOT be mistaken for inactivity; the absolute max-duration cap fires
+  # even with recent activity.
+  CHROMUX_PROFILE=$PROFILE node "$CT" record tab-record start --idle-timeout 1500 2>/dev/null > /dev/null
+  sleep 3
+  if CHROMUX_PROFILE=$PROFILE node "$CT" record tab-record stop >/tmp/chromux-record-idle-$$.txt 2>&1; then
+    echo "  ✗ idle-timeout did not auto-stop the forgotten recording"
+    FAIL=$((FAIL+1))
+  else
+    IDLE_OUT=$(cat /tmp/chromux-record-idle-$$.txt)
+    check "idle-timeout auto-stops a forgotten recording" "not recording" "$IDLE_OUT"
+  fi
+  rm -f /tmp/chromux-record-idle-$$.txt
+
+  CHROMUX_PROFILE=$PROFILE node "$CT" record tab-record start --idle-timeout 1500 2>/dev/null > /dev/null
+  CHROMUX_PROFILE=$PROFILE node "$CT" eval tab-record "new Promise(r => setTimeout(r, 2500))" 2>/dev/null > /dev/null
+  INFLIGHT_OUT=$(CHROMUX_PROFILE=$PROFILE node "$CT" record tab-record stop 2>&1)
+  check "in-flight long command is not mistaken for idle" '"path":' "$INFLIGHT_OUT"
+  INFLIGHT_PATH=$(printf '%s' "$INFLIGHT_OUT" | node -e 'let raw="";process.stdin.on("data",c=>raw+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(raw).path||""))')
+  rm -f "$INFLIGHT_PATH"
+
+  CHROMUX_PROFILE=$PROFILE node "$CT" record tab-record start --idle-timeout 60000 --max-duration 1500 2>/dev/null > /dev/null
+  CHROMUX_PROFILE=$PROFILE node "$CT" click tab-record "$RECORD_LINK_REF" 2>/dev/null > /dev/null
+  sleep 2
+  if CHROMUX_PROFILE=$PROFILE node "$CT" record tab-record stop >/tmp/chromux-record-maxdur-$$.txt 2>&1; then
+    echo "  ✗ absolute max-duration cap did not force-stop despite recent activity"
+    FAIL=$((FAIL+1))
+  else
+    MAXDUR_OUT=$(cat /tmp/chromux-record-maxdur-$$.txt)
+    check "max-duration cap force-stops even with trickling activity" "not recording" "$MAXDUR_OUT"
+  fi
+  rm -f /tmp/chromux-record-maxdur-$$.txt
+
+  # Crash/disk-full salvage (AC8): killing the ffmpeg child mid-recording
+  # must still leave a valid, playable partial mp4 rather than a corrupt or
+  # missing file. Poll for the temp file to actually contain frame data
+  # (rather than a fixed sleep) before killing — under load, the first
+  # Page.captureScreenshot round-trip can take several seconds.
+  if ! CHROMUX_PROFILE=$PROFILE node "$CT" record tab-record start >/tmp/chromux-record-crashstart-$$.txt 2>&1; then
+    echo "  ✗ crash-salvage setup: record start failed: $(cat /tmp/chromux-record-crashstart-$$.txt)"
+    FAIL=$((FAIL+1))
+  fi
+  rm -f /tmp/chromux-record-crashstart-$$.txt
+  RECORD_TEMP_GLOB="$CHROMUX_HOME/recordings/$PROFILE/.chromux-record-tab-record-*.tmp.mp4"
+  for _ in $(seq 1 20); do
+    RECORD_TEMP_SIZE=$(find $RECORD_TEMP_GLOB -type f -exec wc -c {} \; 2>/dev/null | awk '{print $1}' | head -1)
+    if [ -n "$RECORD_TEMP_SIZE" ] && [ "$RECORD_TEMP_SIZE" -gt 20000 ] 2>/dev/null; then break; fi
+    sleep 1
+  done
+  RECORD_FFMPEG_PID=$(pgrep -f "ffmpeg.*chromux-record-tab-record" | head -1)
+  if [ -n "$RECORD_FFMPEG_PID" ]; then
+    kill -9 "$RECORD_FFMPEG_PID"
+    sleep 1
+    if CHROMUX_PROFILE=$PROFILE node "$CT" record tab-record stop >/tmp/chromux-record-salvage-out-$$.txt 2>&1; then
+      SALVAGE_OUT=$(cat /tmp/chromux-record-salvage-out-$$.txt)
+      SALVAGE_PATH=$(printf '%s' "$SALVAGE_OUT" | node -e 'let raw="";process.stdin.on("data",c=>raw+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(raw).path||""))')
+      if [ -n "$SALVAGE_PATH" ] && ffmpeg -v error -i "$SALVAGE_PATH" -f null - >/tmp/chromux-record-salvage-$$.txt 2>&1; then
+        echo "  ✓ crash-salvaged mp4 decodes cleanly"
+        PASS=$((PASS+1))
+      else
+        echo "  ✗ crash-salvaged mp4 missing or failed to decode: $(cat /tmp/chromux-record-salvage-$$.txt 2>/dev/null)"
+        FAIL=$((FAIL+1))
+      fi
+      rm -f /tmp/chromux-record-salvage-$$.txt "$SALVAGE_PATH"
+    else
+      echo "  ✗ record stop failed after ffmpeg crash: $(cat /tmp/chromux-record-salvage-out-$$.txt)"
+      FAIL=$((FAIL+1))
+    fi
+    rm -f /tmp/chromux-record-salvage-out-$$.txt
+  else
+    echo "  ✗ could not find the recording ffmpeg process to crash-test"
+    FAIL=$((FAIL+1))
+    CHROMUX_PROFILE=$PROFILE node "$CT" record tab-record stop --discard 2>/dev/null > /dev/null
+  fi
+else
+  # ffmpeg is a required external binary (like Chrome itself, see
+  # findChrome/chromePath) rather than an npm dependency, so a sandbox
+  # without it is expected — verify the install-guidance error path instead
+  # of the ffmpeg-dependent happy path.
+  echo "  ✓ ffmpeg-dependent recording checks skipped (ffmpeg not on PATH)"
+  PASS=$((PASS+1))
+  if CHROMUX_PROFILE=$PROFILE node "$CT" record tab-record start >/tmp/chromux-record-noffmpeg-$$.txt 2>&1; then
+    echo "  ✗ record start unexpectedly succeeded without ffmpeg"
+    FAIL=$((FAIL+1))
+    CHROMUX_PROFILE=$PROFILE node "$CT" record tab-record stop --discard 2>/dev/null > /dev/null
+  else
+    NOFFMPEG_OUT=$(cat /tmp/chromux-record-noffmpeg-$$.txt)
+    check "record start without ffmpeg fails with install guidance" "ffmpeg not found" "$NOFFMPEG_OUT"
+  fi
+  rm -f /tmp/chromux-record-noffmpeg-$$.txt
+fi
+CHROMUX_PROFILE=$PROFILE node "$CT" close tab-record 2>/dev/null > /dev/null
+
 # --- Test 8: List ---
 echo ""
 echo "--- Test 8: List sessions ---"
