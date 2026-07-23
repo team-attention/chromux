@@ -59,8 +59,12 @@ Keep `--oopif` opt-in because child-target attachment adds payload and browser a
 
 ## Human handoff: login, 2FA, CAPTCHA, payment
 
-Credential walls are user-owned. The formal handoff loop — the profile is a
-real persistent Chrome profile, so one human login persists across sessions:
+Credential walls are user-owned. If the Bitwarden secret-store add-on is set
+up, try `chromux fill <s> @<ref> --secret <host>:password` first (see the
+main skill's Secret Store section) — a `not-found`/`locked` response falls
+straight through to this same manual handoff. The formal handoff loop — the
+profile is a real persistent Chrome profile, so one human login persists
+across sessions:
 
 ```bash
 # 1. Put the blocked page in front of the user (profile must be HEADED)

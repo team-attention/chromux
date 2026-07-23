@@ -996,6 +996,71 @@ notes yet, chromux prints a one-line reminder pointing at `chromux note` — the
 activity log already holds the per-command errors that make such notes worth
 writing.
 
+## Secret Store (Opt-in Add-on)
+
+chromux can auto-fill logins from one shared [Bitwarden](https://bitwarden.com)
+vault across every profile — an opt-in add-on, the same shape as the planned
+recording/ffmpeg integration: it requires an external tool the user installs
+and owns, not a bundled dependency. chromux stays zero-dependency; it only
+shells out to the user-installed `bw` CLI.
+
+Credentials never live on this machine. They live in Bitwarden as items named
+`chromux/<scope>/<host>` (`<scope>` is a profile name or `global`); chromux
+itself stores only backend policy in `~/.chromux/secrets.json`, never values.
+A profile-local credential overrides the global one for that same host.
+
+The unlocked Bitwarden session key lives only in the memory of a separate
+`secret-agent` process (an ssh-agent-style pattern) — nothing is ever written
+to disk. The agent serves the session over a local socket (0600) for its TTL
+(14 days by default), then evicts itself. A reboot, an explicit
+`chromux secret lock`, or the TTL expiring all evaporate the key the same
+way: the process simply stops existing.
+
+```bash
+# one-time setup
+brew install bitwarden-cli   # or your platform's bw install
+bw login                     # once, in a real terminal
+
+# per session/reboot
+chromux secret unlock         # bw prompts for your master password directly —
+                               # chromux never sees or stores it
+
+# register a credential (password + optional TOTP via hidden prompts)
+chromux secret set github.com --user tansfil
+chromux secret set github.com --user tansfil-work --profile work --totp
+
+# check what is registered (no values ever printed by default)
+chromux secret list
+chromux secret get github.com
+
+# auto-fill a login form
+chromux fill <session> @<ref> --secret github.com:password
+chromux fill <session> @<ref> --secret github.com:totp
+```
+
+`secret unlock`, `secret set`, and `secret rm` are human-only: without a real
+terminal they refuse immediately with an instruction to run them yourself,
+the same handoff pattern as any other login wall. Agents can call
+`secret status`, `secret list`, `secret get` (values hidden unless run with
+`--reveal` in a terminal), and `fill --secret`.
+
+Every failure is a structured, non-crashing handoff instead of an exception:
+
+```json
+{ "ok": false, "secret": "locked", "next": "run `chromux secret unlock` in a terminal, then retry" }
+```
+
+`secret` reasons are `locked` (vault needs unlocking), `not-found` (no
+credential registered for that host), and `unsupported-tier` (TOTP codes
+need Bitwarden Premium or a self-hosted Vaultwarden — the free tier stores a
+TOTP seed but cannot compute the code).
+
+"Sign in with Google" and other SSO buttons need no stored secret at all:
+keep the profile's browser session signed in once and every future SSO click
+just works, the same way any human's browser stays signed in. Passkeys are
+not automated — they are hardware-bound and `bw` cannot assert them, so
+chromux hands a passkey screen off to the user like any other login wall.
+
 ## Activity Log And Status App
 
 chromux records local activity events for CLI usage under

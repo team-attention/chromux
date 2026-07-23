@@ -1,0 +1,117 @@
+#!/usr/bin/env node
+// Mock Bitwarden CLI for the chromux secret-store automated test suite
+// (test-secret.mjs). Mirrors the real `bw` 2026.6.0 subcommand contract that
+// was validated against a live vault before this feature was built (see
+// agents/interview/chromux-secret-store/qa-log.md, D-01/D-07). Vault state
+// lives in a plain JSON file at MOCK_BW_VAULT_FILE (no encryption — the
+// real vault's at-rest encryption was already proven separately).
+//
+// Special session token 'INVALID-SESSION' simulates a server-invalidated
+// bw session on any read call, for the lazy-invalidation test.
+import fs from 'node:fs';
+
+const VAULT_FILE = process.env.MOCK_BW_VAULT_FILE;
+if (!VAULT_FILE) { process.stderr.write('mock-bw: MOCK_BW_VAULT_FILE not set\n'); process.exit(2); }
+
+function loadVault() {
+  try { return JSON.parse(fs.readFileSync(VAULT_FILE, 'utf8')); } catch { return { items: [] }; }
+}
+function saveVault(v) { fs.writeFileSync(VAULT_FILE, JSON.stringify(v, null, 2)); }
+function nextId(v) { return 'itm_' + (v.items.length + 1) + '_' + Math.random().toString(36).slice(2, 8); }
+function readStdin() {
+  try { return fs.readFileSync(0, 'utf8'); } catch { return ''; }
+}
+function uriHost(uri) { try { return new URL(uri).hostname; } catch { return uri; } }
+
+function sessionInvalidated() {
+  return process.env.BW_SESSION === 'INVALID-SESSION';
+}
+
+const argv = process.argv.slice(2);
+const [cmd, sub, ...rest] = argv;
+
+if (cmd === '--version') { process.stdout.write('mock-bw 2026.6.0\n'); process.exit(0); }
+
+if (cmd === 'encode') {
+  const input = readStdin();
+  process.stdout.write(Buffer.from(input, 'utf8').toString('base64') + '\n');
+  process.exit(0);
+}
+
+if (cmd === 'unlock' && sub === '--raw') {
+  process.stdout.write('mock-session-' + Math.random().toString(36).slice(2, 10) + '\n');
+  process.exit(0);
+}
+
+if (cmd === 'list' && sub === 'items') {
+  if (sessionInvalidated()) { process.stderr.write('Vault is locked.\n'); process.exit(1); }
+  const v = loadVault();
+  const urlIdx = rest.indexOf('--url');
+  const searchIdx = rest.indexOf('--search');
+  let items = v.items;
+  if (urlIdx !== -1) {
+    const host = uriHost(rest[urlIdx + 1]);
+    items = items.filter(item => (item.login?.uris || []).some(u => uriHost(u.uri) === host));
+  } else if (searchIdx !== -1) {
+    const term = rest[searchIdx + 1];
+    items = items.filter(item => item.name && item.name.includes(term));
+  }
+  process.stdout.write(JSON.stringify(items) + '\n');
+  process.exit(0);
+}
+
+if (cmd === 'get') {
+  if (sessionInvalidated()) { process.stderr.write('Vault is locked.\n'); process.exit(1); }
+  const v = loadVault();
+  const id = rest[0];
+  const item = v.items.find(i => i.id === id);
+  if (!item) { process.stderr.write('Not found.\n'); process.exit(1); }
+  if (sub === 'username') { process.stdout.write((item.login?.username || '') + '\n'); process.exit(0); }
+  if (sub === 'password') { process.stdout.write((item.login?.password || '') + '\n'); process.exit(0); }
+  if (sub === 'totp') {
+    if (item.login?.totpPremiumLocked) { process.stderr.write('You do not have permission to view the TOTP code for this item.\n'); process.exit(1); }
+    if (!item.login?.totp) { process.stderr.write('No TOTP available for this login.\n'); process.exit(1); }
+    process.stdout.write('123456\n');
+    process.exit(0);
+  }
+  if (sub === 'item') { process.stdout.write(JSON.stringify(item) + '\n'); process.exit(0); }
+  process.stderr.write(`mock-bw: unsupported get object "${sub}"\n`);
+  process.exit(2);
+}
+
+if (cmd === 'create' && sub === 'item') {
+  const encoded = rest[0] || readStdin().trim();
+  const item = JSON.parse(Buffer.from(encoded, 'base64').toString('utf8'));
+  const v = loadVault();
+  item.id = nextId(v);
+  v.items.push(item);
+  saveVault(v);
+  process.stdout.write(JSON.stringify(item) + '\n');
+  process.exit(0);
+}
+
+if (cmd === 'edit' && sub === 'item') {
+  const id = rest[0];
+  const encoded = rest[1] || readStdin().trim();
+  const patch = JSON.parse(Buffer.from(encoded, 'base64').toString('utf8'));
+  const v = loadVault();
+  const item = v.items.find(i => i.id === id);
+  if (!item) { process.stderr.write('Not found.\n'); process.exit(1); }
+  Object.assign(item, patch, { id });
+  saveVault(v);
+  process.stdout.write(JSON.stringify(item) + '\n');
+  process.exit(0);
+}
+
+if (cmd === 'delete' && sub === 'item') {
+  const id = rest[0];
+  const v = loadVault();
+  const before = v.items.length;
+  v.items = v.items.filter(i => i.id !== id);
+  saveVault(v);
+  if (v.items.length === before) { process.stderr.write('Not found.\n'); process.exit(1); }
+  process.exit(0);
+}
+
+process.stderr.write(`mock-bw: unhandled invocation: ${argv.join(' ')}\n`);
+process.exit(2);

@@ -6776,6 +6776,475 @@ async function cmdKill(profileName) {
 }
 
 // ============================================================
+// Secret store (Bitwarden add-on)
+//
+// Opt-in: nothing here runs unless the user has installed `bw`, run
+// `bw login`, and run `chromux secret unlock`. Credentials live only in
+// Bitwarden as items named chromux/<scope>/<host> (scope is a profile name
+// or "global"); chromux itself stores only backend policy in
+// ~/.chromux/secrets.json. The unlocked Bitwarden session key lives ONLY in
+// the memory of a separate, on-demand "secret-agent" process (ssh-agent
+// pattern) reached over a local socket — never written to disk, never in
+// this CLI process's own memory beyond a single round trip.
+// ============================================================
+
+const SECRET_POLICY_PATH = path.join(CHROMUX_HOME, 'secrets.json');
+const DEFAULT_SECRET_TTL_DAYS = 14;
+const DEFAULT_SECRET_TTL_MS = DEFAULT_SECRET_TTL_DAYS * 24 * 60 * 60 * 1000;
+const SECRET_FAILURE_HINTS = {
+  'locked': 'run `chromux secret unlock` in a terminal, then retry',
+  'not-found': 'no stored credential for this host — hand off to the user to log in',
+  'unsupported-tier': '2FA code needs Bitwarden Premium or Vaultwarden; hand the 2FA screen off to the user',
+};
+
+function loadSecretPolicy() {
+  const defaults = { backend: 'bitwarden', resolverCmd: 'bw', ttlDays: DEFAULT_SECRET_TTL_DAYS };
+  try {
+    const cfg = JSON.parse(fs.readFileSync(SECRET_POLICY_PATH, 'utf8'));
+    if (cfg && typeof cfg === 'object') return { ...defaults, ...cfg };
+  } catch {}
+  return defaults;
+}
+
+function secretTtlMs(policy) {
+  // Internal test hook only — not documented, lets automated tests exercise
+  // TTL expiry without waiting 14 real days.
+  if (process.env.CHROMUX_SECRET_AGENT_TTL_MS) return Number(process.env.CHROMUX_SECRET_AGENT_TTL_MS);
+  const days = Number(policy.ttlDays) || DEFAULT_SECRET_TTL_DAYS;
+  return days * 24 * 60 * 60 * 1000;
+}
+
+function secretItemName(scope, host) { return `chromux/${scope}/${host}`; }
+
+function printSecretFailure(reason, hint) {
+  console.log(JSON.stringify({ ok: false, secret: reason, next: hint || SECRET_FAILURE_HINTS[reason] || 'hand off to the user' }, null, 2));
+}
+
+function requireTTY(label) {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    console.error(`\`chromux ${label}\` needs a real terminal — run it yourself, then retry.`);
+    process.exit(1);
+  }
+}
+
+let _bwAvailable = null;
+function ensureBwCli() {
+  if (_bwAvailable === null) {
+    const res = spawnSync('bw', ['--version'], { encoding: 'utf8' });
+    _bwAvailable = !res.error && res.status === 0;
+  }
+  if (!_bwAvailable) {
+    console.error('The Bitwarden CLI (`bw`) was not found on PATH.');
+    console.error('Install it (e.g. `brew install bitwarden-cli`), run `bw login` once, then retry.');
+    process.exit(1);
+  }
+}
+
+// Secrets always travel to `bw` via stdin or env, never argv — chromux itself
+// reads other processes' full command lines (see listProcesses), so argv is
+// effectively world-readable on this machine while the command runs.
+function runBw(args, { input, session } = {}) {
+  const env = { ...process.env };
+  if (session) env.BW_SESSION = session; else delete env.BW_SESSION;
+  return spawnSync('bw', args, { input, encoding: 'utf8', env, maxBuffer: 16 * 1024 * 1024 });
+}
+
+function findBwItemByExactName(name, session) {
+  const res = runBw(['list', 'items', '--search', name], { session });
+  if (res.status !== 0) return null;
+  try { return JSON.parse(res.stdout).find(item => item.name === name) || null; } catch { return null; }
+}
+
+// Profile-local overrides global, with parent-domain fallback mirroring the
+// existing site-notes host chain (accounts.google.com falls back to
+// google.com). Returns { item, scope, host }, null (no credential), or the
+// string 'auth-error' when `bw` itself reports the session is no longer
+// valid (caller should evict the cached session and report locked).
+async function resolveSecretItem(host, profile, session) {
+  const scopes = profile === 'global' ? ['global'] : [profile, 'global'];
+  for (const h of siteKnowledgeHostChain(host)) {
+    const res = runBw(['list', 'items', '--url', `https://${h}`], { session });
+    if (res.status !== 0) {
+      if (/session|locked|not logged in|unauthorized/i.test(res.stderr || '')) return 'auth-error';
+      continue;
+    }
+    let items = [];
+    try { items = JSON.parse(res.stdout); } catch { items = []; }
+    for (const scope of scopes) {
+      const found = items.find(item => item.name === secretItemName(scope, h));
+      if (found) return { item: found, scope, host: h };
+    }
+  }
+  return null;
+}
+
+// Resolve one field (password/username/totp) for `fill --secret` and for
+// `secret get --reveal`. Never throws — every failure is a structured
+// { ok:false, reason, hint? } so callers can hand off to the user instead of
+// crashing the agent flow.
+async function resolveSecretField(host, field, profile) {
+  const agent = await secretAgentRequest('get');
+  if (!agent.ok) return { ok: false, reason: 'locked' };
+  const found = await resolveSecretItem(host, profile, agent.session);
+  if (found === 'auth-error') {
+    await secretAgentRequest('evict');
+    return { ok: false, reason: 'locked', hint: 'session invalidated by Bitwarden; run `chromux secret unlock` again' };
+  }
+  if (!found) return { ok: false, reason: 'not-found' };
+  if (field === 'totp') {
+    if (!found.item.login?.totp) return { ok: false, reason: 'not-found', hint: 'no TOTP configured for this credential' };
+    const totpRes = runBw(['get', 'totp', found.item.id], { session: agent.session });
+    if (totpRes.status !== 0) return { ok: false, reason: 'unsupported-tier' };
+    return { ok: true, value: totpRes.stdout.trim(), scope: found.scope, host: found.host };
+  }
+  const wantField = field === 'username' ? 'username' : 'password';
+  const valRes = runBw(['get', wantField, found.item.id], { session: agent.session });
+  if (valRes.status !== 0) return { ok: false, reason: 'locked' };
+  return { ok: true, value: valRes.stdout.trim(), scope: found.scope, host: found.host };
+}
+
+// ---- secret-agent client (used by the CLI process) ----
+
+function secretAgentSocketPath() {
+  fs.mkdirSync(RUN_DIR, { recursive: true, mode: 0o700 });
+  return path.join(RUN_DIR, 'secret-agent.sock');
+}
+function secretAgentPidPath() {
+  fs.mkdirSync(RUN_DIR, { recursive: true, mode: 0o700 });
+  return path.join(RUN_DIR, 'secret-agent.pid');
+}
+function secretAgentPipePath() {
+  const user = (os.userInfo().username || 'user').replace(/[^a-zA-Z0-9._-]/g, '_');
+  return `\\\\.\\pipe\\chromux-secret-agent-${user}`;
+}
+function secretAgentEndpointPath() {
+  return process.platform === 'win32' ? secretAgentPipePath() : secretAgentSocketPath();
+}
+
+function secretAgentRequest(op, payload = {}, timeoutMs = 3000) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (result) => { if (settled) return; settled = true; resolve(result); };
+    let socket;
+    try {
+      socket = net.createConnection(secretAgentEndpointPath());
+    } catch {
+      finish({ ok: false, reason: 'not-running' });
+      return;
+    }
+    const timer = setTimeout(() => { try { socket.destroy(); } catch {} finish({ ok: false, reason: 'timeout' }); }, timeoutMs);
+    let buf = '';
+    socket.on('connect', () => { socket.write(JSON.stringify({ op, ...payload }) + '\n'); });
+    socket.on('data', (chunk) => {
+      buf += chunk.toString('utf8');
+      const idx = buf.indexOf('\n');
+      if (idx === -1) return;
+      clearTimeout(timer);
+      try { finish(JSON.parse(buf.slice(0, idx))); } catch { finish({ ok: false, reason: 'bad-response' }); }
+      try { socket.destroy(); } catch {}
+    });
+    socket.on('error', () => { clearTimeout(timer); finish({ ok: false, reason: 'not-running' }); });
+  });
+}
+
+async function ensureSecretAgentRunning() {
+  const probe = await secretAgentRequest('status', {}, 500);
+  if (probe.ok) return;
+  if (process.platform !== 'win32') { try { fs.unlinkSync(secretAgentSocketPath()); } catch {} }
+  const child = spawn(process.execPath, [process.argv[1], '--secret-agent'], { detached: true, stdio: 'ignore' });
+  child.unref();
+  for (let i = 0; i < 30; i++) {
+    await sleep(100);
+    const ready = await secretAgentRequest('status', {}, 500);
+    if (ready.ok) return;
+  }
+  console.error('secret-agent process failed to start.');
+  process.exit(1);
+}
+
+async function requireUnlockedSession() {
+  const agent = await secretAgentRequest('get');
+  if (!agent.ok) { printSecretFailure('locked'); process.exit(1); }
+  return agent.session;
+}
+
+// ---- secret-agent process itself (`chromux --secret-agent`) ----
+//
+// Memory-only, ssh-agent-style: holds the Bitwarden session key in RAM for
+// at most its TTL, serves it to same-machine callers over a local socket,
+// and evaporates the key (and itself) on TTL expiry, an explicit lock, or
+// simply dying — including on reboot. Nothing here ever touches disk.
+
+async function startSecretAgent() {
+  const state = { session: null, unlockedAt: 0, ttlMs: 0, exitTimer: null };
+
+  function evict() {
+    state.session = null;
+    state.unlockedAt = 0;
+    state.ttlMs = 0;
+    if (state.exitTimer) { clearTimeout(state.exitTimer); state.exitTimer = null; }
+  }
+
+  function scheduleExit(ttlMs) {
+    if (state.exitTimer) clearTimeout(state.exitTimer);
+    state.exitTimer = setTimeout(() => cleanupAndExit(), ttlMs);
+    if (typeof state.exitTimer.unref === 'function') state.exitTimer.unref();
+  }
+
+  function statusInfo() {
+    if (!state.session) return { unlocked: false, ttlRemainingMs: 0 };
+    const remaining = state.ttlMs - (Date.now() - state.unlockedAt);
+    if (remaining <= 0) { evict(); return { unlocked: false, ttlRemainingMs: 0 }; }
+    return { unlocked: true, ttlRemainingMs: remaining };
+  }
+
+  function handleRequest(msg) {
+    if (!msg || typeof msg !== 'object') return { ok: false, reason: 'bad-request' };
+    if (msg.op === 'unlock') {
+      state.session = String(msg.session || '');
+      state.unlockedAt = Date.now();
+      state.ttlMs = Number(msg.ttlMs) || DEFAULT_SECRET_TTL_MS;
+      scheduleExit(state.ttlMs);
+      return { ok: true, ...statusInfo() };
+    }
+    if (msg.op === 'get') {
+      const info = statusInfo();
+      if (!info.unlocked) return { ok: false, reason: 'locked' };
+      return { ok: true, session: state.session, ttlRemainingMs: info.ttlRemainingMs };
+    }
+    if (msg.op === 'status') return { ok: true, ...statusInfo() };
+    if (msg.op === 'evict' || msg.op === 'lock') {
+      evict();
+      setTimeout(() => cleanupAndExit(), 20);
+      return { ok: true, unlocked: false };
+    }
+    return { ok: false, reason: 'unknown-op' };
+  }
+
+  function cleanupAndExit() {
+    try { server.close(); } catch {}
+    if (process.platform !== 'win32') { try { fs.unlinkSync(secretAgentSocketPath()); } catch {} }
+    try { fs.unlinkSync(secretAgentPidPath()); } catch {}
+    process.exit(0);
+  }
+
+  const server = net.createServer((socket) => {
+    let buf = '';
+    socket.on('data', (chunk) => {
+      buf += chunk.toString('utf8');
+      const idx = buf.indexOf('\n');
+      if (idx === -1) return;
+      let msg = null;
+      try { msg = JSON.parse(buf.slice(0, idx)); } catch {}
+      const reply = handleRequest(msg);
+      try { socket.write(JSON.stringify(reply) + '\n'); } catch {}
+      try { socket.end(); } catch {}
+    });
+    socket.on('error', () => {});
+  });
+
+  const endpoint = secretAgentEndpointPath();
+  if (process.platform !== 'win32') { try { fs.unlinkSync(endpoint); } catch {} }
+
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(endpoint, resolve);
+  });
+  if (process.platform !== 'win32') { try { fs.chmodSync(endpoint, 0o600); } catch {} }
+  try { fs.writeFileSync(secretAgentPidPath(), String(process.pid)); } catch {}
+
+  process.on('SIGTERM', cleanupAndExit);
+  process.on('SIGINT', cleanupAndExit);
+}
+
+// ---- hidden stdin prompt (password / TOTP seed entry, never echoed) ----
+
+function promptHidden(promptText) {
+  return new Promise((resolve, reject) => {
+    if (!process.stdin.isTTY) { reject(new Error('no-tty')); return; }
+    process.stdout.write(promptText);
+    const stdin = process.stdin;
+    stdin.setRawMode(true);
+    stdin.resume();
+    stdin.setEncoding('utf8');
+    let input = '';
+    function cleanup() {
+      stdin.setRawMode(false);
+      stdin.pause();
+      stdin.removeListener('data', onData);
+    }
+    function onData(char) {
+      if (char === '\u0003') { cleanup(); process.stdout.write('\n'); process.exit(130); }
+      if (char === '\r' || char === '\n') { cleanup(); process.stdout.write('\n'); resolve(input); return; }
+      if (char === '\u007f' || char === '\b') { input = input.slice(0, -1); return; }
+      input += char;
+    }
+    stdin.on('data', onData);
+  });
+}
+
+// ---- `chromux secret` CLI ----
+
+async function cmdSecretUnlock() {
+  requireTTY('secret unlock');
+  ensureBwCli();
+  process.stderr.write('Unlocking Bitwarden vault (bw will prompt for your master password)...\n');
+  // stdin/stderr inherited so `bw` itself owns the master-password prompt —
+  // chromux never reads or stores it, only captures the printed session key.
+  const res = spawnSync('bw', ['unlock', '--raw'], { stdio: ['inherit', 'pipe', 'inherit'], encoding: 'utf8' });
+  if (res.error || res.status !== 0) {
+    console.error('bw unlock failed. If you are not logged in yet, run `bw login` first.');
+    process.exit(1);
+  }
+  const session = (res.stdout || '').trim();
+  if (!session) { console.error('bw unlock did not return a session key.'); process.exit(1); }
+  const policy = loadSecretPolicy();
+  await ensureSecretAgentRunning();
+  const ttlMs = secretTtlMs(policy);
+  const reply = await secretAgentRequest('unlock', { session, ttlMs });
+  if (!reply.ok) { console.error('Failed to hand the session to the secret-agent process.'); process.exit(1); }
+  console.log(JSON.stringify({ ok: true, unlocked: true, ttlDays: Math.round(ttlMs / (24 * 60 * 60 * 1000)) }, null, 2));
+}
+
+async function cmdSecretLock() {
+  await secretAgentRequest('evict', {}, 1000);
+  console.log(JSON.stringify({ ok: true, locked: true }, null, 2));
+}
+
+async function cmdSecretStatus() {
+  const agent = await secretAgentRequest('status', {}, 1000);
+  if (!agent.ok) { console.log(JSON.stringify({ ok: true, unlocked: false }, null, 2)); return; }
+  console.log(JSON.stringify({ ok: true, unlocked: !!agent.unlocked, ttlRemainingMs: agent.ttlRemainingMs ?? null }, null, 2));
+}
+
+async function cmdSecretSet(args) {
+  requireTTY('secret set');
+  const host = normalizeNoteHost(args[0]);
+  if (!host) { console.error(`Invalid host: ${args[0]}. Use a hostname like github.com`); process.exit(1); }
+  const profileFlag = takeFlagValue(args, '--profile');
+  const scope = profileFlag ? validateName(profileFlag) : 'global';
+  const user = takeFlagValue(args, '--user', { required: 'a username' });
+  if (!user) { console.error('secret set requires --user <username>'); process.exit(1); }
+  const wantsTotp = args.includes('--totp');
+  if (wantsTotp) args.splice(args.indexOf('--totp'), 1);
+
+  ensureBwCli();
+  const session = await requireUnlockedSession();
+
+  const password = await promptHidden('Password (hidden, not echoed): ');
+  if (!password) { console.error('secret set requires a password'); process.exit(1); }
+  let totp = null;
+  if (wantsTotp) {
+    const seed = await promptHidden('TOTP seed, base32 (hidden, leave blank to skip): ');
+    if (seed) totp = seed;
+  }
+
+  const name = secretItemName(scope, host);
+  const existing = findBwItemByExactName(name, session);
+  const item = {
+    type: 1,
+    name,
+    login: { username: user, password, ...(totp ? { totp } : {}), uris: [{ uri: `https://${host}` }] },
+  };
+  const encodeRes = runBw(['encode'], { input: JSON.stringify(item) });
+  if (encodeRes.status !== 0) { console.error('bw encode failed.'); process.exit(1); }
+  const encoded = encodeRes.stdout.trim();
+  const writeRes = existing
+    ? runBw(['edit', 'item', existing.id], { input: encoded, session })
+    : runBw(['create', 'item'], { input: encoded, session });
+  if (writeRes.status !== 0) { printSecretFailure('locked'); process.exit(1); }
+  console.log(JSON.stringify({ ok: true, host, scope, updated: !!existing }, null, 2));
+}
+
+async function cmdSecretRm(args) {
+  requireTTY('secret rm');
+  const host = normalizeNoteHost(args[0]);
+  if (!host) { console.error(`Invalid host: ${args[0]}. Use a hostname like github.com`); process.exit(1); }
+  const profileFlag = takeFlagValue(args, '--profile');
+  const scope = profileFlag ? validateName(profileFlag) : 'global';
+  ensureBwCli();
+  const session = await requireUnlockedSession();
+  const name = secretItemName(scope, host);
+  const found = findBwItemByExactName(name, session);
+  if (!found) { console.log(JSON.stringify({ ok: false, host, scope, removed: false, reason: 'not-found' }, null, 2)); process.exit(1); }
+  const del = runBw(['delete', 'item', found.id], { session });
+  console.log(JSON.stringify({ ok: del.status === 0, host, scope, removed: del.status === 0 }, null, 2));
+}
+
+async function cmdSecretList() {
+  ensureBwCli();
+  const session = await requireUnlockedSession();
+  const res = runBw(['list', 'items', '--search', 'chromux/'], { session });
+  if (res.status !== 0) { printSecretFailure('locked'); process.exit(1); }
+  let items = [];
+  try { items = JSON.parse(res.stdout); } catch {}
+  const entries = items
+    .filter(item => typeof item.name === 'string' && item.name.startsWith('chromux/'))
+    .map(item => {
+      const [, scope, ...hostParts] = item.name.split('/');
+      return { scope, host: hostParts.join('/') };
+    })
+    .filter(entry => entry.host)
+    .sort((a, b) => a.host.localeCompare(b.host) || a.scope.localeCompare(b.scope));
+  if (!entries.length) {
+    console.log('No secrets registered yet. Add one: chromux secret set <host> --user <username>');
+    return;
+  }
+  for (const entry of entries) console.log(`${entry.host}  (${entry.scope})`);
+}
+
+// Debug/verify only. Default output never reveals a value (safe for agents
+// to call to check whether a credential is registered); `--reveal` prints
+// the actual value and requires a real terminal, same as `secret set`.
+async function cmdSecretGet(args) {
+  const host = normalizeNoteHost(args[0]);
+  if (!host) { console.error(`Invalid host: ${args[0]}. Use a hostname like github.com`); process.exit(1); }
+  const profileFlag = takeFlagValue(args, '--profile');
+  const profile = profileFlag ? validateName(profileFlag) : getProfile();
+  const field = takeFlagValue(args, '--field');
+  const reveal = args.includes('--reveal');
+  if (reveal) requireTTY('secret get --reveal');
+
+  ensureBwCli();
+  if (reveal) {
+    const resolved = await resolveSecretField(host, field || 'password', profile);
+    if (!resolved.ok) { printSecretFailure(resolved.reason, resolved.hint); process.exit(1); }
+    console.log(JSON.stringify({ ok: true, host: resolved.host, scope: resolved.scope, field: field || 'password', value: resolved.value }, null, 2));
+    return;
+  }
+  const session = await requireUnlockedSession();
+  const found = await resolveSecretItem(host, profile, session);
+  if (found === 'auth-error') {
+    await secretAgentRequest('evict');
+    printSecretFailure('locked', 'session invalidated by Bitwarden; run `chromux secret unlock` again');
+    process.exit(1);
+  }
+  if (!found) { printSecretFailure('not-found', `no stored credential for ${host}`); process.exit(1); }
+  console.log(JSON.stringify({
+    ok: true, host: found.host, scope: found.scope,
+    username: found.item.login?.username || null,
+    hasPassword: !!found.item.login?.password,
+    hasTotp: !!found.item.login?.totp,
+  }, null, 2));
+}
+
+async function cmdSecret(args) {
+  const usage = 'Usage: chromux secret <unlock|lock|status|set|rm|list|get> ...';
+  const sub = args[0];
+  const rest = args.slice(1);
+  if (sub === 'unlock') return cmdSecretUnlock();
+  if (sub === 'lock') return cmdSecretLock();
+  if (sub === 'status') return cmdSecretStatus();
+  if (sub === 'set') return cmdSecretSet(rest);
+  if (sub === 'rm') return cmdSecretRm(rest);
+  if (sub === 'list') return cmdSecretList();
+  if (sub === 'get') return cmdSecretGet(rest);
+  console.error(`Unknown secret subcommand: ${sub || '(none)'}`);
+  console.error(usage);
+  process.exit(1);
+}
+
+// ============================================================
 // Live mode CLI
 // ============================================================
 
@@ -7056,13 +7525,13 @@ function redactReceiptValue(value, key = '', depth = 0) {
     const out = {};
     for (const [childKey, childValue] of Object.entries(value)) {
       const childLower = childKey.toLowerCase();
-      if (/(authorization|cookie|token|secret|password|passwd|credential|code|text|html|value|body|content)/.test(childLower)) {
+      if (/(authorization|cookie|token|secret|password|passwd|credential|bw_session|session_key|master_password|vault|code|text|html|value|body|content)/.test(childLower)) {
         out[childKey] = redactReceiptValue(String(childValue ?? ''), childKey, depth + 1);
         continue;
       }
       out[childKey] = redactReceiptValue(childValue, childKey, depth + 1);
     }
-    if (lowerKey && /(authorization|cookie|token|secret|password|credential)/.test(lowerKey)) {
+    if (lowerKey && /(authorization|cookie|token|secret|password|credential|bw_session|session_key|master_password|vault)/.test(lowerKey)) {
       return { redacted: true };
     }
     return out;
@@ -8113,6 +8582,13 @@ function sanitizeActivityArgs(cmd, args) {
   if (cmd === 'cdp') {
     return copy.map((arg, i) => i >= 2 && copy[i - 1] !== '--params-file' && copy[i - 1] !== '--timeout' ? '[params-json]' : arg);
   }
+  if (cmd === 'secret') {
+    // Passwords/TOTP seeds never travel on argv by design (hidden stdin
+    // prompts), but redact anything following a sensitive-shaped flag anyway
+    // as defense in depth against a future regression.
+    const sensitiveFlags = new Set(['--totp', '--password', '--pass', '--session', '--pin']);
+    return copy.map((arg, i) => sensitiveFlags.has(copy[i - 1]) ? '[redacted]' : arg);
+  }
   return copy;
 }
 
@@ -8213,6 +8689,7 @@ async function runCli(cmd, args) {
   }
   if (cmd === 'note') return cmdNote(args);
   if (cmd === 'script') return cmdScript(args);
+  if (cmd === 'secret') return cmdSecret(args);
   if (cmd === 'skill') return cmdSkillTopic(args);
   if (cmd === 'pause') {
     const profileName = args[0] || getProfile();
@@ -8299,7 +8776,7 @@ async function runCli(cmd, args) {
       click:      () => cmdClick(args, sock),
       hover:      () => cmdHover(args, sock),
       drag:       () => cmdDrag(args, sock),
-      fill:       () => {
+      fill:       async () => {
         const verify = takeVerifyFlag(args);
         // fill <s> <sel> "text" --pick "label" types then chooses the
         // matching autocomplete suggestion in the same round-trip.
@@ -8310,6 +8787,10 @@ async function runCli(cmd, args) {
           if (!pick) { console.error('Usage: chromux fill <session> <selector> "text" --pick "suggestion label"'); process.exit(1); }
           args.splice(pickIdx, 2);
         }
+        // fill <s> <sel> --secret <host>:password|username|totp resolves a
+        // credential from the secret store instead of a literal text arg.
+        // Never crashes on failure — structured {secret, next} + handoff.
+        const secretSpec = takeFlagValue(args, '--secret');
         // fill <s> <sel> --file PATH [--file PATH...] sets a file input
         // through DOM.setFileInputFiles instead of typing a value.
         const files = [];
@@ -8322,10 +8803,30 @@ async function runCli(cmd, args) {
           files.push(resolved);
           args.splice(fileIdx, 2);
         }
+        if (secretSpec && files.length) { console.error('fill --secret cannot be combined with --file'); process.exit(1); }
         if (files.length) {
           return cliReq('POST', '/fill', { session: args[0], selector: args[1], files, verify }, sock);
         }
-        return cliReq('POST', '/fill', { session: args[0], selector: args[1], text: args[2], pick, verify }, sock);
+        let text = args[2];
+        if (secretSpec) {
+          const [secretHost, secretField = 'password'] = secretSpec.split(':');
+          if (!secretHost) { console.error('Usage: chromux fill <session> <selector> --secret <host>:password|username|totp'); process.exit(1); }
+          const resolved = await resolveSecretField(secretHost, secretField, getProfile());
+          if (!resolved.ok) {
+            printSecretFailure(resolved.reason, resolved.hint);
+            process.exit(1);
+          }
+          text = resolved.value;
+        }
+        const fillResult = await cliReq('POST', '/fill', { session: args[0], selector: args[1], text, pick, verify }, sock);
+        // The daemon echoes the filled value back for ordinary fills (useful,
+        // and not a secret). When the value came from --secret, that same
+        // echo would print the plaintext credential straight into this CLI's
+        // own stdout — exactly the leak the whole feature exists to prevent.
+        if (secretSpec && fillResult && typeof fillResult === 'object' && 'text' in fillResult) {
+          fillResult.text = '«redacted»';
+        }
+        return fillResult;
       },
       type:       () => {
         const verify = takeVerifyFlag(args);
@@ -8497,6 +8998,10 @@ async function deleteProfile(profileName) {
     killed: killResult.ok,
     removed: !fs.existsSync(profileDir(name)),
     result: killResult,
+    // Profile deletion never touches the Bitwarden vault (no bw call is made
+    // here). Any chromux/<profile>/<host> items become harmless orphans;
+    // point the user at manual cleanup instead of guessing at automation.
+    secretHint: `If profile "${name}" had chromux secret entries, they still exist in your Bitwarden vault — clean up manually: chromux secret rm <host> --profile ${name}`,
   };
 }
 
@@ -8688,6 +9193,11 @@ async function runStatusAppSelfTest() {
   assertSelfTest(sortedSample[0].name === 'active-profile', 'profile inventory sorts active profiles first', checks);
   const deleteResult = await deleteProfiles(['beta']);
   assertSelfTest(deleteResult.deleted === 1 && !fs.existsSync(profileDir('beta')), 'bulk profile deletion removes selected profile files', checks);
+  assertSelfTest(
+    typeof deleteResult.results[0]?.secretHint === 'string' && deleteResult.results[0].secretHint.includes('secret rm'),
+    'profile deletion surfaces a vault-cleanup hint without touching the vault',
+    checks,
+  );
   const aggregates = loadActivityAggregates();
   assertSelfTest(aggregates.byCommand.open?.count >= 1, 'command aggregates survive redaction and deletion', checks);
   return { ok: true, checks };
@@ -9009,6 +9519,31 @@ Saved action scripts (observe once, replay deterministically):
   responses list them for the page's host, and failed replays point back at
   the script so the calling agent can repair and re-save it.
 
+Secrets (opt-in add-on — requires the Bitwarden CLI, "bw"):
+  chromux secret unlock               Unlock the shared vault (bw prompts for your master
+                                       password directly; chromux never sees it). Terminal only.
+  chromux secret lock                 Evict the cached session and stop the secret-agent
+  chromux secret status               Show whether the vault is unlocked and TTL remaining
+  chromux secret set <host> --user u  Register a credential (password/TOTP via hidden
+                                       prompt, never argv). Add --profile p and/or --totp
+                                       for a profile-local override or a TOTP seed. Terminal only.
+  chromux secret rm <host>            Remove a registered credential. Terminal only.
+  chromux secret list                 List registered hosts and scopes (no values)
+  chromux secret get <host>           Check whether a credential exists (no values); add
+                                       --reveal (terminal only) to print the actual value
+  chromux fill <s> @<ref> --secret <host>:password|username|totp
+                                       Resolve and fill a stored credential. Profile-local
+                                       credentials override global ones; failures return
+                                       {secret:'locked'|'not-found'|'unsupported-tier', next}
+                                       and hand off to the user instead of crashing.
+  One shared vault, all profiles: credentials live in Bitwarden as chromux/<scope>/<host>
+  items, never on this machine's disk. The unlocked session lives only in the memory of a
+  separate secret-agent process (ssh-agent pattern) — reboot or "secret lock" evaporates it.
+  "Sign in with Google" and other SSO needs no stored secret: keep the profile's browser
+  session logged in once and every future SSO is a click. Passkeys are not automated.
+  Setup: install bw (e.g. brew install bitwarden-cli), run "bw login" once, then
+  "chromux secret unlock" once per session/reboot.
+
 Runner snippets:
   snippets/_builtin/page-extract.js      Structured page metadata extraction
   snippets/_builtin/form-flow.js         Whole form fill + submit + readiness in one call
@@ -9056,7 +9591,9 @@ Paths:
   ~/.chromux/scripts/<host>/          Saved replay scripts per host
   ~/.chromux/activity/events.jsonl    Local full-URL activity event log
   ~/.chromux/activity/config.json     Activity retention config
-  ~/.chromux/activity/aggregates.json Command aggregate counters`;
+  ~/.chromux/activity/aggregates.json Command aggregate counters
+  ~/.chromux/secrets.json             Secret-store backend policy only — never credential values
+  ~/.chromux/run/secret-agent.sock    Memory-only secret-agent socket (0600, never on-disk secrets)`;
 
 // ============================================================
 // Entry
@@ -9089,6 +9626,8 @@ if (cmd === '--daemon') {
   // the daemon's CDP reachability check passes.
   if (isLiveProfile(profileName)) await startLiveBridge(port, daemonPort);
   await startDaemon(profileName, port, daemonPort);
+} else if (cmd === '--secret-agent') {
+  await startSecretAgent();
 } else if (!cmd || cmd === 'help' || cmd === '--help') {
   console.log(HELP);
 } else {

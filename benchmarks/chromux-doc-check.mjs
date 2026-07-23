@@ -248,6 +248,27 @@ assertContains(checks, 'visual topic OOPIF crash cleanup', docs.visualTopic, '`l
 }
 
 {
+  // Secret store (Bitwarden add-on) surface must stay consistent across
+  // help, README, install, and both skills.
+  assertContains(checks, 'help secret unlock', docs.help, 'chromux secret unlock');
+  assertContains(checks, 'help secret set', docs.help, 'chromux secret set');
+  assertContains(checks, 'help fill --secret', docs.help, '--secret <host>:password|username|totp');
+  assertContains(checks, 'help secret ssh-agent pattern', docs.help, 'ssh-agent pattern');
+  assertContains(checks, 'help secret unsupported tier', docs.help, "'unsupported-tier'");
+  assertContains(checks, 'readme secret store section', docs.readme, '## Secret Store (Opt-in Add-on)');
+  assertContains(checks, 'readme secret ssh-agent pattern', docs.readme, 'ssh-agent-style pattern');
+  assertContains(checks, 'readme secret human-only', docs.readme, 'human-only');
+  assertContains(checks, 'install secret store setup', docs.install, '## Secret Store Setup (optional: Bitwarden add-on)');
+  assertContains(checks, 'install secret unlock step', docs.install, 'chromux secret unlock');
+  assertContains(checks, 'install secret windows unverified', docs.install, 'has not been smoke-tested on an\nactual Windows machine yet');
+  assertContains(checks, 'chromux skill secret store section', docs.chromuxSkill, '## Secret Store (Opt-in Add-on)');
+  assertContains(checks, 'chromux skill fill --secret', docs.chromuxSkill, 'fill --secret <host>:password');
+  assertContains(checks, 'chromux skill secret human-only', docs.chromuxSkill, 'human-only by design');
+  assertContains(checks, 'work skill secret store handoff', docs.workSkill, 'secret-store add-on is set up');
+  assertContains(checks, 'recovery topic secret store handoff', docs.recoveryTopic, '--secret <host>:password` first');
+}
+
+{
   const pkg = JSON.parse(read('package.json'));
   const ok = !pkg.dependencies;
   checks.push({ label: `package remains zero-dependency at ${pkg.version}`, needle: 'no dependencies', ok });

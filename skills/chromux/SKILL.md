@@ -297,6 +297,35 @@ chromux note <host> --add "stable selector / quirk / wait behavior"
 Good: stable selectors, URL patterns, framework quirks, hidden waits. Bad:
 credentials, cookies, pixel coordinates, one-off task narration, stale facts.
 
+## Secret Store (Opt-in Add-on)
+
+If the user has set up the [Bitwarden-backed secret
+store](../../install.md#secret-store-setup-optional-bitwarden-add-on), a
+login wall may be passable without a human, via `fill --secret` instead of a
+literal typed value:
+
+```bash
+chromux fill <session> @<ref> --secret github.com:password
+chromux fill <session> @<ref> --secret github.com:username
+chromux fill <session> @<ref> --secret github.com:totp
+```
+
+Try it when a snapshot shows a login form on a host you have no other reason
+to think is unregistered. A failure is always a structured, non-crashing
+response — treat it exactly like any other login wall and hand off:
+
+```json
+{ "ok": false, "secret": "locked", "next": "run `chromux secret unlock` in a terminal, then retry" }
+```
+
+`secret: "locked"` means the vault needs a human to run `chromux secret
+unlock` in a terminal; `"not-found"` means no credential is registered for
+that host (fall through to the normal manual-login handoff below);
+`"unsupported-tier"` means the account's Bitwarden tier can't produce a TOTP
+code (hand the 2FA screen to the user). Never register, view, or guess at
+credentials yourself — `secret set`/`secret rm`/`secret unlock` are
+human-only by design and will refuse if you try to run them.
+
 ## Gotchas
 
 - Prefer `@ref` interactions over CSS selectors; `click` scrolls the target
@@ -305,7 +334,9 @@ credentials, cookies, pixel coordinates, one-off task narration, stale facts.
 - New tabs open in the background by default; use `open --foreground` only when
   activation is intentional.
 - Auth walls are user-owned: if a site redirects to login without a usable
-  saved profile, stop and ask the user to log in manually.
+  saved profile, try `fill --secret <host>:password` first (see Secret Store
+  above) when the add-on is set up; otherwise stop and ask the user to log
+  in manually.
 - Always close sessions you open; `chromux ps` / `chromux kill <profile>` for
   profile cleanup (also clears stale singleton locks).
 - Older aliases (`eval`, `scroll`, `wait`, `console`, `network`, `scroll-until`)

@@ -418,6 +418,42 @@ Chromium-based browser like Dia or Brave), set `"liveLaunchCmd"` in
 `CHROMUX_LIVE_LAUNCH_CMD` env var for a one-off override, so cold starts
 launch the right browser.
 
+## Secret Store Setup (optional: Bitwarden add-on)
+
+An opt-in add-on that lets an agent auto-fill logins from one shared
+[Bitwarden](https://bitwarden.com) vault across every chromux profile.
+Nothing here is bundled or auto-installed — like live mode, it is off by
+default until you set it up:
+
+1. Install the Bitwarden CLI, e.g. `brew install bitwarden-cli` on macOS, or
+   the equivalent for your platform.
+2. Run `bw login` once (email + master password, plus 2FA if you use it).
+3. Run `chromux secret unlock` once per session/reboot. `bw` itself prompts
+   for your master password directly in that terminal — chromux never reads
+   or stores it, only the resulting session key, and only in the memory of a
+   separate `secret-agent` process (never on disk).
+
+```bash
+chromux secret set github.com --user tansfil     # registers a credential
+chromux secret list                              # see what is registered (no values)
+chromux fill <session> @<ref> --secret github.com:password
+```
+
+`secret unlock`, `secret set`, and `secret rm` require a real terminal by
+design and refuse immediately with an instruction if run without one — the
+same human-handoff pattern as any other login wall. TOTP codes
+(`--secret <host>:totp`) need Bitwarden Premium or a self-hosted Vaultwarden;
+on the free tier a TOTP-gated fill returns a structured `unsupported-tier`
+handoff instead of a code. "Sign in with Google" and other SSO buttons need
+no stored secret at all — keep the profile's browser session signed in once
+and every future SSO click just works. Passkeys are not automated (they are
+hardware-bound; `bw` cannot assert them), so a passkey screen hands off to
+you like any other login wall.
+
+On Windows, the secret-agent's local-socket transport (a named pipe instead
+of a Unix socket) is code-complete but has not been smoke-tested on an
+actual Windows machine yet — if you hit an issue there, please report it.
+
 ## Builtin Helper Material
 
 Repo-local helper examples live under `snippets/_builtin/`. They are documentation
@@ -630,6 +666,10 @@ chromux show login
 
 After the user logs in, close the tab but keep or reuse the profile for later
 automation.
+
+If you want an agent to pass logins like this automatically going forward,
+set up the [Secret Store](#secret-store-setup-optional-bitwarden-add-on)
+add-on instead of logging in by hand every time.
 
 ### Verify the installed skills
 
